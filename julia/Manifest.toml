@@ -2,7 +2,7 @@
 
 julia_version = "1.12.7"
 manifest_format = "2.0"
-project_hash = "bf580f11533ca39644f0c5389c039afe9e9496c6"
+project_hash = "71a8fa53ee431a9a182fffdcdbc154f2663118ae"
 
 [[deps.ADTypes]]
 deps = ["PrecompileTools"]
@@ -1023,12 +1023,6 @@ version = "0.7.0"
 git-tree-sha1 = "330289636fb8107c5f32088d2741e9fd7a061a5c"
 uuid = "94e857df-77ce-4151-89e5-788b33177be4"
 version = "0.1.0"
-
-[[deps.SOReconEnv]]
-deps = ["JSON", "Jutul", "JutulDarcy", "SHA"]
-path = "."
-uuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"
-version = "0.0.1"
 
 [[deps.SciMLPublic]]
 deps = ["PrecompileTools"]

@@ -4,6 +4,9 @@
 Единственный operational forward backend — JutulDarcy (SPEC 10.1). Пакет `SOReconSimulator/`
 появится в E05 и будет подключён в это окружение через `Pkg.develop`.
 
+`julia/Project.toml` — **environment project, а не пакет**: в нём нет `name`/`uuid`/`version`.
+Это существенно, см. отклонение 3 ниже.
+
 ## Версия Julia
 
 `.julia-version` содержит **точную project-pinned версию**: именно на ней разрешён
@@ -72,3 +75,18 @@
 Вызовы `setup_vertical_well`, `pore_volume` и индексация `wd[:Producer, :orat]` /
 `wd[:Injector, :wrat]` в установленной версии `JutulDarcy v0.3.11` работают без изменений —
 переименований API этих вызовов не потребовалось.
+
+3. **`Project.toml` перестал быть пакетом (найдено в Task 13, Step 5).** Черновик объявлял
+   `name = "SOReconEnv"`, `uuid`, `version`, но каталога `julia/src/` с модулем не создавал.
+   Для Pkg это пакет без исходника: `Pkg.precompile()` (шаг 2/8 `scripts/gate.sh` и цель
+   `make setup-julia`) падал с `Missing source file for Base.PkgId(... "SOReconEnv")`, а
+   `Manifest.toml` содержал фантомную запись `[[deps.SOReconEnv]] path = "."`. Ошибка не
+   всплывала раньше, потому что `so-recon smoke` использует `--project=julia` только для
+   загрузки зависимостей и сам проект не прекомпилирует.
+
+   Исправление: `name`/`uuid`/`version` удалены — `julia/` теперь обычный environment
+   project, каким он и описан выше. После `Pkg.resolve()` в `Manifest.toml` изменились
+   ровно две вещи: `project_hash` и удаление записи `[[deps.SOReconEnv]]`. **Ни одна версия
+   пакета не изменилась** — точные `=`-пины в `[compat]` этого не позволяют. Следствие:
+   `julia_manifest_sha256` и `environment_lock_hash` в `reports/environment_report.md`
+   пересчитаны; результаты smoke (`cumulative_oil_m3`, `mean_so_final`) не изменились.

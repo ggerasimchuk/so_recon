@@ -15,8 +15,8 @@
 | `julia_pinned_version` | `1.12.7` |
 | `julia_executable_version` | `1.12.7` |
 | `julia_manifest_version` | `1.12.7` |
-| `julia_manifest_sha256` | `26457ae28e9b299bf30a5a13a8eede55c27efe493e5ed42d743b58c6637778fb` |
-| `environment_lock_hash` | `1687e0f3b95268e6096e6fb9922e0c6a49244e1828cf2e2d69bd92b67f229924` |
+| `julia_manifest_sha256` | `1210c1f4b33a43db80f25bd71dd897d999cd7d59af8da9ab4d7b4bfa2d80b835` |
+| `environment_lock_hash` | `376383cb30a5780b1a89be0744f6c6f438d0e824b53d2b4843f39392889a9046` |
 
 ## Julia packages (locked)
 
