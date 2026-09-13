@@ -4363,7 +4363,9 @@ def test_execute_run_records_pass(tmp_project: Path) -> None:
     ctx = execute_run(command="x", argv=["so-recon", "x"], cfg=cfg, paths=paths, body=body)
     record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
     assert record["status"] == "PASS"
-    assert record["notes"] == ["done"]
+    # Membership, not equality: RunContext.start prepends a "git commit unavailable" note
+    # whenever the run happens outside a git repository, which every tmp_path fixture is.
+    assert "done" in record["notes"]
     assert (ctx.run_dir / "run.log").is_file()
 
 
@@ -4644,7 +4646,10 @@ def test_smoke_command_freeze_then_pass(
     tmp_project: Path, fake_launcher_factory: Any, capsys: Any
 ) -> None:
     launcher = fake_launcher_factory(OK)
-    factory = lambda paths, cfg, julia: launcher  # noqa: E731
+
+    def factory(paths: Any, cfg: Any, julia: Any) -> Any:
+        return launcher
+
     assert main(["--root", str(tmp_project), "smoke", "--freeze-expected"],
                 launcher_factory=factory) == 0
     assert main(["--root", str(tmp_project), "smoke"], launcher_factory=factory) == 0
@@ -4729,7 +4734,9 @@ def execute_run(
     log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
     try:
         status, notes = body(ctx, log)
-    except Exception as exc:  # noqa: BLE001 - deliberate: every failure becomes a FAIL record
+    # Deliberately broad: invariant I6 says EVERY failure becomes a FAIL record, so nothing
+    # may escape here. (No noqa needed — BLE001 is not in this project's selected ruleset.)
+    except Exception as exc:
         log.exception("command %s failed", command)
         ctx.finish("FAIL", notes=[f"exception: {type(exc).__name__}: {exc}"])
     else:
@@ -5024,7 +5031,6 @@ from so_recon.registry.source_manifest import (
     MANIFEST_SCHEMA_VERSION,
     SourceManifestStamp,
     build_source_manifest,
-    manifest_bytes,
     write_manifest_stamp,
     write_source_manifest,
 )
@@ -5150,7 +5156,8 @@ def main(argv: Sequence[str] | None = None, *, launcher_factory: LauncherFactory
     try:
         cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
         paths = ProjectPaths.from_config(root, cfg.paths)
-    except Exception as exc:  # noqa: BLE001 - any config failure must still be recorded
+    # Deliberately broad: any configuration failure must still leave a FAIL record.
+    except Exception as exc:
         return _record_startup_failure(root, args.command, full_argv, exc)
 
     if args.command == "smoke":
