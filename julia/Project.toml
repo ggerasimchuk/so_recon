@@ -1,0 +1,16 @@
+name = "SOReconEnv"
+uuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"
+version = "0.0.1"
+
+[deps]
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Jutul = "2b460a1a-8a2b-45b2-b125-b5c536396eb9"
+JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+
+[compat]
+JSON = "1.8.0"
+Jutul = "0.4.31"
+JutulDarcy = "0.3.11"
+SHA = "0.7.0"
+julia = "1.12"
