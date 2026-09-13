@@ -74,14 +74,21 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
     def probe() -> ResourceSnapshot:
         return probe_resources(None, session_dir)
 
-    # The ledger is given a machine with room, deliberately. Whether THIS laptop happens
-    # to have 6 GiB free while the suite runs is the subject of Task 3's own tests, and
-    # letting it decide whether the protocol assertions below run at all would make this
-    # test fail for a reason that has nothing to do with the worker. The worker itself
-    # keeps the real probe, so `probe_resources` is what measures every job here.
+    # Both the ledger and the worker's watchdog are given a machine with room,
+    # deliberately. `memory_stop`'s cap is `min(configured, total - reserve,
+    # rss + available - reserve)`, so it collapses whenever this laptop's free memory
+    # approaches the 6 GiB OS reserve — it already refused this test once on a busy
+    # machine. The watchdog reads the same guard from inside the job loop while Julia is
+    # JIT-compiling (which IS growing RSS), so leaving the real probe on the worker would
+    # make a stage-gate test fail because something else was running. Whether this host
+    # has memory to spare is Task 3's subject, measured by Task 3's own tests; what this
+    # test is for is the protocol.
+    #
+    # Only the memory fields are pinned: it is a `model_copy` of a real measurement, so
+    # the monotonic clock, the CPU time, the free disk and the measurement method the
+    # cost record reports all still come from `probe_resources`.
     def unloaded_machine() -> ResourceSnapshot:
-        measured = probe()
-        return measured.model_copy(
+        return probe().model_copy(
             update={
                 "total_bytes": 64 * 1024**3,
                 "available_bytes": 32 * 1024**3,
@@ -120,7 +127,7 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
         session_dir,
         P0_VERIFY_PROFILE,
         paths=paths,
-        probe=probe,
+        probe=unloaded_machine,
     ) as worker:
         handshake = worker.handshake
         assert handshake.protocol == PROTOCOL_VERSION

@@ -53,6 +53,7 @@ from so_recon.simulator.budget import (
     BudgetLedger,
     BudgetStop,
     ResourceWatchdog,
+    disk_headroom_stop,
     effective_caps,
     effective_hard_bytes,
     effective_soft_bytes,
@@ -651,6 +652,45 @@ def test_a_job_that_outruns_its_timeout_is_terminated() -> None:
     decision = guard.observe(snapshot(monotonic_s=301.0), job_started_monotonic_s=0.0)
     assert decision.action == "terminate"
     assert decision.status == "TIMEOUT"
+
+
+def test_a_disk_that_falls_into_the_record_reserve_terminates_the_running_job() -> None:
+    """The reserve exists so the failure record can be written; eating it ends the job.
+
+    Unlike a memory breach, this one is not escalated through a drain: finishing the chunk
+    in hand writes more output, which is the opposite of the remedy. A run that filled the
+    disk and then could not write down why is the silent stop SPEC 18.4 forbids.
+    """
+    guard = watchdog()
+    assert guard.observe(snapshot(disk_free_bytes=1 * GIB)).action == "continue"
+    decision = guard.observe(snapshot(disk_free_bytes=DISK_FAILURE_RESERVE_BYTES - 1))
+    assert decision.action == "terminate"
+    assert decision.terminate_process_group is True
+    assert decision.status == "RESOURCE_FAILURE"
+    assert any("failure record" in reason for reason in decision.reasons)
+    # Sticky, like every other termination: a later roomy snapshot does not un-kill it.
+    assert guard.observe(snapshot(disk_free_bytes=100 * GIB)).action == "terminate"
+
+
+def test_a_committed_disk_budget_drains_without_killing_the_current_chunk() -> None:
+    committed = P0_VERIFY_PROFILE.disk_budget_bytes - DISK_FAILURE_RESERVE_BYTES + 1
+    decision = watchdog().observe(snapshot(), session_output_bytes=committed)
+    assert decision.action == "drain"
+    assert decision.accept_new_jobs is False
+    assert decision.terminate_process_group is False
+    assert decision.status == "INCOMPLETE_BUDGET"
+    assert any("disk budget" in reason for reason in decision.reasons)
+
+
+def test_the_mid_job_disk_guard_is_silent_while_there_is_room() -> None:
+    assert (
+        disk_headroom_stop(
+            P0_VERIFY_PROFILE,
+            session_output_bytes=P0_VERIFY_PROFILE.disk_budget_bytes - DISK_FAILURE_RESERVE_BYTES,
+            free_bytes=DISK_FAILURE_RESERVE_BYTES,
+        )
+        is None
+    )
 
 
 def test_the_session_wall_budget_drains_without_killing_the_current_chunk() -> None:

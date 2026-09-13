@@ -601,8 +601,12 @@ class PersistentJuliaWorker:
             model_hash=job.model_hash,
             attempt=job.attempt,
         )
+        # What the session owes the disk, read once now: the watchdog needs it to tell a
+        # disk that is out of allowance from one that is out of room, and with a single
+        # worker nothing else can change it while this job runs.
+        committed_bytes = ledger.committed_output_bytes()
         try:
-            result = self._run_job(job)
+            result = self._run_job(job, committed_bytes)
         except BaseException:
             # An exception or a Ctrl-C leaves the protocol out of step, and the job's
             # process group still running. End the group; the reservation stays PENDING,
@@ -620,7 +624,7 @@ class PersistentJuliaWorker:
         write_json_atomic(path, job.model_dump(mode="json"))
         return path
 
-    def _run_job(self, job: JobDescriptor) -> ForwardResult:
+    def _run_job(self, job: JobDescriptor, session_output_bytes: int) -> ForwardResult:
         job_path = self._write_descriptor(job)
         log_dir = self._session_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -645,7 +649,7 @@ class PersistentJuliaWorker:
         except WorkerProtocolError as exc:
             return self._classified(job, "PROTOCOL_FAILURE", str(exc), meter.finish(self._probe()))
 
-        frame, decision = self._await_job_frame(watchdog, meter)
+        frame, decision = self._await_job_frame(watchdog, meter, session_output_bytes)
         cost_inputs = meter.finish(self._probe())
         if frame is None:
             status, reason = classify_termination(returncode=self._proc.poll(), decision=decision)
@@ -659,7 +663,7 @@ class PersistentJuliaWorker:
         return self._result_from_reply(job, frame, cost_inputs)
 
     def _await_job_frame(
-        self, watchdog: ResourceWatchdog, meter: _JobMeter
+        self, watchdog: ResourceWatchdog, meter: _JobMeter, session_output_bytes: int
     ) -> tuple[Frame | None, WatchdogDecision | None]:
         """Wait in poll-sized slices, watching the machine between them.
 
@@ -679,7 +683,11 @@ class PersistentJuliaWorker:
                 return None, last
             snapshot = self._probe()
             meter.observe(snapshot)
-            last = watchdog.observe(snapshot, job_started_monotonic_s=meter.started_monotonic_s)
+            last = watchdog.observe(
+                snapshot,
+                job_started_monotonic_s=meter.started_monotonic_s,
+                session_output_bytes=session_output_bytes,
+            )
             if last.terminate_process_group:
                 self._terminate_now()
                 return None, last

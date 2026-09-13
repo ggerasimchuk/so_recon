@@ -107,7 +107,11 @@ while True:
             sys.exit(int(scenario.get("shutdown_exit_code", 0)))
         while True:
             time.sleep(3600)
-    behaviour = scenario.get("behaviour", "reply")
+    queued = scenario.get("behaviours")
+    if queued:
+        behaviour = queued.pop(0) if len(queued) > 1 else queued[0]
+    else:
+        behaviour = scenario.get("behaviour", "reply")
     if behaviour == "silent":
         continue
     if behaviour == "crash":
@@ -754,7 +758,63 @@ def test_a_resource_breach_while_a_job_runs_is_recorded_as_a_resource_failure(
 
     assert result.status == "RESOURCE_FAILURE"
     assert result.reason is not None and "hard cap" in result.reason
+    assert ledger.record.entries[0].state == "FAILED"
     assert ledger.record.entries[0].status == "RESOURCE_FAILURE"
+
+
+def test_a_disk_that_fills_while_a_job_runs_is_terminated_and_recorded(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """Step 4.6's disk case, on the axis that only exists once a job is running.
+
+    The pre-flight check (`disk_stop` in `BudgetLedger.reserve`) asks whether a job can
+    fit. This is the other half: the disk fell into the room reserved for the failure
+    record *while* the job was running, and it is that record which must still get
+    written. So the job is terminated, classified and recorded, and the earlier attempt
+    on the same ledger survives untouched.
+    """
+    scenario(
+        behaviours=["reply", "silent"],
+        exit_on_shutdown=False,
+        reply={"status": "INVALID_INPUT", "reason": "adapter unavailable"},
+    )
+    worker = worker_factory(
+        probe=ScriptedProbe(
+            snapshot(monotonic_s=10.0),  # job A baseline
+            snapshot(monotonic_s=11.0),  # job A final
+            snapshot(monotonic_s=12.0),  # job B baseline
+            snapshot(monotonic_s=13.0, disk_free=1024),  # job B: the reserve is gone
+        )
+    )
+    ledger = make_ledger(project)
+    finished = worker.submit(write_job_inputs(project, "job-a"), ledger)
+    assert finished.status == "INVALID_INPUT"
+    pid = worker.pid
+
+    result = worker.submit(write_job_inputs(project, "job-b"), ledger)
+
+    # 1. A classified result, not an unexplained empty one (SPEC 18.4).
+    assert result.status == "RESOURCE_FAILURE"
+    assert result.reason is not None and "free disk" in result.reason
+    assert "failure record" in result.reason
+    # 2. A FAILED run on the ledger.
+    assert ledger.record.entries[1].job_id == "job-b"
+    assert ledger.record.entries[1].state == "FAILED"
+    assert ledger.record.entries[1].status == "RESOURCE_FAILURE"
+    # 3. The earlier attempt's record is preserved, cost and all. Nothing can be COMPLETE
+    #    while no adapter is wired, so what a stop must not lose here is the finished
+    #    attempt itself; its checkpoint ref becomes possible in Task 8.
+    assert ledger.record.entries[0].job_id == "job-a"
+    assert ledger.record.entries[0].status == "INVALID_INPUT"
+    assert ledger.record.entries[0].cost is not None
+    assert ledger.cumulative_totals().forwards == 2
+    # The process group really was ended, not merely decided about.
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline and psutil.pid_exists(pid):
+        time.sleep(0.05)
+    assert not psutil.pid_exists(pid), "the job's process group survived the disk guard"
 
 
 def test_a_job_that_cannot_fit_on_disk_is_refused_before_it_starts(

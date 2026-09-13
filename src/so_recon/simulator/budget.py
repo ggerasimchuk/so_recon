@@ -226,6 +226,41 @@ def disk_stop(
     return None
 
 
+def disk_headroom_stop(
+    profile: ResourceProfile, *, session_output_bytes: int, free_bytes: int
+) -> BudgetStop | None:
+    """What is left on disk while a job is *already running*.
+
+    `disk_stop` asks whether a job that has not started can fit. This asks the narrower
+    question that only matters once one is running: is there still room to write down what
+    happened? `DISK_FAILURE_RESERVE_BYTES` is exactly that room, and it is the reason the
+    reserve exists at all — a job that eats into it leaves the failure record it is about
+    to need unwritable, and the run ends in silence instead of a recorded stop. SPEC 18.4
+    forbids exactly that: a resource failure nobody wrote down cannot be told apart from a
+    physical result.
+
+    The two refusals differ in their remedy, and `ResourceWatchdog` acts on that
+    difference. A disk with no room left is not helped by finishing the chunk in hand,
+    because finishing it writes more; a session that has merely committed its whole disk
+    allowance is out of budget rather than out of room, and may still land what it holds.
+    """
+    if free_bytes < DISK_FAILURE_RESERVE_BYTES:
+        return BudgetStop(
+            "RESOURCE_FAILURE",
+            f"free disk {free_bytes} bytes has fallen below the "
+            f"{DISK_FAILURE_RESERVE_BYTES} kept free so that the failure record and the "
+            "ledger can still be written",
+        )
+    if session_output_bytes + DISK_FAILURE_RESERVE_BYTES > profile.disk_budget_bytes:
+        return BudgetStop(
+            "INCOMPLETE_BUDGET",
+            f"session has committed {session_output_bytes} bytes of its "
+            f"{profile.disk_budget_bytes} byte disk budget, leaving less than the "
+            f"{DISK_FAILURE_RESERVE_BYTES} reserved for the records",
+        )
+    return None
+
+
 def wall_stop(
     profile: ResourceProfile, *, elapsed_s: float, estimated_s: float
 ) -> BudgetStop | None:
@@ -306,7 +341,11 @@ class ResourceWatchdog:
         )
 
     def observe(
-        self, snapshot: ResourceSnapshot, *, job_started_monotonic_s: float | None = None
+        self,
+        snapshot: ResourceSnapshot,
+        *,
+        job_started_monotonic_s: float | None = None,
+        session_output_bytes: int = 0,
     ) -> WatchdogDecision:
         if self._terminal is not None:
             # A termination does not un-happen because the next sample looks calm.
@@ -334,6 +373,24 @@ class ResourceWatchdog:
                     ),
                 )
                 return self._terminal
+
+        # Free space is checked with the job timeout rather than with the breaches below,
+        # because it shares their remedy and not the breaches' one: there is no draining
+        # out of a disk that has already taken the room the failure record needs.
+        disk = disk_headroom_stop(
+            self.profile,
+            session_output_bytes=session_output_bytes,
+            free_bytes=snapshot.disk_free_bytes,
+        )
+        if disk is not None and disk.status == "RESOURCE_FAILURE":
+            self._terminal = self._decide(
+                "terminate",
+                caps=caps,
+                limitations=limitations,
+                status=disk.status,
+                reasons=(disk.reason,),
+            )
+            return self._terminal
 
         breaches = [
             stop
@@ -381,6 +438,17 @@ class ResourceWatchdog:
                 reasons=reasons,
             )
         self._breach_rss_bytes = None
+
+        if disk is not None:
+            # Out of disk allowance, not out of room: land the chunk in hand, start
+            # nothing new. The same remedy as running out of session wall time below.
+            return self._decide(
+                "drain",
+                caps=caps,
+                limitations=limitations,
+                status=disk.status,
+                reasons=(disk.reason,),
+            )
 
         elapsed_s = snapshot.monotonic_s - self.started_monotonic_s
         if elapsed_s > self.profile.wall_budget_s:
