@@ -3114,7 +3114,10 @@ function read_case(path::AbstractString)
     return case, input_sha
 end
 
-function run_smoke(case::Dict)
+# AbstractDict, not Dict: JSON.jl 1.x parses objects into JSON.Object{String,Any}, which is
+# an AbstractDict but NOT a Dict, so a ::Dict signature never matches and dispatch fails at
+# run time. AbstractDict accepts both that and JSON.jl 0.21's plain Dict.
+function run_smoke(case::AbstractDict)
     Darcy, bar, kg, meter, day = si_units(:darcy, :bar, :kilogram, :meter, :day)
 
     grid = case["grid"]
