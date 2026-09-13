@@ -1,14 +1,31 @@
 # E00 Foundation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Revision 2 (13.09.2026).** Учтены 12 замечаний к ревизии 1. Сводка изменений — раздел «Изменения ревизии 2».
 
-**Goal:** Создать воспроизводимое основание проекта SO-RECON: Python/Julia-окружение с lock-файлами, typed configuration, каталоги данных, manifest исходных файлов, run registry с полной lineage, единый CLI и один детерминированный smoke fixture, который проходит на чистой установке.
+**Goal:** Создать воспроизводимое основание проекта SO-RECON: Python/Julia-окружение с lock-файлами, typed configuration, каталоги данных, manifest исходных файлов, run registry с полной lineage и immutable-артефактами, единый CLI и один детерминированный end-to-end smoke, который проходит на чистой установке.
 
-**Architecture:** Python-пакет `so_recon` (src-layout, `uv`, pydantic-конфиги) отвечает за конфигурацию, hashing, manifests, run registry и CLI. Julia-окружение `julia/` с зафиксированным `Manifest.toml` держит JutulDarcy и минимальный smoke-скрипт, который Python вызывает через subprocess и читает JSON. Каждый запуск CLI получает `run_id`, каталог `artifacts/runs/<run_id>/` с `run.json`, `resolved_config.json` и логом; ни один модуль не содержит личных абсолютных путей.
+**Architecture:** Python-пакет `so_recon` (src-layout, `uv`, pydantic-конфиги) отвечает за конфигурацию, hashing, атомарную запись, artifact registry, manifests, run registry и CLI. Julia-окружение `julia/` с зафиксированным `Manifest.toml` держит JutulDarcy и smoke-скрипт. Smoke — сквозной: Python пишет `case.json`, Julia читает его, возвращает `input_sha256` прочитанного файла, Python сверяет его со своим хешем. Каждый запуск CLI получает `run_id`, каталог `artifacts/runs/<run_id>/` с `run.json`, `resolved_config.json` и логом; ни один модуль не содержит личных абсолютных путей.
 
-**Tech Stack:** Python 3.13 (`uv`, `pydantic>=2`, `pyyaml`, `numpy`, `pyarrow`, `pytest`, `ruff`, `mypy`), Julia 1.12 (`juliaup`, `JutulDarcy 0.3.x`, `Jutul 0.4.x`, `JSON`), Make, git.
+**Tech Stack:** Python 3.13.2 (`uv 0.12.x`, `pydantic>=2`, `pyyaml`, `numpy`, `pyarrow`, `pytest`, `ruff`, `mypy`), Julia — точная project-pinned версия (`julia/.julia-version`), `JutulDarcy 0.3.x`, `Jutul 0.4.x`, `JSON`, `SHA`; Make + bash-скрипты, git.
 
 **Spec:** `docs/SPEC.md` (v3.0, разделы 7.1, 19, 20), `docs/STAGES.md` (v3.0, раздел «E00»), `docs/DATA_AUDIT.md` (раздел 3 — контракты чтения файлов), `docs/README.md`.
+
+## Изменения ревизии 2
+
+1. `plastoper.csv` — `decimal: ","` (проверено по байтам: `269,7600098`). Во всех manifest-записях разделены `physical_line_count` и `data_rows`; для `plastoper.csv` это `3573` и `3572` (файл не заканчивается переводом строки).
+2. Разрушительный `mv` исходных CSV удалён. Исходники остаются неизменяемыми на исходном пути `data/Ромашка_сырые/`; E00 их только читает и хеширует. `ProjectPaths.ensure_dirs()` больше не создаёт каталог raw.
+3. Smoke стал сквозным: Python формирует `case.json`, Julia его читает и возвращает `input_sha256`; Python сверяет хеш.
+4. Введён `ArtifactRef` (`sha256`, `schema_version`, `producer_run_id`, `parent_artifact_ids`); повторная запись артефакта с другим содержимым запрещена.
+5. Любое исключение в любой CLI-команде приводит к записи `run.json` со `status: FAIL` — включая отсутствие Julia, обнаруженное до запуска симуляции.
+6. Gate переписан как bash-скрипт с `set -euo pipefail` и `tee`; добавлен `ruff format --check`; добавлена отдельная цель `gate-clean` с временным `JULIA_DEPOT_PATH`.
+7. Версии Python и Julia зафиксированы точно. Julia описывается как **project-pinned**, а не как «актуальная stable».
+8. Запрещены `..`, Windows absolute/UNC пути и выход за пределы repository root через symlink.
+9. Несовпадение версий Julia/Jutul/JutulDarcy с lock — **FAIL**, а не заметка.
+10. Детерминированные manifests отделены от run-timestamps: повторный gate не создаёт diff в git.
+11. Из всех команд плана удалены личные абсолютные пути; команды выполняются из корня репозитория.
+12. `run.json`, `resolved_config.json` и все manifest-файлы пишутся атомарно.
 
 ## Global Constraints
 
@@ -29,23 +46,48 @@
 - STAGES §1: отчёт `reports/stages/E00.md` фиксирует «версия SPEC.md и конфигурации; входные артефакты и их hashes; выполненные команды; результаты тестов и численных проверок; созданные артефакты; найденные ограничения; статус этапа; что разрешено передать следующему этапу».
 - Статусы этапа: `NOT_RUN`, `IN_PROGRESS`, `PASS`, `PASS_WITH_LIMITATIONS`, `FAIL`.
 
-## Замечания о фактическом состоянии репозитория (на 13.09.2026)
+**Инварианты ревизии 2 (обязательны для каждой задачи):**
 
-- Репозиторий содержит только `docs/`, `data/`, `.idea/`, `.gitignore` (`/data/`, `/research/`). Кода нет. Ветка `master`.
-- Raw CSV лежат в `data/Ромашка_сырые/` (пять файлов). Каталог `data/` целиком в `.gitignore` — закрытые данные не версионируются, это соответствует SPEC 19.15.
-- Локально: Python 3.13.2 (pyenv), `uv 0.12.7`, Homebrew, Docker, `git-lfs`. **Julia и `juliaup` не установлены.**
-- Актуальные версии на дату плана: Julia stable **1.12.7**, LTS 1.10.12; JutulDarcy **0.3.11** (compat `julia = "1.7"`, `Jutul = "0.4.31"`).
-- `STAGES.md` §8 ссылается на `/docs/README_SO_RECON.md`, фактический файл — `docs/README.md`. В коде ничего не ломает; зафиксировать в отчёте E00 как замечание к документации.
+- **I1 — Immutability источников.** Ни один код E00 не пишет, не перемещает и не удаляет файлы внутри каталога источников. Источники открываются только в режиме `"rb"`.
+- **I2 — Immutability результатов.** Артефакт, записанный под конкретным путём, не перезаписывается другим содержимым. Повторная запись с идентичным содержимым допустима и идемпотентна. Инвариант распространяется на **результаты** (`ArtifactRef`), но не на `run.json`: это журнал запуска, который по определению переходит `RUNNING → PASS|FAIL` и потому переписывается атомарно (инвариант I3). Публикуемые копии в `reports/` тоже не immutable: их изменение означает реальное изменение данных и фиксируется историей git.
+- **I3 — Атомарность.** Каждый JSON/Markdown-артефакт пишется через временный файл в том же каталоге + `os.replace`.
+- **I4 — Containment путей.** Любой путь из конфигурации обязан быть относительным, без `..`, без Windows drive/UNC, и после `resolve()` обязан лежать внутри repository root.
+- **I5 — Детерминизм коммитируемых файлов.** Файлы в `reports/` и `configs/`, попадающие в git, не содержат timestamps, `run_id` и git-состояния. Всё это живёт в `artifacts/runs/<run_id>/` (не версионируется).
+- **I6 — FAIL всегда записывается.** Любое исключение после того, как стал известен repository root, приводит к `run.json` со `status: FAIL` и текстом исключения в `notes`.
+- **I7 — Никаких личных абсолютных путей** ни в коде, ни в конфигах, ни в командах.
+
+## Фактическое состояние репозитория (на 13.09.2026)
+
+- Репозиторий содержит `docs/`, `data/`, `.idea/`, `.gitignore` (`/data/`, `/research/`). Кода нет. Работа ведётся в ветке `e00-foundation`.
+- Raw CSV лежат в `data/Ромашка_сырые/` (пять файлов) и **остаются там**. Каталог `data/` целиком в `.gitignore` — закрытые данные не версионируются (SPEC 19.15).
+- Проверено локально: Python 3.13.2 (pyenv), `uv 0.12.7`, Homebrew, GNU Make **3.81**, `/bin/bash` **3.2.57**. **Julia и `juliaup` не установлены.**
+- GNU Make 3.81 **не поддерживает `.SHELLFLAGS`** — заданные там `-o pipefail` молча игнорируются. Поэтому gate реализуется отдельным bash-скриптом, а `Makefile` только вызывает его.
+- Целевая версия Julia — **project-pinned**, фиксируется в `julia/.julia-version` точным значением той версии, которая фактически установлена и по которой разрешён `Manifest.toml`. План не утверждает, какая версия является актуальной upstream stable.
+- `STAGES.md` §8 ссылается на `/docs/README_SO_RECON.md`, фактический файл — `docs/README.md`. Зафиксировать в отчёте E00 как замечание к документации.
+
+### Проверенные контракты исходных файлов
+
+Проверено по байтам (`xxd`, `wc -l`, `iconv`) 13.09.2026:
+
+| файл | кодировка | разделитель | decimal | physical_line_count | data_rows | последний байт |
+|---|---|---|---|---:|---:|---|
+| `coords.csv` | utf-8 | `,` | `.` | 4241 | 4240 | `\n` |
+| `gis.csv` | cp1251 | `;` | `,` | 107176 | 107175 | `\n` |
+| `mer.csv` | utf-8-sig | `;` | `,` | 1388595 | 1388594 | `\n` |
+| `perf.csv` | cp1251 | `;` | `,` | 33236 | 33235 | `\n` |
+| `plastoper.csv` | utf-8-sig | `;` | `,` | 3573 | 3572 | `;` (нет перевода строки) |
+
+`physical_line_count` — число физических строк: количество `\n` плюс 1, если файл непуст и не заканчивается `\n`. `data_rows = physical_line_count - header_lines`, `header_lines = 1` для всех пяти файлов. Это **физический** счёт, а не число разобранных записей: E00 не парсит CSV, поэтому переводы строк внутри закавыченных полей не учитываются. Значения `data_rows` совпадают с колонкой «Строк» в `DATA_AUDIT.md` §2 для всех пяти файлов.
 
 ## Решения, принятые в плане (не меняют SPEC)
 
-1. **Raw-каталог.** Канонический каталог raw — `data/raw/`. Пять CSV переносятся из `data/Ромашка_сырые/` в `data/raw/` командой `mv` (Task 6). Это локальная операция над неверсионированными файлами; целостность подтверждается SHA-256 в manifest. Дополнительные файлы (`so_data_dossier.md`, PDF) остаются в `data/`.
-2. **Что версионируется.** `reports/` (включая `reports/manifests/*.json` и `reports/environment_report.md`) — в git; `artifacts/` и `data/` — нет. Manifest содержит только имена файлов, размеры и хеши, не содержимое.
-3. **Julia-окружение.** `julia/Project.toml` + `julia/Manifest.toml` — общее окружение проекта. Пакет `julia/SOReconSimulator/` создаётся в E05 и будет `dev`-подключён в это же окружение. В E00 — только `julia/smoke/smoke_case.jl`.
-4. **Smoke fixture** состоит из двух детерминированных частей: (a) синтетические таблицы `wells` и `well_month` из `numpy.random.default_rng(seed)`, сохранённые в Parquet и захешированные по каноническому JSON содержимого; (b) 1D oil–water JutulDarcy-кейс, возвращающий скалярные summaries. Ожидаемые значения замораживаются в `configs/smoke_expected.json` с относительным допуском `1e-6`.
+1. **Каталог источников.** Источники остаются на исходном пути `data/Ромашка_сырые/`. `PathsConfig.raw` указывает на него. Каталоги `data/interim/` и `data/processed/` создаются для последующих этапов. Никакого `mv`, `cp` или переименования исходников E00 не выполняет (инвариант I1).
+2. **Что версионируется.** `reports/` (включая `reports/manifests/*.json` и `reports/environment_report.md`) и `configs/` — в git; `artifacts/` и `data/` — нет. Коммитируемые файлы детерминированы (инвариант I5): manifest содержит только имена, размеры, хеши и счётчики строк, без timestamps и `run_id`.
+3. **Julia-окружение.** `julia/Project.toml` + `julia/Manifest.toml` + `julia/.julia-version` — общее окружение проекта. Пакет `julia/SOReconSimulator/` создаётся в E05. В E00 — только `julia/smoke/smoke_case.jl`.
+4. **Smoke fixture** сквозной и состоит из трёх детерминированных частей: (a) синтетические таблицы `wells` и `well_month` из `numpy.random.default_rng(seed)` в Parquet, хешируемые по каноническому JSON содержимого; (b) `case.json` — канонический JSON, выводимый из fixture и конфигурации, это единственный вход Julia; (c) 1D oil–water JutulDarcy-кейс, читающий `case.json`, возвращающий `input_sha256` и скалярные summaries. Ожидаемые значения замораживаются в `configs/smoke_expected.json` с относительным допуском `rel_tol` из конфигурации.
 5. **CLI** — stdlib `argparse`, точка входа `so-recon`. Подкоманды: `manifest`, `env-report`, `smoke`.
-6. **Логи** — stdlib `logging`; каждая запись содержит `run_id`; пишутся в консоль и в `artifacts/runs/<run_id>/run.log`. Содержимое строк данных не логируется.
-7. **CI** не создаётся в E00: JutulDarcy precompile в CI занимает десятки минут, а remote у репозитория нет. Роль «чистой установки» выполняет `make gate` (удаляет `.venv`, пересоздаёт окружение, прогоняет manifest, env-report, smoke и тесты).
+6. **Логи** — stdlib `logging`; каждая запись содержит `run_id`; пишутся в stderr и в `artifacts/runs/<run_id>/run.log`. Содержимое строк данных не логируется (SPEC 19.15).
+7. **CI** не создаётся в E00: JutulDarcy precompile в CI занимает десятки минут, а remote у репозитория нет. Роль «чистой установки» выполняют `make gate` (чистое Python-окружение) и `make gate-clean` (дополнительно чистый Julia depot).
 
 ## Структура файлов
 
@@ -53,84 +95,95 @@
 so_field/
 ├── pyproject.toml                  # метаданные, зависимости, ruff/mypy/pytest
 ├── uv.lock                         # lock Python
-├── .python-version                 # 3.13
-├── Makefile                        # setup / test / lint / smoke / gate
-├── README.md                       # как поставить и прогнать gate
-├── .gitignore                      # + .venv, artifacts, кеши
+├── .python-version                 # 3.13.2 (точная)
+├── Makefile                        # тонкая обёртка над scripts/*.sh
+├── scripts/
+│   ├── gate.sh                     # set -euo pipefail + tee; полный gate E00
+│   └── gate_clean.sh               # gate + временный JULIA_DEPOT_PATH
+├── README.md
+├── .gitignore
 ├── configs/
-│   ├── project.yml                 # единый typed config (paths, sources, smoke, julia)
-│   └── smoke_expected.json         # замороженные ожидания smoke (Task 12)
+│   ├── project.yml                 # единый typed config
+│   └── smoke_expected.json         # замороженные ожидания smoke (Task 13)
 ├── src/so_recon/
 │   ├── __init__.py                 # __version__, SPEC_VERSION
-│   ├── paths.py                    # find_repo_root, ProjectPaths
+│   ├── paths.py                    # find_repo_root, ProjectPaths, containment путей
 │   ├── logging_setup.py            # configure_logging(run_id, log_file)
 │   ├── cli.py                      # argparse: manifest | env-report | smoke
-│   ├── smoke.py                    # оркестрация smoke: fixture → julia → сравнение с expected
+│   ├── smoke.py                    # оркестрация smoke
 │   ├── config/
-│   │   ├── __init__.py
-│   │   ├── schema.py               # pydantic-модели (StrictModel, ProjectConfig, ...)
+│   │   ├── schema.py               # pydantic-модели
 │   │   └── load.py                 # load_project_config, resolved_config_dict, config_hash
 │   ├── registry/
-│   │   ├── __init__.py
 │   │   ├── hashing.py              # sha256_file, sha256_bytes, canonical_json, sha256_json
+│   │   ├── atomic.py               # write_bytes_atomic, write_text_atomic, write_json_atomic
+│   │   ├── artifact.py             # ArtifactRef, write_artifact, register_artifact
 │   │   ├── gitinfo.py              # git_commit, git_is_dirty
 │   │   ├── run.py                  # make_run_id, RunRecord, RunContext, environment_lock_hash
-│   │   └── source_manifest.py      # hash_and_count, build_source_manifest, write_source_manifest
+│   │   └── source_manifest.py      # hash_and_count, build_source_manifest, стамп запуска
 │   ├── environment/
-│   │   ├── __init__.py
-│   │   └── report.py               # parse_julia_manifest, collect_environment, render_markdown
+│   │   └── report.py               # parse_julia_manifest, locked_versions, collect_environment
 │   ├── synthetic/
-│   │   ├── __init__.py
-│   │   └── fixture.py              # build_smoke_fixture, write_smoke_fixture
+│   │   └── fixture.py              # build_smoke_fixture, build_smoke_case, write_*
 │   └── simulator/
-│       ├── __init__.py
-│       └── julia_bridge.py         # find_julia, JuliaLauncher, SubprocessJuliaLauncher, run_julia_smoke
+│       └── julia_bridge.py         # find_julia, JuliaLauncher, run_julia_smoke
 ├── julia/
-│   ├── Project.toml                # JutulDarcy, Jutul, JSON + [compat]
-│   ├── Manifest.toml               # зафиксированные версии (генерируется Pkg.instantiate)
+│   ├── Project.toml                # JutulDarcy, Jutul, JSON, SHA + [compat]
+│   ├── Manifest.toml               # зафиксированные версии
+│   ├── .julia-version              # точная project-pinned версия Julia
 │   ├── README.md
-│   └── smoke/smoke_case.jl         # 1D oil–water кейс → JSON
+│   └── smoke/smoke_case.jl         # читает case.json → JSON с input_sha256
 ├── tests/
-│   ├── conftest.py                 # фикстура tmp_project
+│   ├── conftest.py
 │   ├── test_no_absolute_paths.py
-│   ├── unit/
-│   │   ├── test_hashing.py
-│   │   ├── test_paths.py
-│   │   ├── test_config.py
-│   │   ├── test_run_registry.py
-│   │   ├── test_logging_setup.py
-│   │   ├── test_source_manifest.py
-│   │   ├── test_fixture.py
-│   │   ├── test_julia_bridge.py
-│   │   ├── test_environment_report.py
-│   │   ├── test_smoke.py
-│   │   └── test_cli.py
-│   └── integration/
-│       └── test_julia_smoke.py     # @pytest.mark.julia
+│   ├── unit/                       # см. задачи
+│   └── integration/test_julia_smoke.py   # @pytest.mark.julia
 ├── reports/
-│   ├── environment_report.md
-│   ├── manifests/
-│   │   ├── source_manifest.json
-│   │   └── environment.json
+│   ├── environment_report.md       # детерминированный
+│   ├── manifests/{source_manifest.json,environment.json}   # детерминированные
 │   └── stages/E00.md
-├── artifacts/.gitkeep              # runs/<run_id>/ создаются в runtime (ignored)
-└── data/                           # ignored: raw/ interim/ processed/
+├── artifacts/.gitkeep              # runs/<run_id>/, gate/ — ignored
+└── data/
+    ├── Ромашка_сырые/              # НЕИЗМЕНЯЕМЫЕ источники (ignored)
+    ├── interim/                    # ignored
+    └── processed/                  # ignored
 ```
 
-Ответственности: `registry/*` — всё, что относится к lineage (hashes, git, run record, manifest); `config/*` — схема и загрузка; `environment/*` — отчёт об окружении; `synthetic/fixture.py` — данные smoke; `simulator/julia_bridge.py` — единственное место, знающее, как запускать Julia; `smoke.py` — сценарий; `cli.py` — только парсинг аргументов и вызов сценариев.
+Ответственности: `registry/hashing.py` — хеши; `registry/atomic.py` — атомарная запись; `registry/artifact.py` — immutable artifact refs; `registry/run.py` — run record и lineage; `registry/source_manifest.py` — manifest источников; `config/*` — схема и загрузка; `environment/*` — отчёт об окружении и версии lock; `synthetic/fixture.py` — данные smoke и `case.json`; `simulator/julia_bridge.py` — единственное место, знающее, как запускать Julia; `smoke.py` — сценарий; `cli.py` — парсинг аргументов, run-контекст и гарантия FAIL-записи.
+
+**Порядок задач и зависимости:**
+
+```text
+T1 scaffold
+ └ T2 hashing + atomic
+    ├ T3 paths (+ containment)
+    │  └ T4 config schema + project.yml
+    │     ├ T5 artifact registry
+    │     │  └ T6 run registry + logging
+    │     │     ├ T7 source manifest
+    │     │     ├ T8 fixture + case.json
+    │     │     │  └ T9 julia env + smoke_case.jl
+    │     │     │     └ T10 julia bridge
+    │     │     ├ T11 environment report (+ locked versions)
+    │     │     └ T12 smoke scenario + CLI   (нужны T7, T10, T11)
+    │     │        └ T13 gate + freeze + E00.md
+```
 
 ---
-
-### Task 1: Каркас Python-проекта, зависимости и lock
+### Task 1: Каркас Python-проекта, зависимости, lock и gate-скрипты
 
 **Files:**
-- Create: `pyproject.toml`, `.python-version`, `Makefile`, `README.md`, `artifacts/.gitkeep`, `reports/.gitkeep`, `reports/manifests/.gitkeep`, `reports/stages/.gitkeep`, `configs/.gitkeep`
-- Create: `src/so_recon/__init__.py`, пустые `__init__.py` в `src/so_recon/{config,registry,environment,synthetic,simulator}/`
+- Create: `pyproject.toml`, `.python-version`, `Makefile`, `scripts/gate.sh`, `scripts/gate_clean.sh`, `README.md`, `artifacts/.gitkeep`, `reports/.gitkeep`, `reports/manifests/.gitkeep`, `reports/stages/.gitkeep`, `configs/.gitkeep`
+- Create: `src/so_recon/__init__.py`, `__init__.py` в `src/so_recon/{config,registry,environment,synthetic,simulator}/`, `tests/__init__.py`, `tests/unit/__init__.py`, `tests/integration/__init__.py`
 - Modify: `.gitignore`
 - Test: `tests/unit/test_package.py`
 
 **Interfaces:**
-- Produces: `so_recon.__version__ == "0.0.1"`, `so_recon.SPEC_VERSION == "3.0"`; команды `uv sync`, `uv run pytest`, `make test`, `make lint`.
+- Produces: `so_recon.__version__ == "0.0.1"`, `so_recon.SPEC_VERSION == "3.0"`; цели `make setup|test|lint|format|smoke|manifest|env-report|gate|gate-clean`.
+
+**Замечания ревизии 2, реализуемые здесь:** №6 (gate: pipefail/tee, `ruff format --check`, отдельный `gate-clean` с временным `JULIA_DEPOT_PATH`), №7 (точная версия Python), №11 (нет личных абсолютных путей).
+
+> Все команды выполняются **из корня репозитория**. В плане не указываются абсолютные пути.
 
 - [ ] **Step 1: Создать `pyproject.toml`**
 
@@ -194,11 +247,11 @@ module = ["pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 ```
 
-- [ ] **Step 2: Создать `.python-version`, `.gitignore`, `Makefile`, `README.md`, `.gitkeep`**
+- [ ] **Step 2: Создать `.python-version` и `.gitignore`**
 
-`.python-version`:
+`.python-version` — **точная** версия интерпретатора, на которой создаётся `.venv` (замечание №7):
 ```text
-3.13
+3.13.2
 ```
 
 `.gitignore` (полностью заменить содержимое):
@@ -217,20 +270,131 @@ __pycache__/
 dist/
 build/
 
-# run artifacts (lineage lives in run.json inside; never committed)
+# run artifacts and gate logs (lineage lives in run.json inside; never committed)
 /artifacts/*
 !/artifacts/.gitkeep
 
+# sdd workspace
+/.superpowers/
+
 # os / ide
 .DS_Store
+/.idea/
 ```
 
-`Makefile`:
+- [ ] **Step 3: Создать `scripts/gate.sh`**
+
+GNU Make 3.81 (установленная версия) молча игнорирует `.SHELLFLAGS`, поэтому `pipefail` обязан жить в скрипте, а не в `Makefile`.
+
+```bash
+#!/usr/bin/env bash
+# E00 gate: clean Python environment, locked Julia environment, manifests, smoke, tests.
+# pipefail lives here because GNU Make 3.81 silently ignores .SHELLFLAGS.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$ROOT"
+
+UV="${UV:-uv}"
+JULIA_BIN="${JULIA:-julia}"
+
+LOG_DIR="artifacts/gate"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_DIR}/gate-$(date -u +%Y%m%dT%H%M%SZ).log"
+
+# Files that must be byte-identical before and after a gate run (invariant I5).
+DETERMINISTIC_PATHS=(
+  uv.lock
+  julia/Manifest.toml
+  julia/.julia-version
+  configs/smoke_expected.json
+  reports/manifests
+  reports/environment_report.md
+)
+
+check_deterministic_outputs() {
+  local dirty
+  # Untracked files (??) are ignored: on a first run the artifacts do not exist yet.
+  dirty="$(git status --porcelain -- "${DETERMINISTIC_PATHS[@]}" | grep -v '^??' || true)"
+  if [ -n "$dirty" ]; then
+    echo "gate FAIL: tracked deterministic artifacts changed during the gate run:" >&2
+    echo "$dirty" >&2
+    return 1
+  fi
+  echo "deterministic artifacts unchanged (no git pollution)"
+}
+
+main() {
+  echo "== gate start $(date -u +%Y-%m-%dT%H:%M:%SZ) =="
+  echo "-- 1/8 clean python environment --"
+  rm -rf .venv
+  "$UV" sync --frozen
+
+  echo "-- 2/8 julia environment from lock --"
+  "$JULIA_BIN" --project=julia --startup-file=no -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
+
+  echo "-- 3/8 source manifest --"
+  "$UV" run so-recon manifest
+
+  echo "-- 4/8 environment report --"
+  "$UV" run so-recon env-report
+
+  echo "-- 5/8 end-to-end smoke --"
+  "$UV" run so-recon smoke
+
+  echo "-- 6/8 tests --"
+  "$UV" run pytest -q
+
+  echo "-- 7/8 lint, format and types --"
+  "$UV" run ruff check .
+  "$UV" run ruff format --check .
+  "$UV" run mypy
+
+  echo "-- 8/8 determinism of committed artifacts --"
+  check_deterministic_outputs
+
+  echo "== gate PASS $(date -u +%Y-%m-%dT%H:%M:%SZ) =="
+}
+
+main 2>&1 | tee "$LOG_FILE"
+```
+
+> `set -o pipefail` обязателен: без него `main | tee` вернул бы код `tee`, и падение gate осталось бы незамеченным. Лог пишется в `artifacts/gate/` — каталог не версионируется.
+
+- [ ] **Step 4: Создать `scripts/gate_clean.sh`**
+
+```bash
+#!/usr/bin/env bash
+# Same gate, but with a throwaway Julia depot: proves julia/Manifest.toml instantiates
+# from scratch. Slow (full JutulDarcy download + precompile), so it is a separate target.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+TMP_DEPOT="$(mktemp -d "${TMPDIR:-/tmp}/so-recon-depot.XXXXXX")"
+cleanup() { rm -rf "$TMP_DEPOT"; }
+trap cleanup EXIT
+
+export JULIA_DEPOT_PATH="$TMP_DEPOT"
+echo "using throwaway JULIA_DEPOT_PATH=$JULIA_DEPOT_PATH"
+
+# No exec: the EXIT trap must still run to remove the temporary depot.
+"$ROOT/scripts/gate.sh"
+```
+
+Сделать оба скрипта исполняемыми: `chmod +x scripts/gate.sh scripts/gate_clean.sh`.
+
+- [ ] **Step 5: Создать `Makefile`**
+
+`Makefile` — тонкая обёртка; вся логика с `pipefail` в скриптах.
+
 ```makefile
 UV ?= uv
 JULIA ?= julia
+export UV
+export JULIA
 
-.PHONY: setup setup-julia test lint smoke manifest env-report gate
+.PHONY: setup setup-julia test lint format smoke manifest env-report gate gate-clean
 
 setup:
 	$(UV) sync --frozen
@@ -246,6 +410,9 @@ lint:
 	$(UV) run ruff format --check .
 	$(UV) run mypy
 
+format:
+	$(UV) run ruff format .
+
 manifest:
 	$(UV) run so-recon manifest
 
@@ -255,20 +422,17 @@ env-report:
 smoke:
 	$(UV) run so-recon smoke
 
-# E00 gate: clean Python environment, locked Julia environment, manifests, smoke, tests.
+# Full E00 gate. Logic lives in the script: GNU Make 3.81 ignores .SHELLFLAGS.
 gate:
-	rm -rf .venv
-	$(UV) sync --frozen
-	$(MAKE) setup-julia
-	$(UV) run so-recon manifest
-	$(UV) run so-recon env-report
-	$(UV) run so-recon smoke
-	$(UV) run pytest -q
-	$(UV) run ruff check .
-	$(UV) run mypy
+	./scripts/gate.sh
+
+# Gate with a throwaway Julia depot (clean install of the locked Julia environment).
+gate-clean:
+	./scripts/gate_clean.sh
 ```
 
-`README.md`:
+- [ ] **Step 6: Создать `README.md`**
+
 ```markdown
 # SO-RECON
 
@@ -277,8 +441,10 @@ gate:
 
 ## Требования
 
-- Python 3.13 и [`uv`](https://docs.astral.sh/uv/)
-- Julia 1.12 через [`juliaup`](https://github.com/JuliaLang/juliaup)
+- Python 3.13.2 (точная версия зафиксирована в `.python-version`) и [`uv`](https://docs.astral.sh/uv/)
+- Julia — точная project-pinned версия из `julia/.julia-version`, ставится через
+  [`juliaup`](https://github.com/JuliaLang/juliaup). Это версия, зафиксированная проектом,
+  а не утверждение о текущем upstream stable-релизе.
 
 ## Установка
 
@@ -287,25 +453,28 @@ gate:
 
 ## Данные
 
-Закрытые исходные CSV лежат в `data/raw/` (каталог не версионируется).
-Ожидаемые файлы перечислены в `configs/project.yml` → `sources.files`.
-`so-recon manifest` записывает их SHA-256 и число строк в `reports/manifests/source_manifest.json`.
+Закрытые исходные CSV лежат в `data/Ромашка_сырые/` и **не перемещаются и не изменяются**:
+E00 открывает их только на чтение. Каталог `data/` не версионируется.
+Перечень файлов и контракты чтения — в `configs/project.yml` → `sources.files`.
+`so-recon manifest` записывает SHA-256, размер, `physical_line_count` и `data_rows`
+в `reports/manifests/source_manifest.json`.
 
 ## Команды
 
     uv run so-recon manifest      # manifest исходных файлов
     uv run so-recon env-report    # reports/environment_report.md
-    uv run so-recon smoke         # детерминированный fixture + JutulDarcy smoke
+    uv run so-recon smoke         # end-to-end: fixture -> case.json -> JutulDarcy
     make test                     # pytest
-    make lint                     # ruff + mypy
-    make gate                     # чистая установка + полный gate E00
+    make lint                     # ruff check + ruff format --check + mypy
+    make gate                     # чистое Python-окружение + полный gate E00
+    make gate-clean               # то же + чистый временный Julia depot (долго)
 
-Каждый запуск создаёт `artifacts/runs/<run_id>/` с `run.json`, `resolved_config.json`, `run.log`.
+Каждый запуск создаёт `artifacts/runs/<run_id>/` с `run.json`, `resolved_config.json`,
+`run.log` и артефактами запуска. Коммитируемые файлы в `reports/` и `configs/`
+детерминированы: повторный gate не создаёт diff.
 ```
 
-Создать пустые файлы: `artifacts/.gitkeep`, `reports/.gitkeep`, `reports/manifests/.gitkeep`, `reports/stages/.gitkeep`, `configs/.gitkeep`.
-
-- [ ] **Step 3: Создать пакет и падающий тест**
+- [ ] **Step 7: Создать пакет и падающий тест**
 
 `src/so_recon/__init__.py`:
 ```python
@@ -315,9 +484,9 @@ __version__ = "0.0.1"
 SPEC_VERSION = "3.0"
 ```
 
-Пустые `src/so_recon/config/__init__.py`, `src/so_recon/registry/__init__.py`, `src/so_recon/environment/__init__.py`, `src/so_recon/synthetic/__init__.py`, `src/so_recon/simulator/__init__.py` (каждый — одна строка docstring, например `"""Typed configuration."""`).
+Подпакеты — одна строка docstring каждый: `config/__init__.py` → `"""Typed configuration."""`, `registry/__init__.py` → `"""Hashing, atomic writes, artifacts, run records and manifests."""`, `environment/__init__.py` → `"""Environment report."""`, `synthetic/__init__.py` → `"""Deterministic synthetic fixtures."""`, `simulator/__init__.py` → `"""Julia/JutulDarcy integration."""`.
 
-`tests/unit/__init__.py` и `tests/integration/__init__.py` — пустые. `tests/__init__.py` — пустой.
+`tests/__init__.py`, `tests/unit/__init__.py`, `tests/integration/__init__.py` — пустые.
 
 `tests/unit/test_package.py`:
 ```python
@@ -329,44 +498,63 @@ def test_version_and_spec_version() -> None:
     assert so_recon.SPEC_VERSION == "3.0"
 ```
 
-- [ ] **Step 4: Установить окружение и запустить тест**
+Создать пустые `artifacts/.gitkeep`, `reports/.gitkeep`, `reports/manifests/.gitkeep`, `reports/stages/.gitkeep`, `configs/.gitkeep`.
+
+- [ ] **Step 8: Установить окружение и запустить тест**
 
 ```bash
-cd /Users/george/Documents/so_field && uv lock && uv sync && uv run pytest -q
+uv lock && uv sync && uv run pytest -q
 ```
-Ожидается: `1 passed`; появился `uv.lock` и `.venv/`.
-
-- [ ] **Step 5: Проверить lint и mypy на пустом каркасе**
-
+Ожидается: `1 passed`; появились `uv.lock` и `.venv/`. Проверить, что интерпретатор — ровно 3.13.2:
 ```bash
-cd /Users/george/Documents/so_field && uv run ruff check . && uv run ruff format --check . && uv run mypy
+uv run python -c "import platform; print(platform.python_version())"
 ```
-Ожидается: `All checks passed!`, `Success: no issues found`.
+Ожидается: `3.13.2`. Если версия иная — исправить `.python-version` на фактически доступную точную версию 3.13.x и зафиксировать это в отчёте E00.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Проверить lint, format и mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && git add pyproject.toml uv.lock .python-version Makefile README.md .gitignore src tests artifacts/.gitkeep reports configs && git commit -m "feat(e00): scaffold python project with uv lock, make targets and package skeleton
+uv run ruff check . && uv run ruff format --check . && uv run mypy
+```
+Ожидается: `All checks passed!`, `N files already formatted`, `Success: no issues found`.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+- [ ] **Step 10: Проверить, что gate-скрипты синтаксически корректны**
+
+```bash
+bash -n scripts/gate.sh && bash -n scripts/gate_clean.sh && test -x scripts/gate.sh && test -x scripts/gate_clean.sh && echo "gate scripts ok"
+```
+Ожидается: `gate scripts ok`. Сам `make gate` на этом этапе ещё не запускается (нет Julia и CLI).
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add pyproject.toml uv.lock .python-version Makefile scripts README.md .gitignore src tests artifacts/.gitkeep reports configs && git commit -m "feat(e00): scaffold python project with uv lock, gate scripts and package skeleton
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 2: Hashing и канонический JSON
+### Task 2: Hashing, канонический JSON и атомарная запись
 
 **Files:**
-- Create: `src/so_recon/registry/hashing.py`
-- Test: `tests/unit/test_hashing.py`
+- Create: `src/so_recon/registry/hashing.py`, `src/so_recon/registry/atomic.py`
+- Test: `tests/unit/test_hashing.py`, `tests/unit/test_atomic.py`
 
 **Interfaces:**
-- Produces:
+- Produces (`so_recon.registry.hashing`):
   - `sha256_bytes(data: bytes) -> str` — hex-строка 64 символа.
-  - `sha256_file(path: Path, chunk_size: int = 1 << 20) -> str` — потоковый SHA-256.
+  - `sha256_file(path: Path, chunk_size: int = 1 << 20) -> str` — потоковый SHA-256, файл открывается только на чтение.
   - `canonical_json(obj: object) -> str` — `sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=False`, `allow_nan=False`.
   - `sha256_json(obj: object) -> str` — `sha256_bytes(canonical_json(obj).encode("utf-8"))`.
+- Produces (`so_recon.registry.atomic`):
+  - `write_bytes_atomic(path: Path, data: bytes) -> None`
+  - `write_text_atomic(path: Path, text: str) -> None`
+  - `write_json_atomic(path: Path, obj: object, *, indent: int = 2) -> bytes` — детерминированный дамп (`sort_keys=True`, `ensure_ascii=False`, `allow_nan=False`) плюс завершающий `\n`; возвращает записанные байты, чтобы вызывающий мог их захешировать без повторного чтения.
 
-- [ ] **Step 1: Написать падающий тест**
+**Замечания ревизии 2, реализуемые здесь:** №12 (атомарная запись).
+
+- [ ] **Step 1: Написать падающие тесты**
 
 `tests/unit/test_hashing.py`:
 ```python
@@ -405,17 +593,63 @@ def test_sha256_json_is_stable() -> None:
     assert sha256_json({"k": 1}) == sha256_bytes(b'{"k":1}')
 ```
 
-- [ ] **Step 2: Убедиться, что тест падает**
+`tests/unit/test_atomic.py`:
+```python
+import json
+from pathlib import Path
+
+import pytest
+
+from so_recon.registry.atomic import write_bytes_atomic, write_json_atomic, write_text_atomic
+
+
+def test_write_bytes_atomic_creates_parents(tmp_path: Path) -> None:
+    p = tmp_path / "a" / "b" / "f.bin"
+    write_bytes_atomic(p, b"payload")
+    assert p.read_bytes() == b"payload"
+
+
+def test_write_bytes_atomic_replaces_existing(tmp_path: Path) -> None:
+    p = tmp_path / "f.bin"
+    write_bytes_atomic(p, b"one")
+    write_bytes_atomic(p, b"two")
+    assert p.read_bytes() == b"two"
+
+
+def test_write_atomic_leaves_no_temporary_files(tmp_path: Path) -> None:
+    write_text_atomic(tmp_path / "f.txt", "hello")
+    assert sorted(q.name for q in tmp_path.iterdir()) == ["f.txt"]
+
+
+def test_failed_write_leaves_no_debris_and_keeps_old_content(tmp_path: Path) -> None:
+    p = tmp_path / "f.json"
+    write_json_atomic(p, {"ok": 1})
+    with pytest.raises(ValueError):
+        write_json_atomic(p, {"bad": float("inf")})
+    assert json.loads(p.read_text(encoding="utf-8")) == {"ok": 1}
+    assert sorted(q.name for q in tmp_path.iterdir()) == ["f.json"]
+
+
+def test_write_json_atomic_is_deterministic_and_returns_bytes(tmp_path: Path) -> None:
+    p = tmp_path / "f.json"
+    first = write_json_atomic(p, {"b": 1, "a": "ё"})
+    second = write_json_atomic(tmp_path / "g.json", {"a": "ё", "b": 1})
+    assert first == second
+    assert first == p.read_bytes()
+    assert first.decode("utf-8") == '{\n  "a": "ё",\n  "b": 1\n}\n'
+```
+
+- [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_hashing.py -q
+uv run pytest tests/unit/test_hashing.py tests/unit/test_atomic.py -q
 ```
-Ожидается: `ModuleNotFoundError: No module named 'so_recon.registry.hashing'`.
+Ожидается: `ModuleNotFoundError` для `so_recon.registry.hashing` и `so_recon.registry.atomic`.
 
 - [ ] **Step 3: Реализовать `hashing.py`**
 
 ```python
-"""Content hashing helpers shared by manifests, run records and fixtures."""
+"""Content hashing helpers shared by manifests, artifacts, run records and fixtures."""
 
 from __future__ import annotations
 
@@ -429,6 +663,7 @@ def sha256_bytes(data: bytes) -> str:
 
 
 def sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    """Stream a file's SHA-256. Read-only: never mutates the source (invariant I1)."""
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         while chunk := fh.read(chunk_size):
@@ -438,31 +673,88 @@ def sha256_file(path: Path, chunk_size: int = 1 << 20) -> str:
 
 def canonical_json(obj: object) -> str:
     """Deterministic JSON: sorted keys, no whitespace, UTF-8 text, NaN/Inf forbidden."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def sha256_json(obj: object) -> str:
     return sha256_bytes(canonical_json(obj).encode("utf-8"))
 ```
 
-- [ ] **Step 4: Прогнать тесты**
+- [ ] **Step 4: Реализовать `atomic.py`**
 
-```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_hashing.py -q
+```python
+"""Atomic writes: a reader never observes a half-written artifact (invariant I3).
+
+Every scientific artifact goes through here. The temporary file is created in the
+destination directory so that os.replace stays within one filesystem and is atomic.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from pathlib import Path
+
+
+def _fsync_dir(directory: Path) -> None:
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    _fsync_dir(path.parent)
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    write_bytes_atomic(path, text.encode("utf-8"))
+
+
+def write_json_atomic(path: Path, obj: object, *, indent: int = 2) -> bytes:
+    """Deterministic pretty JSON. Serialisation happens before any file is touched,
+    so an unserialisable object leaves the previous content intact."""
+    payload = (
+        json.dumps(obj, indent=indent, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    ).encode("utf-8")
+    write_bytes_atomic(path, payload)
+    return payload
 ```
-Ожидается: `5 passed`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/registry/hashing.py tests/unit/test_hashing.py && git commit -m "feat(e00): add sha256 and canonical json hashing helpers
+uv run pytest tests/unit/test_hashing.py tests/unit/test_atomic.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
+```
+Ожидается: `10 passed`, без ошибок.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/so_recon/registry/hashing.py src/so_recon/registry/atomic.py tests/unit/test_hashing.py tests/unit/test_atomic.py && git commit -m "feat(e00): add sha256/canonical-json hashing and atomic artifact writes
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 3: Корень репозитория и каталоги проекта
+### Task 3: Корень репозитория, containment путей и каталоги проекта
 
 **Files:**
 - Create: `src/so_recon/paths.py`
@@ -470,10 +762,15 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Produces:
-  - `class RepoRootNotFoundError(RuntimeError)`
+  - `class RepoRootNotFoundError(RuntimeError)`, `class PathEscapeError(ValueError)`.
+  - `validate_relative_path(value: str) -> str` — единственный валидатор формы пути. Отвергает: пустую строку и строку с обрамляющими пробелами; `~`-префикс; любой backslash (а значит и Windows-разделители, и UNC `\\server\share`); Windows drive-absolute (`C:/`, `C:\`); POSIX-absolute (`/x`) и `//server/share`; любой сегмент `..` или `.`; NUL-байт.
+  - `resolve_within_root(root: Path, relative: str) -> Path` — валидирует форму, затем `(root/relative).resolve()` и требует, чтобы результат лежал внутри `root.resolve()`; иначе `PathEscapeError`. Так как `resolve()` раскрывает symlink'и, выход за пределы репозитория через symlink запрещён.
   - `find_repo_root(start: Path | None = None) -> Path` — порядок: env `SO_RECON_ROOT` → подъём от `start` (по умолчанию `Path.cwd()`) → подъём от `__file__`. Маркер корня: есть `pyproject.toml` и каталог `src/so_recon`.
-  - `@dataclass(frozen=True) class ProjectPaths` с полями `root, raw, interim, processed, artifacts, reports, configs, julia` (все `Path`, абсолютные) и свойствами `runs = artifacts/"runs"`, `manifests = reports/"manifests"`, `stages = reports/"stages"`; методы `relative(path: Path) -> str` (posix относительно root), `ensure_dirs() -> None` (создаёт raw/interim/processed/runs/manifests/stages), classmethod `ProjectPaths.default(root: Path) -> ProjectPaths` (стандартные подкаталоги `data/raw`, `data/interim`, `data/processed`, `artifacts`, `reports`, `configs`, `julia`).
-- Примечание: конфигурируемые подкаталоги подключаются в Task 4 через `ProjectPaths.from_config`.
+  - `@dataclass(frozen=True) class ProjectPaths` с полями `root, raw, interim, processed, artifacts, reports, configs, julia` (все абсолютные `Path`), свойствами `runs = artifacts/"runs"`, `manifests = reports/"manifests"`, `stages = reports/"stages"`; методы `relative(path) -> str`, `resolve(relative: str) -> Path`, `ensure_dirs() -> None`; classmethod `default(root)`.
+  - `ProjectPaths.ensure_dirs()` создаёт **только** `interim`, `processed`, `runs`, `manifests`, `stages`. Каталог `raw` не создаётся: источники обязаны существовать заранее, их отсутствие — явная ошибка (SPEC 7.1, инвариант I1).
+- Примечание: `ProjectPaths.from_config` реализуется **здесь** (импорт `PathsConfig` только под `TYPE_CHECKING`, чтобы не создать цикл `paths ↔ config`), а его тест появляется в Task 4 вместе с `PathsConfig`.
+
+**Замечания ревизии 2, реализуемые здесь:** №8 (`..`, Windows absolute/UNC, symlink-escape), №2 (`ensure_dirs` не трогает каталог источников), №11.
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -483,7 +780,14 @@ from pathlib import Path
 
 import pytest
 
-from so_recon.paths import ProjectPaths, RepoRootNotFoundError, find_repo_root
+from so_recon.paths import (
+    PathEscapeError,
+    ProjectPaths,
+    RepoRootNotFoundError,
+    find_repo_root,
+    resolve_within_root,
+    validate_relative_path,
+)
 
 
 def _make_root(tmp_path: Path) -> Path:
@@ -512,6 +816,58 @@ def test_find_repo_root_raises_without_marker(tmp_path: Path, monkeypatch: pytes
         find_repo_root(tmp_path)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        " data/raw",
+        "data/raw ",
+        "~/data",
+        "/abs/data",
+        "//server/share",
+        "\\\\server\\share",
+        "C:/data",
+        "C:\\data",
+        "c:/data",
+        "data\\raw",
+        "../outside",
+        "data/../../outside",
+        "data/./raw",
+        "..",
+        "data/raw\x00",
+    ],
+)
+def test_validate_relative_path_rejects(bad: str) -> None:
+    with pytest.raises(ValueError):
+        validate_relative_path(bad)
+
+
+@pytest.mark.parametrize("good", ["data/raw", "configs", "julia/smoke/smoke_case.jl", "data/Ромашка_сырые"])
+def test_validate_relative_path_accepts(good: str) -> None:
+    assert validate_relative_path(good) == good
+
+
+def test_resolve_within_root_returns_absolute_path(tmp_path: Path) -> None:
+    assert resolve_within_root(tmp_path, "data/raw") == (tmp_path.resolve() / "data" / "raw")
+
+
+def test_resolve_within_root_rejects_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(PathEscapeError):
+        resolve_within_root(root, "escape/secrets.csv")
+
+
+def test_resolve_within_root_allows_symlink_inside_root(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (root / "real").mkdir(parents=True)
+    (root / "link").symlink_to(root / "real", target_is_directory=True)
+    assert resolve_within_root(root, "link/f.csv") == (root.resolve() / "real" / "f.csv")
+
+
 def test_default_paths_and_relative(tmp_path: Path) -> None:
     paths = ProjectPaths.default(tmp_path)
     assert paths.raw == tmp_path / "data" / "raw"
@@ -521,11 +877,18 @@ def test_default_paths_and_relative(tmp_path: Path) -> None:
     assert paths.relative(paths.raw / "mer.csv") == "data/raw/mer.csv"
 
 
-def test_ensure_dirs_creates_runtime_dirs(tmp_path: Path) -> None:
+def test_relative_rejects_path_outside_root(tmp_path: Path) -> None:
+    paths = ProjectPaths.default(tmp_path / "repo")
+    with pytest.raises(PathEscapeError):
+        paths.relative(tmp_path / "elsewhere" / "f.csv")
+
+
+def test_ensure_dirs_creates_runtime_dirs_but_not_sources(tmp_path: Path) -> None:
     paths = ProjectPaths.default(tmp_path)
     paths.ensure_dirs()
-    for p in (paths.raw, paths.interim, paths.processed, paths.runs, paths.manifests, paths.stages):
+    for p in (paths.interim, paths.processed, paths.runs, paths.manifests, paths.stages):
         assert p.is_dir()
+    assert not paths.raw.exists(), "source directory must never be created by the code"
 ```
 
 `tests/test_no_absolute_paths.py` — gate «код не зависит от личных абсолютных путей»:
@@ -534,10 +897,18 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCAN_DIRS = ("src", "configs", "julia", "tests", "Makefile", "pyproject.toml", "README.md")
+SCAN_DIRS = (
+    "src",
+    "configs",
+    "julia",
+    "tests",
+    "scripts",
+    "Makefile",
+    "pyproject.toml",
+    "README.md",
+)
 SKIP_SUFFIXES = {".pyc", ".parquet", ".png"}
-FORBIDDEN = re.compile(r"(/Users/|/home/|C:\\Users|/Volumes/)")
-
+FORBIDDEN = re.compile(r"(/Users/|/home/|[Cc]:\\Users|/Volumes/)")
 
 SELF = Path(__file__).resolve()
 
@@ -568,26 +939,75 @@ def test_no_personal_absolute_paths_in_repo_sources() -> None:
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_paths.py tests/test_no_absolute_paths.py -q
+uv run pytest tests/unit/test_paths.py tests/test_no_absolute_paths.py -q
 ```
-Ожидается: `ModuleNotFoundError: so_recon.paths` для первого файла; второй проходит (нарушений пока нет).
+Ожидается: `ModuleNotFoundError: so_recon.paths` для первого файла; второй проходит.
 
 - [ ] **Step 3: Реализовать `paths.py`**
 
 ```python
-"""Repository root discovery and canonical project directories."""
+"""Repository root discovery, path containment and canonical project directories."""
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from so_recon.config.schema import PathsConfig
 
 ROOT_ENV_VAR = "SO_RECON_ROOT"
+
+# "C:/x", "C:\x" and "\\server\share" must never be accepted from configuration.
+_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 
 
 class RepoRootNotFoundError(RuntimeError):
     """Raised when no directory with pyproject.toml + src/so_recon is found."""
+
+
+class PathEscapeError(ValueError):
+    """Raised when a path would resolve outside the repository root."""
+
+
+def validate_relative_path(value: str) -> str:
+    """Accept only a plain relative POSIX path that stays inside the repository.
+
+    Rejects absolute POSIX paths, Windows drive-absolute and UNC paths, '~' expansion,
+    backslash separators, '.' and '..' segments, and NUL bytes (invariant I4).
+    """
+    if not value or value != value.strip():
+        raise ValueError(f"path must be a non-empty trimmed string, got {value!r}")
+    if "\x00" in value:
+        raise ValueError(f"path must not contain NUL bytes, got {value!r}")
+    if value.startswith("~"):
+        raise ValueError(f"path must not use '~' expansion, got {value!r}")
+    if "\\" in value:
+        raise ValueError(f"path must use '/' separators and must not be a UNC path, got {value!r}")
+    if _WINDOWS_ABSOLUTE.match(value):
+        raise ValueError(f"path must not be a Windows absolute/UNC path, got {value!r}")
+    pure = PurePosixPath(value)
+    if pure.is_absolute():
+        raise ValueError(f"path must be relative to repository root, got {value!r}")
+    if any(part in ("..", ".") for part in pure.parts):
+        raise ValueError(f"path must not contain '.' or '..' segments, got {value!r}")
+    return value
+
+
+def resolve_within_root(root: Path, relative: str) -> Path:
+    """Validate the form, then resolve and prove the result stays inside the root.
+
+    resolve() expands symlinks, so a symlink pointing outside the repository is rejected.
+    """
+    validate_relative_path(relative)
+    root_resolved = root.resolve()
+    candidate = (root_resolved / relative).resolve()
+    if candidate != root_resolved and not candidate.is_relative_to(root_resolved):
+        raise PathEscapeError(f"{relative!r} resolves to {candidate}, outside {root_resolved}")
+    return candidate
 
 
 def _is_root(p: Path) -> bool:
@@ -640,6 +1060,20 @@ class ProjectPaths:
             julia=root / "julia",
         )
 
+    @classmethod
+    def from_config(cls, root: Path, cfg: PathsConfig) -> ProjectPaths:
+        root = root.resolve()
+        return cls(
+            root=root,
+            raw=resolve_within_root(root, cfg.raw),
+            interim=resolve_within_root(root, cfg.interim),
+            processed=resolve_within_root(root, cfg.processed),
+            artifacts=resolve_within_root(root, cfg.artifacts),
+            reports=resolve_within_root(root, cfg.reports),
+            configs=resolve_within_root(root, cfg.configs),
+            julia=resolve_within_root(root, cfg.julia),
+        )
+
     @property
     def runs(self) -> Path:
         return self.artifacts / "runs"
@@ -652,54 +1086,61 @@ class ProjectPaths:
     def stages(self) -> Path:
         return self.reports / "stages"
 
+    def resolve(self, relative: str) -> Path:
+        return resolve_within_root(self.root, relative)
+
     def relative(self, path: Path) -> str:
-        return path.resolve().relative_to(self.root).as_posix()
+        resolved = path.resolve()
+        root = self.root.resolve()
+        if resolved != root and not resolved.is_relative_to(root):
+            raise PathEscapeError(f"{path} is outside the repository root {root}")
+        return resolved.relative_to(root).as_posix()
 
     def ensure_dirs(self) -> None:
-        for p in (self.raw, self.interim, self.processed, self.runs, self.manifests, self.stages):
+        """Create runtime directories only. The source directory is never created:
+        a missing source must surface as an explicit error (SPEC 7.1, invariant I1)."""
+        for p in (self.interim, self.processed, self.runs, self.manifests, self.stages):
             p.mkdir(parents=True, exist_ok=True)
 ```
 
-- [ ] **Step 4: Прогнать тесты**
+> `ProjectPaths.from_config` объявлен уже здесь, но его тест появляется в Task 4 вместе с `PathsConfig`. Импорт `PathsConfig` — только под `TYPE_CHECKING`, чтобы не создавать цикл `paths ↔ config`.
+
+- [ ] **Step 4: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_paths.py tests/test_no_absolute_paths.py -q
+uv run pytest tests/unit/test_paths.py tests/test_no_absolute_paths.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `6 passed`.
+Ожидается: все тесты проходят (параметризованные reject/accept + остальные), без ошибок ruff/mypy.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/paths.py tests/unit/test_paths.py tests/test_no_absolute_paths.py && git commit -m "feat(e00): add repo root discovery, project paths and absolute-path guard test
+git add src/so_recon/paths.py tests/unit/test_paths.py tests/test_no_absolute_paths.py && git commit -m "feat(e00): add repo root discovery, path containment guards and project paths
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
-
 ### Task 4: Typed configuration (pydantic) и `configs/project.yml`
 
 **Files:**
 - Create: `src/so_recon/config/schema.py`, `src/so_recon/config/load.py`, `configs/project.yml`
-- Modify: `src/so_recon/paths.py` (добавить `ProjectPaths.from_config`)
 - Test: `tests/unit/test_config.py`
+- Delete: `configs/.gitkeep`
 
 **Interfaces:**
-- Consumes: `sha256_json` (Task 2), `ProjectPaths` (Task 3).
+- Consumes: `sha256_json` (Task 2); `validate_relative_path`, `ProjectPaths` (Task 3).
 - Produces (`so_recon.config.schema`):
   - `class StrictModel(BaseModel)` — `extra="forbid"`, `frozen=True`.
-  - `class PathsConfig(StrictModel)`: `raw: str = "data/raw"`, `interim: str = "data/interim"`, `processed: str = "data/processed"`, `artifacts: str = "artifacts"`, `reports: str = "reports"`, `configs: str = "configs"`, `julia: str = "julia"`; валидатор: значения относительные.
-  - `class SourceFileSpec(StrictModel)`: `name: str`, `path: str`, `encoding: Literal["utf-8", "utf-8-sig", "cp1251"]`, `delimiter: Literal[",", ";"]`, `decimal: Literal[".", ","]`, `required: bool = True`.
-  - `class SourcesConfig(StrictModel)`: `files: list[SourceFileSpec]`.
-  - `class SmokeFixtureConfig(StrictModel)`: `seed: int = 20260913`, `n_wells: int = 4`, `n_months: int = 12`, `nx: int = 20`, `n_steps: int = 12`, `rel_tol: float = 1e-6`.
-  - `class JuliaConfig(StrictModel)`: `project: str = "julia"`, `smoke_script: str = "julia/smoke/smoke_case.jl"`, `timeout_s: int = 1800`.
+  - `class PathsConfig(StrictModel)`: `raw: str = "data/raw"`, `interim: str = "data/interim"`, `processed: str = "data/processed"`, `artifacts: str = "artifacts"`, `reports: str = "reports"`, `configs: str = "configs"`, `julia: str = "julia"`; каждое поле проходит `validate_relative_path`.
+  - `class SourceFileSpec(StrictModel)`: `name: str`, `path: str`, `encoding: Literal["utf-8", "utf-8-sig", "cp1251"]`, `delimiter: Literal[",", ";"]`, `decimal: Literal[".", ","]`, `header_lines: int = 1` (`ge=0`), `required: bool = True`; `path` проходит `validate_relative_path`.
+  - `class SourcesConfig(StrictModel)`: `files: list[SourceFileSpec]`; валидатор запрещает повторяющиеся `name`.
+  - `class SmokeFixtureConfig(StrictModel)`: `seed: int = 20260913`, `n_wells: int = 4` (`ge=2`), `n_months: int = 12` (`ge=1`), `nx: int = 20` (`ge=3`), `n_steps: int = 12` (`ge=1`), `rel_tol: float = 1e-6` (`gt=0`).
+  - `class JuliaConfig(StrictModel)`: `project: str = "julia"`, `smoke_script: str = "julia/smoke/smoke_case.jl"`, `timeout_s: int = 1800` (`ge=1`); строковые пути проходят `validate_relative_path`.
   - `class ProjectConfig(StrictModel)`: `spec_version: Literal["3.0"]`, `config_version: str`, `project_name: str = "SO-RECON"`, `paths: PathsConfig`, `sources: SourcesConfig`, `smoke: SmokeFixtureConfig`, `julia: JuliaConfig`.
-- Produces (`so_recon.config.load`):
-  - `class ConfigError(ValueError)`
-  - `load_project_config(path: Path) -> ProjectConfig`
-  - `resolved_config_dict(cfg: ProjectConfig) -> dict[str, Any]` — `cfg.model_dump(mode="json")`.
-  - `config_hash(cfg: ProjectConfig) -> str` — `sha256_json(resolved_config_dict(cfg))`.
-- Produces (`so_recon.paths`): `ProjectPaths.from_config(root: Path, cfg: PathsConfig) -> ProjectPaths`.
+- Produces (`so_recon.config.load`): `class ConfigError(ValueError)`, `load_project_config(path) -> ProjectConfig`, `resolved_config_dict(cfg) -> dict[str, Any]`, `config_hash(cfg) -> str`.
+
+**Замечания ревизии 2, реализуемые здесь:** №1 (`plastoper` `decimal: ","`, `header_lines`), №2 (источники на исходном пути), №8 (жёсткая валидация формы пути).
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -726,6 +1167,15 @@ julia: {}
 """
 
 
+def _spec(**over: object) -> SourceFileSpec:
+    base: dict[str, object] = {
+        "name": "x", "path": "data/raw/x.csv", "encoding": "utf-8",
+        "delimiter": ";", "decimal": ",",
+    }
+    base.update(over)
+    return SourceFileSpec(**base)  # type: ignore[arg-type]
+
+
 def test_load_minimal_config(tmp_path: Path) -> None:
     p = tmp_path / "project.yml"
     p.write_text(MINIMAL_YAML, encoding="utf-8")
@@ -733,6 +1183,7 @@ def test_load_minimal_config(tmp_path: Path) -> None:
     assert cfg.spec_version == "3.0"
     assert cfg.paths.raw == "data/raw"
     assert cfg.sources.files[0].encoding == "utf-8"
+    assert cfg.sources.files[0].header_lines == 1
     assert cfg.smoke.seed == 20260913
     assert cfg.julia.smoke_script == "julia/smoke/smoke_case.jl"
 
@@ -751,22 +1202,49 @@ def test_wrong_spec_version_is_rejected(tmp_path: Path) -> None:
         load_project_config(p)
 
 
-def test_absolute_path_in_paths_config_is_rejected() -> None:
+def test_missing_config_file_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError):
+        load_project_config(tmp_path / "absent.yml")
+
+
+@pytest.mark.parametrize(
+    "bad", ["/tmp/raw", "../raw", "~/raw", "C:/raw", "C:\\raw", "\\\\server\\share", "//server/share", "data\\raw"]
+)
+def test_dangerous_paths_config_values_are_rejected(bad: str) -> None:
     with pytest.raises(ValidationError):
-        PathsConfig(raw="/tmp/raw")
+        PathsConfig(raw=bad)
 
 
-def test_absolute_source_path_is_rejected() -> None:
+@pytest.mark.parametrize("bad", ["/abs/x.csv", "../x.csv", "data/../../x.csv", "C:\\x.csv"])
+def test_dangerous_source_paths_are_rejected(bad: str) -> None:
     with pytest.raises(ValidationError):
-        SourceFileSpec(name="x", path="/abs/x.csv", encoding="utf-8", delimiter=",", decimal=".")
+        _spec(path=bad)
 
 
-def test_config_hash_is_order_independent_and_stable(tmp_path: Path) -> None:
+def test_duplicate_source_names_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        SourcesConfig(files=[_spec(name="a"), _spec(name="a", path="data/raw/y.csv")])
+
+
+def test_negative_header_lines_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _spec(header_lines=-1)
+
+
+def test_config_hash_is_stable(tmp_path: Path) -> None:
     p = tmp_path / "project.yml"
     p.write_text(MINIMAL_YAML, encoding="utf-8")
     cfg = load_project_config(p)
     assert config_hash(cfg) == config_hash(load_project_config(p))
     assert resolved_config_dict(cfg)["smoke"]["seed"] == 20260913
+
+
+def test_config_hash_changes_with_content(tmp_path: Path) -> None:
+    p = tmp_path / "project.yml"
+    p.write_text(MINIMAL_YAML, encoding="utf-8")
+    q = tmp_path / "other.yml"
+    q.write_text(MINIMAL_YAML.replace("test.1", "test.2"), encoding="utf-8")
+    assert config_hash(load_project_config(p)) != config_hash(load_project_config(q))
 
 
 def test_project_paths_from_config(tmp_path: Path) -> None:
@@ -777,21 +1255,32 @@ def test_project_paths_from_config(tmp_path: Path) -> None:
         sources=SourcesConfig(files=[]),
     )
     paths = ProjectPaths.from_config(tmp_path, cfg.paths)
-    assert paths.raw == tmp_path / "custom" / "raw"
-    assert paths.reports == tmp_path / "reports"
+    assert paths.raw == tmp_path.resolve() / "custom" / "raw"
+    assert paths.reports == tmp_path.resolve() / "reports"
 
 
-def test_repo_config_file_is_valid() -> None:
+def test_repo_config_file_is_valid_and_matches_audited_contracts() -> None:
     repo_cfg = Path(__file__).resolve().parents[2] / "configs" / "project.yml"
     cfg = load_project_config(repo_cfg)
-    names = [f.name for f in cfg.sources.files]
-    assert names == ["coords", "gis", "mer", "perf", "plastoper"]
+    by_name = {f.name: f for f in cfg.sources.files}
+    assert list(by_name) == ["coords", "gis", "mer", "perf", "plastoper"]
+    # Contracts verified byte-wise against the raw files (DATA_AUDIT.md section 3).
+    assert (by_name["coords"].encoding, by_name["coords"].delimiter) == ("utf-8", ",")
+    assert (by_name["gis"].encoding, by_name["gis"].decimal) == ("cp1251", ",")
+    assert (by_name["mer"].encoding, by_name["mer"].decimal) == ("utf-8-sig", ",")
+    assert (by_name["perf"].encoding, by_name["perf"].decimal) == ("cp1251", ",")
+    # plastoper.csv stores "269,7600098": the decimal separator is a comma, not a dot.
+    assert (by_name["plastoper"].encoding, by_name["plastoper"].decimal) == ("utf-8-sig", ",")
+    assert all(f.header_lines == 1 for f in cfg.sources.files)
+    # Sources stay where they are: E00 never moves or rewrites them.
+    assert all(f.path.startswith("data/Ромашка_сырые/") for f in cfg.sources.files)
+    assert cfg.paths.raw == "data/Ромашка_сырые"
 ```
 
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_config.py -q
+uv run pytest tests/unit/test_config.py -q
 ```
 Ожидается: `ModuleNotFoundError: so_recon.config.load`.
 
@@ -802,20 +1291,15 @@ cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_config.py -
 
 from __future__ import annotations
 
-from pathlib import PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from so_recon.paths import validate_relative_path
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-def _must_be_relative(value: str) -> str:
-    if PurePosixPath(value).is_absolute() or value.startswith("~"):
-        raise ValueError(f"path must be relative to repository root, got {value!r}")
-    return value
 
 
 class PathsConfig(StrictModel):
@@ -830,25 +1314,37 @@ class PathsConfig(StrictModel):
     @field_validator("raw", "interim", "processed", "artifacts", "reports", "configs", "julia")
     @classmethod
     def _relative(cls, v: str) -> str:
-        return _must_be_relative(v)
+        return validate_relative_path(v)
 
 
 class SourceFileSpec(StrictModel):
+    """A raw source file. E00 opens it read-only: it is never moved or rewritten."""
+
     name: str
     path: str
     encoding: Literal["utf-8", "utf-8-sig", "cp1251"]
     delimiter: Literal[",", ";"]
     decimal: Literal[".", ","]
+    header_lines: int = Field(default=1, ge=0)
     required: bool = True
 
     @field_validator("path")
     @classmethod
     def _relative(cls, v: str) -> str:
-        return _must_be_relative(v)
+        return validate_relative_path(v)
 
 
 class SourcesConfig(StrictModel):
     files: list[SourceFileSpec]
+
+    @field_validator("files")
+    @classmethod
+    def _unique_names(cls, v: list[SourceFileSpec]) -> list[SourceFileSpec]:
+        names = [f.name for f in v]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate source names: {duplicates}")
+        return v
 
 
 class SmokeFixtureConfig(StrictModel):
@@ -868,7 +1364,7 @@ class JuliaConfig(StrictModel):
     @field_validator("project", "smoke_script")
     @classmethod
     def _relative(cls, v: str) -> str:
-        return _must_be_relative(v)
+        return validate_relative_path(v)
 
 
 class ProjectConfig(StrictModel):
@@ -925,43 +1421,20 @@ def config_hash(cfg: ProjectConfig) -> str:
     return sha256_json(resolved_config_dict(cfg))
 ```
 
-- [ ] **Step 5: Добавить `ProjectPaths.from_config` в `paths.py`**
+- [ ] **Step 5: Создать `configs/project.yml`**
 
-В `paths.py` добавить импорт под `TYPE_CHECKING` и classmethod:
-```python
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from so_recon.config.schema import PathsConfig
-```
-и внутри `ProjectPaths`:
-```python
-    @classmethod
-    def from_config(cls, root: Path, cfg: PathsConfig) -> ProjectPaths:
-        root = root.resolve()
-        return cls(
-            root=root,
-            raw=root / cfg.raw,
-            interim=root / cfg.interim,
-            processed=root / cfg.processed,
-            artifacts=root / cfg.artifacts,
-            reports=root / cfg.reports,
-            configs=root / cfg.configs,
-            julia=root / cfg.julia,
-        )
-```
-
-- [ ] **Step 6: Создать `configs/project.yml`** (значения encoding/delimiter/decimal взяты из `DATA_AUDIT.md` §3 и проверены по заголовкам файлов)
+Значения `encoding`/`delimiter`/`decimal` взяты из `DATA_AUDIT.md` §3 и **проверены по байтам** исходных файлов (см. таблицу «Проверенные контракты исходных файлов»). Пути указывают на исходное расположение: E00 ничего не перемещает.
 
 ```yaml
 # SO-RECON project configuration. Validated by so_recon.config.schema.ProjectConfig.
 # All paths are relative to the repository root. No personal absolute paths.
+# Raw sources are immutable: E00 opens them read-only and never moves or rewrites them.
 spec_version: "3.0"
-config_version: "E00.1"
+config_version: "E00.2"
 project_name: SO-RECON
 
 paths:
-  raw: data/raw
+  raw: data/Ромашка_сырые
   interim: data/interim
   processed: data/processed
   artifacts: artifacts
@@ -972,30 +1445,36 @@ paths:
 sources:
   files:
     - name: coords
-      path: data/raw/coords.csv
+      path: data/Ромашка_сырые/coords.csv
       encoding: utf-8
       delimiter: ","
       decimal: "."
+      header_lines: 1
     - name: gis
-      path: data/raw/gis.csv
+      path: data/Ромашка_сырые/gis.csv
       encoding: cp1251
       delimiter: ";"
       decimal: ","
+      header_lines: 1
     - name: mer
-      path: data/raw/mer.csv
+      path: data/Ромашка_сырые/mer.csv
       encoding: utf-8-sig
       delimiter: ";"
       decimal: ","
+      header_lines: 1
     - name: perf
-      path: data/raw/perf.csv
+      path: data/Ромашка_сырые/perf.csv
       encoding: cp1251
       delimiter: ";"
       decimal: ","
+      header_lines: 1
+    # plastoper.csv stores values such as "269,7600098" -> decimal separator is a comma.
     - name: plastoper
-      path: data/raw/plastoper.csv
+      path: data/Ромашка_сырые/plastoper.csv
       encoding: utf-8-sig
       delimiter: ";"
-      decimal: "."
+      decimal: ","
+      header_lines: 1
 
 smoke:
   seed: 20260913
@@ -1010,43 +1489,329 @@ julia:
   smoke_script: julia/smoke/smoke_case.jl
   timeout_s: 1800
 ```
+
 Удалить `configs/.gitkeep`.
 
-- [ ] **Step 7: Прогнать тесты, lint, mypy**
+- [ ] **Step 6: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_config.py tests/unit/test_paths.py -q && uv run ruff check . && uv run mypy
+uv run pytest tests/unit/test_config.py tests/unit/test_paths.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `13 passed`, без ошибок ruff/mypy.
+Ожидается: все тесты проходят, ruff/mypy чисты.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/config src/so_recon/paths.py configs tests/unit/test_config.py && git commit -m "feat(e00): add typed project configuration schema, loader and configs/project.yml
+git add src/so_recon/config configs tests/unit/test_config.py && git rm --cached configs/.gitkeep --ignore-unmatch && git commit -m "feat(e00): add typed project configuration schema, loader and configs/project.yml
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 5: Run registry (run ID, run record, lineage) и логирование
+### Task 5: Artifact registry (immutable `ArtifactRef`)
+
+**Files:**
+- Create: `src/so_recon/registry/artifact.py`
+- Test: `tests/unit/test_artifact.py`
+
+**Interfaces:**
+- Consumes: `sha256_bytes`, `sha256_file` (Task 2); `write_bytes_atomic`, `write_json_atomic` (Task 2); `ProjectPaths` (Task 3); `StrictModel` (Task 4).
+- Produces:
+  - `class ArtifactImmutabilityError(RuntimeError)` — попытка перезаписать существующий артефакт другим содержимым.
+  - `class ArtifactRef(StrictModel)`: `artifact_id: str` (равен `sha256` — контентная адресация), `path: str` (posix относительно repo root), `sha256: str`, `size_bytes: int`, `media_type: str`, `schema_version: str`, `producer_run_id: str`, `parent_artifact_ids: list[str]`, `created_at: str`.
+  - `register_artifact(path, paths, *, schema_version, producer_run_id, media_type, parent_artifact_ids=(), now) -> ArtifactRef` — для файлов, записанных сторонними библиотеками (Parquet).
+  - `write_artifact(path, data: bytes, paths, *, schema_version, producer_run_id, media_type, parent_artifact_ids=(), now) -> ArtifactRef` — атомарная запись с проверкой immutability: если файл существует и его содержимое совпадает — операция идемпотентна; если отличается — `ArtifactImmutabilityError`, старое содержимое остаётся нетронутым.
+  - `write_json_artifact(path, obj, paths, *, schema_version, producer_run_id, parent_artifact_ids=(), now) -> ArtifactRef` — то же для детерминированного JSON (`media_type="application/json"`).
+
+**Замечания ревизии 2, реализуемые здесь:** №4 (`ArtifactRef`, immutability результатов), №12 (атомарность).
+
+- [ ] **Step 1: Написать падающие тесты**
+
+`tests/unit/test_artifact.py`:
+```python
+import hashlib
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from so_recon.paths import ProjectPaths
+from so_recon.registry.artifact import (
+    ArtifactImmutabilityError,
+    register_artifact,
+    write_artifact,
+    write_json_artifact,
+)
+
+NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
+
+
+def _paths(tmp_path: Path) -> ProjectPaths:
+    return ProjectPaths.default(tmp_path)
+
+
+def test_write_artifact_returns_full_lineage_ref(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    ref = write_artifact(
+        tmp_path / "reports" / "x.bin", b"payload", paths,
+        schema_version="1", producer_run_id="run-1", media_type="application/octet-stream",
+        parent_artifact_ids=["parent-sha"], now=NOW,
+    )
+    assert ref.sha256 == hashlib.sha256(b"payload").hexdigest()
+    assert ref.artifact_id == ref.sha256
+    assert ref.path == "reports/x.bin"
+    assert ref.size_bytes == 7
+    assert ref.schema_version == "1"
+    assert ref.producer_run_id == "run-1"
+    assert ref.parent_artifact_ids == ["parent-sha"]
+    assert ref.created_at == "2026-09-13T12:00:00+00:00"
+
+
+def test_rewriting_identical_content_is_idempotent(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    target = tmp_path / "reports" / "x.bin"
+    a = write_artifact(target, b"same", paths, schema_version="1", producer_run_id="r1",
+                       media_type="application/octet-stream", now=NOW)
+    b = write_artifact(target, b"same", paths, schema_version="1", producer_run_id="r2",
+                       media_type="application/octet-stream", now=NOW)
+    assert a.sha256 == b.sha256
+    assert b.producer_run_id == "r2"
+    assert target.read_bytes() == b"same"
+
+
+def test_rewriting_with_different_content_is_refused(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    target = tmp_path / "reports" / "x.bin"
+    write_artifact(target, b"first", paths, schema_version="1", producer_run_id="r1",
+                   media_type="application/octet-stream", now=NOW)
+    with pytest.raises(ArtifactImmutabilityError):
+        write_artifact(target, b"second", paths, schema_version="1", producer_run_id="r2",
+                       media_type="application/octet-stream", now=NOW)
+    assert target.read_bytes() == b"first", "the existing artifact must survive a refused write"
+
+
+def test_write_json_artifact_is_deterministic(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    a = write_json_artifact(tmp_path / "reports" / "a.json", {"b": 1, "a": 2}, paths,
+                            schema_version="1", producer_run_id="r1", now=NOW)
+    b = write_json_artifact(tmp_path / "reports" / "b.json", {"a": 2, "b": 1}, paths,
+                            schema_version="1", producer_run_id="r1", now=NOW)
+    assert a.sha256 == b.sha256
+    assert a.media_type == "application/json"
+
+
+def test_register_artifact_hashes_existing_file(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    target = tmp_path / "artifacts" / "t.parquet"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"parquet-bytes")
+    ref = register_artifact(target, paths, schema_version="1", producer_run_id="r1",
+                            media_type="application/vnd.apache.parquet", now=NOW)
+    assert ref.sha256 == hashlib.sha256(b"parquet-bytes").hexdigest()
+    assert ref.path == "artifacts/t.parquet"
+
+
+def test_artifact_outside_repository_root_is_refused(tmp_path: Path) -> None:
+    paths = ProjectPaths.default(tmp_path / "repo")
+    with pytest.raises(ValueError):
+        write_artifact(tmp_path / "elsewhere.bin", b"x", paths, schema_version="1",
+                       producer_run_id="r1", media_type="application/octet-stream", now=NOW)
+```
+
+- [ ] **Step 2: Убедиться, что тесты падают**
+
+```bash
+uv run pytest tests/unit/test_artifact.py -q
+```
+Ожидается: `ModuleNotFoundError: so_recon.registry.artifact`.
+
+- [ ] **Step 3: Реализовать `artifact.py`**
+
+```python
+"""Immutable, content-addressed artifact references (SPEC 19.12, invariants I2/I3).
+
+An artifact is identified by the SHA-256 of its bytes. Writing the same bytes to the same
+path again is idempotent; writing different bytes to an existing path is refused, so a
+result that has been handed to a downstream stage can never change underneath it.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
+
+from so_recon.config.schema import StrictModel
+from so_recon.paths import ProjectPaths
+from so_recon.registry.atomic import write_bytes_atomic
+from so_recon.registry.hashing import sha256_bytes, sha256_file
+
+JSON_MEDIA_TYPE = "application/json"
+
+
+class ArtifactImmutabilityError(RuntimeError):
+    """An existing artifact would have been overwritten with different content."""
+
+
+class ArtifactRef(StrictModel):
+    artifact_id: str
+    path: str
+    sha256: str
+    size_bytes: int
+    media_type: str
+    schema_version: str
+    producer_run_id: str
+    parent_artifact_ids: list[str]
+    created_at: str
+
+
+def _ref(
+    *,
+    repo_relative: str,
+    digest: str,
+    size_bytes: int,
+    media_type: str,
+    schema_version: str,
+    producer_run_id: str,
+    parent_artifact_ids: Sequence[str],
+    now: datetime,
+) -> ArtifactRef:
+    return ArtifactRef(
+        artifact_id=digest,
+        path=repo_relative,
+        sha256=digest,
+        size_bytes=size_bytes,
+        media_type=media_type,
+        schema_version=schema_version,
+        producer_run_id=producer_run_id,
+        parent_artifact_ids=list(parent_artifact_ids),
+        created_at=now.isoformat(),
+    )
+
+
+def register_artifact(
+    path: Path,
+    paths: ProjectPaths,
+    *,
+    schema_version: str,
+    producer_run_id: str,
+    media_type: str,
+    parent_artifact_ids: Sequence[str] = (),
+    now: datetime,
+) -> ArtifactRef:
+    """Describe a file that another library already wrote (for example Parquet)."""
+    repo_relative = paths.relative(path)
+    return _ref(
+        repo_relative=repo_relative,
+        digest=sha256_file(path),
+        size_bytes=path.stat().st_size,
+        media_type=media_type,
+        schema_version=schema_version,
+        producer_run_id=producer_run_id,
+        parent_artifact_ids=parent_artifact_ids,
+        now=now,
+    )
+
+
+def write_artifact(
+    path: Path,
+    data: bytes,
+    paths: ProjectPaths,
+    *,
+    schema_version: str,
+    producer_run_id: str,
+    media_type: str,
+    parent_artifact_ids: Sequence[str] = (),
+    now: datetime,
+) -> ArtifactRef:
+    repo_relative = paths.relative(path)  # also proves containment inside the repository
+    digest = sha256_bytes(data)
+    if path.exists():
+        existing = sha256_file(path)
+        if existing != digest:
+            raise ArtifactImmutabilityError(
+                f"refusing to overwrite {repo_relative}: on disk {existing}, new {digest}"
+            )
+    else:
+        write_bytes_atomic(path, data)
+    return _ref(
+        repo_relative=repo_relative,
+        digest=digest,
+        size_bytes=len(data),
+        media_type=media_type,
+        schema_version=schema_version,
+        producer_run_id=producer_run_id,
+        parent_artifact_ids=parent_artifact_ids,
+        now=now,
+    )
+
+
+def write_json_artifact(
+    path: Path,
+    obj: object,
+    paths: ProjectPaths,
+    *,
+    schema_version: str,
+    producer_run_id: str,
+    parent_artifact_ids: Sequence[str] = (),
+    now: datetime,
+) -> ArtifactRef:
+    payload = (
+        json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    ).encode("utf-8")
+    return write_artifact(
+        path,
+        payload,
+        paths,
+        schema_version=schema_version,
+        producer_run_id=producer_run_id,
+        media_type=JSON_MEDIA_TYPE,
+        parent_artifact_ids=parent_artifact_ids,
+        now=now,
+    )
+```
+
+> Важно: `paths.relative(path)` вызывается до любой записи, поэтому попытка записать артефакт вне repository root отклоняется `PathEscapeError` (наследует `ValueError`) и файл не создаётся.
+
+- [ ] **Step 4: Прогнать тесты, lint, format, mypy**
+
+```bash
+uv run pytest tests/unit/test_artifact.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
+```
+Ожидается: `6 passed`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/so_recon/registry/artifact.py tests/unit/test_artifact.py && git commit -m "feat(e00): add immutable content-addressed artifact refs with lineage fields
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 6: Run registry (run ID, run record, lineage) и логирование
 
 **Files:**
 - Create: `src/so_recon/registry/gitinfo.py`, `src/so_recon/registry/run.py`, `src/so_recon/logging_setup.py`
 - Test: `tests/unit/test_run_registry.py`, `tests/unit/test_logging_setup.py`
 
 **Interfaces:**
-- Consumes: `sha256_file`, `sha256_bytes`, `sha256_json`, `canonical_json` (Task 2); `ProjectPaths` (Task 3); `ProjectConfig`, `config_hash`, `resolved_config_dict`, `StrictModel` (Task 4).
-- Produces (`so_recon.registry.gitinfo`):
-  - `git_commit(root: Path) -> str | None` — полный SHA HEAD или `None`, если не git-репозиторий / git недоступен.
-  - `git_is_dirty(root: Path) -> bool | None` — `git status --porcelain` не пуст.
+- Consumes: `sha256_bytes`, `sha256_file`, `sha256_json` (Task 2); `write_json_atomic` (Task 2); `ProjectPaths` (Task 3); `ProjectConfig`, `config_hash`, `resolved_config_dict`, `StrictModel` (Task 4); `ArtifactRef` (Task 5).
+- Produces (`so_recon.registry.gitinfo`): `git_commit(root) -> str | None`, `git_is_dirty(root) -> bool | None`.
 - Produces (`so_recon.registry.run`):
   - `RunStatus = Literal["RUNNING", "PASS", "FAIL"]`
-  - `make_run_id(command: str, config_hash: str, git_commit: str | None, now: datetime) -> str` — формат `YYYYmmddTHHMMSSZ-<command>-<8 hex>`. Если каталог с таким `run_id` уже существует (повторный запуск в ту же секунду), `RunContext.start` добавляет суффикс `-01`, `-02`, … `-99`; после 99 попыток — `FileExistsError`.
-  - `environment_lock_hash(paths: ProjectPaths) -> str` — `sha256_json({"uv.lock": h, "julia/Manifest.toml": h})`, где отсутствующий файл даёт строку `"missing"`.
-  - `class RunRecord(StrictModel)` — поля: `run_id: str`, `command: str`, `argv: list[str]`, `created_at: str` (ISO-8601 UTC), `finished_at: str | None = None`, `git_commit: str | None`, `git_dirty: bool | None`, `spec_version: str`, `config_version: str`, `resolved_config_hash: str`, `environment_lock_hash: str`, `python_version: str`, `julia_version: str | None = None`, `jutuldarcy_version: str | None = None`, `model_checkpoint_hash: str | None = None`, `schema_versions: dict[str, str]`, `raw_input_hashes: dict[str, str]`, `parent_run_ids: list[str]`, `status: RunStatus`, `outputs: dict[str, str]`, `notes: list[str]`.
-  - `class RunContext` с атрибутами `run_id: str`, `run_dir: Path`, `record: RunRecord`; `RunContext.start(*, command, argv, cfg, paths, parent_run_ids=(), raw_input_hashes=None, schema_versions=None, now=None) -> RunContext` (создаёт `run_dir`, пишет `resolved_config.json` и `run.json`); `update(**fields) -> None`; `finish(status, outputs, notes=()) -> None`; `write() -> None`.
-- Produces (`so_recon.logging_setup`): `configure_logging(run_id: str, log_file: Path | None = None, level: int = logging.INFO) -> logging.Logger` — логгер `so_recon`, формат `%(asctime)s %(levelname)s run=%(run_id)s %(name)s: %(message)s`; обработчики предыдущих запусков снимаются.
+  - `UNAVAILABLE = "unavailable"` — значение полей, когда конфигурация не загрузилась.
+  - `make_run_id(command, config_hash, git_commit, now) -> str` — формат `YYYYmmddTHHMMSSZ-<command>-<8 hex>`; при коллизии каталога `RunContext.start` добавляет суффикс `-01` … `-99`, после чего `FileExistsError`.
+  - `environment_lock_hash(paths) -> str` — `sha256_json` по `{"uv.lock": h, "julia/Manifest.toml": h, "julia/.julia-version": h}`; отсутствующий файл даёт строку `"missing"`.
+  - `class RunRecord(StrictModel)` — поля: `run_id`, `command`, `argv: list[str]`, `created_at`, `finished_at: str | None`, `git_commit: str | None`, `git_dirty: bool | None`, `spec_version`, `config_version`, `resolved_config_hash`, `environment_lock_hash`, `python_version`, `julia_version: str | None`, `jutul_version: str | None`, `jutuldarcy_version: str | None`, `model_checkpoint_hash: str | None`, `schema_versions: dict[str, str]`, `raw_input_hashes: dict[str, str]`, `parent_run_ids: list[str]`, `status: RunStatus`, **`outputs: dict[str, ArtifactRef]`**, `notes: list[str]`.
+  - `class RunContext` (`run_id`, `run_dir`, `record`) с `start(...)`, `update(**fields)`, `add_output(key, ref)`, `finish(status, outputs=None, notes=())`, `write()`.
+  - `RunContext.start(*, command, argv, cfg: ProjectConfig | None, paths, parent_run_ids=(), raw_input_hashes=None, schema_versions=None, now=None)` — **`cfg` может быть `None`**: это degraded-режим, нужный для замечания №5 (записать FAIL, когда конфигурация не загрузилась). При `cfg is None` `resolved_config.json` не пишется, `config_version` и `resolved_config_hash` равны `UNAVAILABLE`.
+- Produces (`so_recon.logging_setup`): `configure_logging(run_id, log_file=None, level=logging.INFO) -> logging.Logger`.
+
+**Замечания ревизии 2, реализуемые здесь:** №4 (`outputs` — `ArtifactRef`), №5 (degraded-режим для FAIL без конфигурации), №12 (атомарная запись `run.json` и `resolved_config.json`).
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -1059,7 +1824,10 @@ from pathlib import Path
 
 from so_recon.config.schema import ProjectConfig, SourcesConfig
 from so_recon.paths import ProjectPaths
-from so_recon.registry.run import RunContext, environment_lock_hash, make_run_id
+from so_recon.registry.artifact import write_json_artifact
+from so_recon.registry.run import UNAVAILABLE, RunContext, environment_lock_hash, make_run_id
+
+NOW = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
 
 
 def _cfg() -> ProjectConfig:
@@ -1067,13 +1835,12 @@ def _cfg() -> ProjectConfig:
 
 
 def test_make_run_id_format_and_determinism() -> None:
-    now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
-    a = make_run_id("smoke", "c" * 64, "abc123", now)
-    b = make_run_id("smoke", "c" * 64, "abc123", now)
+    a = make_run_id("smoke", "c" * 64, "abc123", NOW)
+    b = make_run_id("smoke", "c" * 64, "abc123", NOW)
     assert a == b
     assert re.fullmatch(r"20260913T120000Z-smoke-[0-9a-f]{8}", a)
-    assert make_run_id("smoke", "d" * 64, "abc123", now) != a
-    assert make_run_id("smoke", "c" * 64, None, now) != a
+    assert make_run_id("smoke", "d" * 64, "abc123", NOW) != a
+    assert make_run_id("smoke", "c" * 64, None, NOW) != a
 
 
 def test_environment_lock_hash_marks_missing_files(tmp_path: Path) -> None:
@@ -1083,45 +1850,58 @@ def test_environment_lock_hash_marks_missing_files(tmp_path: Path) -> None:
     h_with_lock = environment_lock_hash(paths)
     assert h_missing != h_with_lock
     assert h_with_lock == environment_lock_hash(paths)
+    (tmp_path / "julia").mkdir()
+    (tmp_path / "julia" / ".julia-version").write_text("1.12.7\n")
+    assert environment_lock_hash(paths) != h_with_lock
 
 
 def test_run_context_writes_lineage_files(tmp_path: Path) -> None:
     paths = ProjectPaths.default(tmp_path)
-    cfg = _cfg()
-    now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
     ctx = RunContext.start(
-        command="smoke",
-        argv=["so-recon", "smoke"],
-        cfg=cfg,
-        paths=paths,
-        raw_input_hashes={"coords": "a" * 64},
-        now=now,
+        command="smoke", argv=["so-recon", "smoke"], cfg=_cfg(), paths=paths,
+        raw_input_hashes={"coords": "a" * 64}, now=NOW,
     )
     assert ctx.run_dir == paths.runs / ctx.run_id
-    record = json.loads((ctx.run_dir / "run.json").read_text())
+    record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
     assert record["status"] == "RUNNING"
     assert record["spec_version"] == "3.0"
     assert record["resolved_config_hash"]
     assert record["raw_input_hashes"] == {"coords": "a" * 64}
     assert record["created_at"] == "2026-09-13T12:00:00+00:00"
-    resolved = json.loads((ctx.run_dir / "resolved_config.json").read_text())
+    resolved = json.loads((ctx.run_dir / "resolved_config.json").read_text(encoding="utf-8"))
     assert resolved["config_version"] == "t.1"
 
+    ref = write_json_artifact(ctx.run_dir / "thing.json", {"x": 1}, paths,
+                              schema_version="1", producer_run_id=ctx.run_id, now=NOW)
     ctx.update(julia_version="1.12.7")
-    ctx.finish("PASS", outputs={"fixture": "artifacts/runs/x/fixture"}, notes=["ok"])
-    record = json.loads((ctx.run_dir / "run.json").read_text())
+    ctx.finish("PASS", outputs={"thing": ref}, notes=["ok"])
+    record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
     assert record["status"] == "PASS"
     assert record["julia_version"] == "1.12.7"
-    assert record["outputs"] == {"fixture": "artifacts/runs/x/fixture"}
+    assert record["outputs"]["thing"]["sha256"] == ref.sha256
+    assert record["outputs"]["thing"]["producer_run_id"] == ctx.run_id
     assert record["finished_at"] is not None
+
+
+def test_run_context_without_config_still_records_a_run(tmp_path: Path) -> None:
+    """Degraded mode: a config that failed to load must not prevent a FAIL record."""
+    paths = ProjectPaths.default(tmp_path)
+    ctx = RunContext.start(command="manifest", argv=["so-recon", "manifest"], cfg=None,
+                           paths=paths, now=NOW)
+    ctx.finish("FAIL", notes=["config error: boom"])
+    record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert record["status"] == "FAIL"
+    assert record["config_version"] == UNAVAILABLE
+    assert record["resolved_config_hash"] == UNAVAILABLE
+    assert any("boom" in n for n in record["notes"])
+    assert not (ctx.run_dir / "resolved_config.json").exists()
 
 
 def test_run_context_suffixes_same_second_runs(tmp_path: Path) -> None:
     paths = ProjectPaths.default(tmp_path)
-    now = datetime(2026, 9, 13, 12, 0, 0, tzinfo=UTC)
-    first = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=now)
-    second = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=now)
-    third = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=now)
+    first = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=NOW)
+    second = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=NOW)
+    third = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=NOW)
     assert second.run_id == f"{first.run_id}-01"
     assert third.run_id == f"{first.run_id}-02"
     assert second.record.run_id == second.run_id
@@ -1140,11 +1920,10 @@ def test_log_lines_carry_run_id_and_go_to_file(tmp_path: Path) -> None:
     log_file = tmp_path / "run.log"
     logger = configure_logging("20260913T120000Z-smoke-deadbeef", log_file)
     logger.info("hello")
-    child = logging.getLogger("so_recon.child")
-    child.warning("child message")
+    logging.getLogger("so_recon.child").warning("child message")
     for h in logger.handlers:
         h.flush()
-    text = log_file.read_text()
+    text = log_file.read_text(encoding="utf-8")
     assert "run=20260913T120000Z-smoke-deadbeef" in text
     assert "hello" in text
     assert "child message" in text
@@ -1159,7 +1938,7 @@ def test_reconfigure_replaces_handlers(tmp_path: Path) -> None:
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_run_registry.py tests/unit/test_logging_setup.py -q
+uv run pytest tests/unit/test_run_registry.py tests/unit/test_logging_setup.py -q
 ```
 Ожидается: `ModuleNotFoundError` для `so_recon.registry.run` и `so_recon.logging_setup`.
 
@@ -1206,6 +1985,7 @@ def git_is_dirty(root: Path) -> bool | None:
 from __future__ import annotations
 
 import platform
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1215,12 +1995,17 @@ from so_recon import SPEC_VERSION
 from so_recon.config.load import config_hash, resolved_config_dict
 from so_recon.config.schema import ProjectConfig, StrictModel
 from so_recon.paths import ProjectPaths
+from so_recon.registry.artifact import ArtifactRef
+from so_recon.registry.atomic import write_json_atomic
 from so_recon.registry.gitinfo import git_commit, git_is_dirty
-from so_recon.registry.hashing import canonical_json, sha256_bytes, sha256_file, sha256_json
+from so_recon.registry.hashing import sha256_bytes, sha256_file, sha256_json
 
 RunStatus = Literal["RUNNING", "PASS", "FAIL"]
 
-LOCK_FILES = ("uv.lock", "julia/Manifest.toml")
+#: Marker used when a run has to be recorded before the configuration could be loaded.
+UNAVAILABLE = "unavailable"
+
+LOCK_FILES = ("uv.lock", "julia/Manifest.toml", "julia/.julia-version")
 
 
 def make_run_id(command: str, config_hash: str, git_commit: str | None, now: datetime) -> str:
@@ -1239,6 +2024,7 @@ def environment_lock_hash(paths: ProjectPaths) -> str:
 
 def _claim_run_dir(runs_root: Path, base_id: str, max_suffix: int = 99) -> tuple[str, Path]:
     """Create a unique run directory; same-second reruns get -01, -02, ... suffixes."""
+    runs_root.mkdir(parents=True, exist_ok=True)
     for i in range(max_suffix + 1):
         run_id = base_id if i == 0 else f"{base_id}-{i:02d}"
         run_dir = runs_root / run_id
@@ -1264,13 +2050,14 @@ class RunRecord(StrictModel):
     environment_lock_hash: str
     python_version: str
     julia_version: str | None = None
+    jutul_version: str | None = None
     jutuldarcy_version: str | None = None
     model_checkpoint_hash: str | None = None
     schema_versions: dict[str, str]
     raw_input_hashes: dict[str, str]
     parent_run_ids: list[str]
     status: RunStatus
-    outputs: dict[str, str]
+    outputs: dict[str, ArtifactRef]
     notes: list[str]
 
 
@@ -1285,23 +2072,23 @@ class RunContext:
         cls,
         *,
         command: str,
-        argv: list[str],
-        cfg: ProjectConfig,
+        argv: Sequence[str],
+        cfg: ProjectConfig | None,
         paths: ProjectPaths,
-        parent_run_ids: tuple[str, ...] = (),
+        parent_run_ids: Sequence[str] = (),
         raw_input_hashes: dict[str, str] | None = None,
         schema_versions: dict[str, str] | None = None,
         now: datetime | None = None,
     ) -> RunContext:
+        """Open a run. cfg may be None so that a configuration failure can still be
+        recorded as a FAIL run (invariant I6)."""
         now = now or datetime.now(UTC)
-        cfg_hash = config_hash(cfg)
+        cfg_hash = config_hash(cfg) if cfg is not None else UNAVAILABLE
         commit = git_commit(paths.root)
         base_id = make_run_id(command, cfg_hash, commit, now)
-        paths.runs.mkdir(parents=True, exist_ok=True)
         run_id, run_dir = _claim_run_dir(paths.runs, base_id)
-        (run_dir / "resolved_config.json").write_text(
-            canonical_json(resolved_config_dict(cfg)), encoding="utf-8"
-        )
+        if cfg is not None:
+            write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
         record = RunRecord(
             run_id=run_id,
             command=command,
@@ -1310,7 +2097,7 @@ class RunContext:
             git_commit=commit,
             git_dirty=git_is_dirty(paths.root),
             spec_version=SPEC_VERSION,
-            config_version=cfg.config_version,
+            config_version=cfg.config_version if cfg is not None else UNAVAILABLE,
             resolved_config_hash=cfg_hash,
             environment_lock_hash=environment_lock_hash(paths),
             python_version=platform.python_version(),
@@ -1326,20 +2113,24 @@ class RunContext:
         return ctx
 
     def write(self) -> None:
-        (self.run_dir / "run.json").write_text(
-            self.record.model_dump_json(indent=2), encoding="utf-8"
-        )
+        write_json_atomic(self.run_dir / "run.json", self.record.model_dump(mode="json"))
 
     def update(self, **fields: Any) -> None:
         self.record = self.record.model_copy(update=fields)
         self.write()
 
+    def add_output(self, key: str, ref: ArtifactRef) -> None:
+        self.update(outputs={**self.record.outputs, key: ref})
+
     def finish(
-        self, status: RunStatus, outputs: dict[str, str], notes: tuple[str, ...] | list[str] = ()
+        self,
+        status: RunStatus,
+        outputs: dict[str, ArtifactRef] | None = None,
+        notes: Sequence[str] = (),
     ) -> None:
         self.update(
             status=status,
-            outputs=dict(outputs),
+            outputs={**self.record.outputs, **(outputs or {})},
             notes=[*self.record.notes, *notes],
             finished_at=datetime.now(UTC).isoformat(),
         )
@@ -1350,7 +2141,7 @@ class RunContext:
 - [ ] **Step 5: Реализовать `logging_setup.py`**
 
 ```python
-"""Logging rules: every record carries run_id; console + per-run file; no data rows in logs."""
+"""Logging rules: every record carries run_id; stderr + per-run file; no data rows in logs."""
 
 from __future__ import annotations
 
@@ -1398,40 +2189,46 @@ def configure_logging(
 
 > Фильтр стоит на обработчиках, а не на логгере, поэтому записи дочерних логгеров (`so_recon.child`) тоже получают `run_id`.
 
-- [ ] **Step 6: Прогнать тесты, lint, mypy**
+- [ ] **Step 6: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_run_registry.py tests/unit/test_logging_setup.py -q && uv run ruff check . && uv run mypy
+uv run pytest tests/unit/test_run_registry.py tests/unit/test_logging_setup.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `6 passed`, без ошибок.
+Ожидается: `7 passed`, без ошибок.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/registry/gitinfo.py src/so_recon/registry/run.py src/so_recon/logging_setup.py tests/unit/test_run_registry.py tests/unit/test_logging_setup.py && git commit -m "feat(e00): add run registry with lineage record, run ids and run-scoped logging
+git add src/so_recon/registry/gitinfo.py src/so_recon/registry/run.py src/so_recon/logging_setup.py tests/unit/test_run_registry.py tests/unit/test_logging_setup.py && git commit -m "feat(e00): add run registry with artifact-ref lineage, degraded FAIL runs and logging
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
-
-### Task 6: Source manifest исходных CSV
+### Task 7: Source manifest исходных CSV
 
 **Files:**
 - Create: `src/so_recon/registry/source_manifest.py`
 - Test: `tests/unit/test_source_manifest.py`
-- Runtime (не в git): перенос `data/Ромашка_сырые/*.csv` → `data/raw/`
 
 **Interfaces:**
-- Consumes: `SourcesConfig`, `SourceFileSpec`, `StrictModel` (Task 4); `ProjectPaths` (Task 3); `sha256_json` (Task 2).
+- Consumes: `SourcesConfig`, `SourceFileSpec`, `StrictModel` (Task 4); `ProjectPaths`, `resolve_within_root` (Task 3); `write_bytes_atomic` (Task 2); `ArtifactRef`, `write_artifact` (Task 5).
 - Produces:
+  - `MANIFEST_SCHEMA_VERSION = "2"` — версия 2, потому что схема изменилась относительно ревизии 1 (`line_count` → `physical_line_count` + `data_rows`, удалены timestamps).
   - `class MissingSourceError(FileNotFoundError)` — атрибут `missing: list[str]`.
-  - `hash_and_count(path: Path, chunk_size: int = 1 << 20) -> tuple[str, int, int]` — `(sha256, size_bytes, line_count)` за один проход; `line_count` = число `\n` плюс 1, если файл не пуст и не заканчивается `\n`.
-  - `class SourceEntry(StrictModel)`: `name, path, sha256, size_bytes, line_count, encoding, delimiter, decimal, required`.
-  - `class SourceManifest(StrictModel)`: `manifest_version: Literal["1"]`, `created_at: str`, `git_commit: str | None`, `spec_version: str`, `config_version: str`, `sources: list[SourceEntry]`; метод `hashes() -> dict[str, str]` (`name → sha256`).
-  - `build_source_manifest(sources: SourcesConfig, paths: ProjectPaths, *, config_version: str, git_commit: str | None, now: datetime) -> SourceManifest` — все отсутствующие `required` файлы собираются и бросается один `MissingSourceError`; отсутствующие `required=False` пропускаются с записью в `logging`.
-  - `write_source_manifest(manifest: SourceManifest, path: Path) -> None` — JSON с `indent=2`, `ensure_ascii=False`, сортированные ключи.
-  - `load_source_manifest(path: Path) -> SourceManifest`.
+  - `hash_and_count(path, chunk_size=1 << 20) -> tuple[str, int, int]` — `(sha256, size_bytes, physical_line_count)` за один проход в режиме `"rb"`. `physical_line_count` = число `\n` плюс 1, если файл непуст и не заканчивается `\n`.
+  - `class SourceEntry(StrictModel)`: `name`, `path`, `sha256`, `size_bytes`, `physical_line_count`, `data_rows`, `encoding`, `delimiter`, `decimal`, `header_lines`, `required`.
+  - `class SourceManifest(StrictModel)` — **детерминированный**: `manifest_version: Literal["2"]`, `spec_version: str`, `config_version: str`, `sources: list[SourceEntry]`. Никаких timestamps, `run_id` или git-состояния (инвариант I5). Метод `hashes() -> dict[str, str]`.
+  - `class SourceManifestStamp(StrictModel)` — **run-scoped, не версионируется**: `manifest_version`, `manifest_sha256`, `run_id`, `created_at`, `git_commit: str | None`, `git_dirty: bool | None`.
+  - `build_source_manifest(sources, paths, *, config_version) -> SourceManifest` — пути раскрываются через `paths.resolve(spec.path)` (containment, инвариант I4); все отсутствующие `required` собираются и бросается один `MissingSourceError`; `required=False` пропускаются с записью в лог. `data_rows = max(physical_line_count - header_lines, 0)`.
+  - `manifest_bytes(manifest) -> bytes` — детерминированный JSON (`indent=2`, `sort_keys=True`, `ensure_ascii=False`) + `\n`.
+  - `write_source_manifest(manifest, paths, *, run_dir, published_path, producer_run_id, now) -> tuple[ArtifactRef, Path]` — пишет **immutable** артефакт `run_dir/source_manifest.json` через `write_artifact`, затем публикует байт-в-байт идентичную копию в `published_path` (`reports/manifests/source_manifest.json`) через `write_bytes_atomic`. Возвращает ref артефакта запуска и путь публикации.
+  - `write_manifest_stamp(stamp, path) -> None` — атомарная запись run-scoped штампа.
+  - `load_source_manifest(path) -> SourceManifest`.
+
+**Замечания ревизии 2, реализуемые здесь:** №1 (`physical_line_count` / `data_rows`), №2 (никакого `mv`; файлы открываются только на чтение), №4 (immutable артефакт запуска), №10 (детерминированный коммитируемый manifest, timestamps — в run-scoped штампе), №12 (атомарность).
+
+> **Почему две копии.** `artifacts/runs/<run_id>/source_manifest.json` — immutable результат конкретного запуска (замечание №4). `reports/manifests/source_manifest.json` — публикуемая детерминированная копия тех же байт, которая коммитится; её изменение означает реальное изменение данных или конфигурации и видно в `git diff` (замечание №10). История прежних версий хранится в git, поэтому публикация не нарушает immutability.
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -1447,97 +2244,149 @@ import pytest
 from so_recon.config.schema import SourceFileSpec, SourcesConfig
 from so_recon.paths import ProjectPaths
 from so_recon.registry.source_manifest import (
+    MANIFEST_SCHEMA_VERSION,
     MissingSourceError,
     build_source_manifest,
     hash_and_count,
     load_source_manifest,
+    manifest_bytes,
     write_source_manifest,
 )
 
 NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 
 
-def _spec(name: str, required: bool = True) -> SourceFileSpec:
+def _spec(name: str, required: bool = True, header_lines: int = 1) -> SourceFileSpec:
     return SourceFileSpec(
         name=name, path=f"data/raw/{name}.csv", encoding="utf-8", delimiter=";", decimal=",",
-        required=required,
+        header_lines=header_lines, required=required,
     )
 
 
-def test_hash_and_count(tmp_path: Path) -> None:
+def _paths(tmp_path: Path) -> ProjectPaths:
+    paths = ProjectPaths.default(tmp_path)
+    paths.ensure_dirs()
+    paths.raw.mkdir(parents=True, exist_ok=True)  # tests create the source dir explicitly
+    return paths
+
+
+def test_hash_and_count_trailing_newline(tmp_path: Path) -> None:
+    p = tmp_path / "f.csv"
+    p.write_bytes(b"a;b\r\n1;2\r\n")
+    sha, size, physical = hash_and_count(p, chunk_size=2)
+    assert sha == hashlib.sha256(b"a;b\r\n1;2\r\n").hexdigest()
+    assert (size, physical) == (10, 2)
+
+
+def test_hash_and_count_without_trailing_newline(tmp_path: Path) -> None:
+    """plastoper.csv ends without a newline: the last partial line still counts."""
     p = tmp_path / "f.csv"
     p.write_bytes(b"a;b\r\n1;2\r\n3;4")
-    sha, size, lines = hash_and_count(p, chunk_size=2)
+    sha, size, physical = hash_and_count(p, chunk_size=2)
     assert sha == hashlib.sha256(b"a;b\r\n1;2\r\n3;4").hexdigest()
-    assert size == 13
-    assert lines == 3
+    assert (size, physical) == (13, 3)
+
+
+def test_hash_and_count_empty_file(tmp_path: Path) -> None:
+    p = tmp_path / "f.csv"
     p.write_bytes(b"")
     assert hash_and_count(p) == (hashlib.sha256(b"").hexdigest(), 0, 0)
 
 
-def test_build_manifest_records_every_file(tmp_path: Path) -> None:
-    paths = ProjectPaths.default(tmp_path)
-    paths.ensure_dirs()
-    (paths.raw / "mer.csv").write_bytes(b"\xef\xbb\xbfh1;h2\n1;2\n")
-    (paths.raw / "gis.csv").write_bytes(b"x\n")
-    sources = SourcesConfig(files=[_spec("mer"), _spec("gis")])
-    m = build_source_manifest(sources, paths, config_version="t", git_commit="abc", now=NOW)
-    assert [s.name for s in m.sources] == ["mer", "gis"]
-    assert m.sources[0].path == "data/raw/mer.csv"
-    assert m.sources[0].line_count == 2
-    assert m.hashes()["gis"] == hashlib.sha256(b"x\n").hexdigest()
-    assert m.created_at == "2026-09-13T12:00:00+00:00"
+def test_manifest_splits_physical_lines_from_data_rows(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    (paths.raw / "mer.csv").write_bytes(b"\xef\xbb\xbfh1;h2\n1;2\n3;4\n")
+    (paths.raw / "tail.csv").write_bytes(b"h1;h2\n1;2")  # no trailing newline
+    sources = SourcesConfig(files=[_spec("mer"), _spec("tail")])
+    m = build_source_manifest(sources, paths, config_version="t")
+    by_name = {s.name: s for s in m.sources}
+    assert (by_name["mer"].physical_line_count, by_name["mer"].data_rows) == (3, 2)
+    assert (by_name["tail"].physical_line_count, by_name["tail"].data_rows) == (2, 1)
+    assert by_name["mer"].header_lines == 1
+
+
+def test_manifest_has_no_timestamps_or_git_state(tmp_path: Path) -> None:
+    """Invariant I5: the committed manifest must be byte-identical across runs."""
+    paths = _paths(tmp_path)
+    (paths.raw / "mer.csv").write_bytes(b"h\n1\n")
+    sources = SourcesConfig(files=[_spec("mer")])
+    first = manifest_bytes(build_source_manifest(sources, paths, config_version="t"))
+    second = manifest_bytes(build_source_manifest(sources, paths, config_version="t"))
+    assert first == second
+    payload = json.loads(first)
+    assert payload["manifest_version"] == MANIFEST_SCHEMA_VERSION
+    assert set(payload) == {"manifest_version", "spec_version", "config_version", "sources"}
 
 
 def test_missing_required_files_raise_with_full_list(tmp_path: Path) -> None:
-    paths = ProjectPaths.default(tmp_path)
-    paths.ensure_dirs()
+    paths = _paths(tmp_path)
     sources = SourcesConfig(files=[_spec("mer"), _spec("gis"), _spec("opt", required=False)])
     with pytest.raises(MissingSourceError) as exc:
-        build_source_manifest(sources, paths, config_version="t", git_commit=None, now=NOW)
+        build_source_manifest(sources, paths, config_version="t")
     assert exc.value.missing == ["data/raw/mer.csv", "data/raw/gis.csv"]
 
 
 def test_optional_missing_file_is_skipped(tmp_path: Path) -> None:
-    paths = ProjectPaths.default(tmp_path)
-    paths.ensure_dirs()
+    paths = _paths(tmp_path)
     (paths.raw / "mer.csv").write_bytes(b"1\n")
     sources = SourcesConfig(files=[_spec("mer"), _spec("opt", required=False)])
-    m = build_source_manifest(sources, paths, config_version="t", git_commit=None, now=NOW)
+    m = build_source_manifest(sources, paths, config_version="t")
     assert [s.name for s in m.sources] == ["mer"]
 
 
-def test_write_and_load_roundtrip(tmp_path: Path) -> None:
-    paths = ProjectPaths.default(tmp_path)
-    paths.ensure_dirs()
-    (paths.raw / "mer.csv").write_bytes(b"1\n")
-    m = build_source_manifest(
-        SourcesConfig(files=[_spec("mer")]), paths, config_version="t", git_commit=None, now=NOW
+def test_sources_are_never_modified(tmp_path: Path) -> None:
+    """Invariant I1: hashing must not touch mtime, size or content of the sources."""
+    paths = _paths(tmp_path)
+    src = paths.raw / "mer.csv"
+    src.write_bytes(b"h\n1\n")
+    before = (src.read_bytes(), src.stat().st_size, src.stat().st_mtime_ns)
+    build_source_manifest(SourcesConfig(files=[_spec("mer")]), paths, config_version="t")
+    after = (src.read_bytes(), src.stat().st_size, src.stat().st_mtime_ns)
+    assert before == after
+    assert sorted(p.name for p in paths.raw.iterdir()) == ["mer.csv"]
+
+
+def test_write_publishes_identical_bytes_and_roundtrips(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    (paths.raw / "mer.csv").write_bytes(b"h\n1\n")
+    m = build_source_manifest(SourcesConfig(files=[_spec("mer")]), paths, config_version="t")
+    run_dir = paths.runs / "run-1"
+    run_dir.mkdir(parents=True)
+    published = paths.manifests / "source_manifest.json"
+    ref, published_path = write_source_manifest(
+        m, paths, run_dir=run_dir, published_path=published, producer_run_id="run-1", now=NOW
     )
-    out = tmp_path / "source_manifest.json"
-    write_source_manifest(m, out)
-    text = out.read_text(encoding="utf-8")
-    assert json.loads(text)["manifest_version"] == "1"
-    assert load_source_manifest(out) == m
+    assert published_path == published
+    assert (run_dir / "source_manifest.json").read_bytes() == published.read_bytes()
+    assert ref.sha256 == hashlib.sha256(published.read_bytes()).hexdigest()
+    assert ref.producer_run_id == "run-1"
+    assert load_source_manifest(published) == m
 ```
 
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_source_manifest.py -q
+uv run pytest tests/unit/test_source_manifest.py -q
 ```
 Ожидается: `ModuleNotFoundError: so_recon.registry.source_manifest`.
 
 - [ ] **Step 3: Реализовать `source_manifest.py`**
 
 ```python
-"""Manifest of raw source files: SHA-256, size and line counts (SPEC 7.1, 19.12)."""
+"""Manifest of raw source files: SHA-256, size and line counts (SPEC 7.1, 19.12).
+
+The sources are immutable: every file is opened read-only and is never moved, renamed
+or rewritten (invariant I1). The manifest itself is deterministic — it carries no
+timestamps, run ids or git state, so a repeated gate run produces no git diff
+(invariant I5). Those run-scoped facts live in SourceManifestStamp instead.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -1545,17 +2394,28 @@ from typing import Literal
 from so_recon import SPEC_VERSION
 from so_recon.config.schema import SourcesConfig, StrictModel
 from so_recon.paths import ProjectPaths
+from so_recon.registry.artifact import ArtifactRef, write_artifact
+from so_recon.registry.atomic import write_bytes_atomic, write_json_atomic
 
 log = logging.getLogger(__name__)
 
+MANIFEST_SCHEMA_VERSION = "2"
+MANIFEST_MEDIA_TYPE = "application/json"
+
 
 class MissingSourceError(FileNotFoundError):
-    def __init__(self, missing: list[str]) -> None:
-        super().__init__(f"required source files are missing: {missing}")
-        self.missing = missing
+    def __init__(self, missing: Sequence[str]) -> None:
+        super().__init__(f"required source files are missing: {list(missing)}")
+        self.missing = list(missing)
 
 
 def hash_and_count(path: Path, chunk_size: int = 1 << 20) -> tuple[str, int, int]:
+    """Return (sha256, size_bytes, physical_line_count) in a single read-only pass.
+
+    physical_line_count counts newline bytes plus a final partial line when the file
+    does not end with a newline. It is a physical count, not a parsed-record count:
+    E00 does not parse CSV, so newlines inside quoted fields are not accounted for.
+    """
     digest = hashlib.sha256()
     size = 0
     newlines = 0
@@ -1566,8 +2426,8 @@ def hash_and_count(path: Path, chunk_size: int = 1 << 20) -> tuple[str, int, int
             size += len(chunk)
             newlines += chunk.count(b"\n")
             last = chunk[-1:]
-    lines = newlines + (1 if size > 0 and last != b"\n" else 0)
-    return digest.hexdigest(), size, lines
+    physical = newlines + (1 if size > 0 and last != b"\n" else 0)
+    return digest.hexdigest(), size, physical
 
 
 class SourceEntry(StrictModel):
@@ -1575,17 +2435,17 @@ class SourceEntry(StrictModel):
     path: str
     sha256: str
     size_bytes: int
-    line_count: int
+    physical_line_count: int
+    data_rows: int
     encoding: str
     delimiter: str
     decimal: str
+    header_lines: int
     required: bool
 
 
 class SourceManifest(StrictModel):
-    manifest_version: Literal["1"] = "1"
-    created_at: str
-    git_commit: str | None
+    manifest_version: Literal["2"] = "2"
     spec_version: str
     config_version: str
     sources: list[SourceEntry]
@@ -1594,120 +2454,171 @@ class SourceManifest(StrictModel):
         return {s.name: s.sha256 for s in self.sources}
 
 
+class SourceManifestStamp(StrictModel):
+    """Run-scoped facts kept out of the committed manifest (invariant I5)."""
+
+    manifest_version: str
+    manifest_sha256: str
+    run_id: str
+    created_at: str
+    git_commit: str | None
+    git_dirty: bool | None
+
+
 def build_source_manifest(
-    sources: SourcesConfig,
-    paths: ProjectPaths,
-    *,
-    config_version: str,
-    git_commit: str | None,
-    now: datetime,
+    sources: SourcesConfig, paths: ProjectPaths, *, config_version: str
 ) -> SourceManifest:
     entries: list[SourceEntry] = []
     missing: list[str] = []
     for spec in sources.files:
-        full = paths.root / spec.path
+        full = paths.resolve(spec.path)  # validates form and containment (invariant I4)
         if not full.is_file():
             if spec.required:
                 missing.append(spec.path)
             else:
                 log.warning("optional source %s not found at %s; skipped", spec.name, spec.path)
             continue
-        sha, size, lines = hash_and_count(full)
-        log.info("hashed %s: %d bytes, %d lines", spec.name, size, lines)
+        sha, size, physical = hash_and_count(full)
+        data_rows = max(physical - spec.header_lines, 0)
+        log.info(
+            "hashed %s: %d bytes, %d physical lines, %d data rows",
+            spec.name, size, physical, data_rows,
+        )
         entries.append(
             SourceEntry(
                 name=spec.name,
                 path=spec.path,
                 sha256=sha,
                 size_bytes=size,
-                line_count=lines,
+                physical_line_count=physical,
+                data_rows=data_rows,
                 encoding=spec.encoding,
                 delimiter=spec.delimiter,
                 decimal=spec.decimal,
+                header_lines=spec.header_lines,
                 required=spec.required,
             )
         )
     if missing:
         raise MissingSourceError(missing)
     return SourceManifest(
-        created_at=now.isoformat(),
-        git_commit=git_commit,
-        spec_version=SPEC_VERSION,
-        config_version=config_version,
-        sources=entries,
+        spec_version=SPEC_VERSION, config_version=config_version, sources=entries
     )
 
 
-def write_source_manifest(manifest: SourceManifest, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def manifest_bytes(manifest: SourceManifest) -> bytes:
     payload = manifest.model_dump(mode="json")
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8"
+    return (
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    ).encode("utf-8")
+
+
+def write_source_manifest(
+    manifest: SourceManifest,
+    paths: ProjectPaths,
+    *,
+    run_dir: Path,
+    published_path: Path,
+    producer_run_id: str,
+    now: datetime,
+) -> tuple[ArtifactRef, Path]:
+    """Write the immutable run artifact, then publish byte-identical committed copy."""
+    payload = manifest_bytes(manifest)
+    ref = write_artifact(
+        run_dir / "source_manifest.json",
+        payload,
+        paths,
+        schema_version=MANIFEST_SCHEMA_VERSION,
+        producer_run_id=producer_run_id,
+        media_type=MANIFEST_MEDIA_TYPE,
+        now=now,
     )
+    write_bytes_atomic(published_path, payload)
+    return ref, published_path
+
+
+def write_manifest_stamp(stamp: SourceManifestStamp, path: Path) -> None:
+    write_json_atomic(path, stamp.model_dump(mode="json"))
 
 
 def load_source_manifest(path: Path) -> SourceManifest:
     return SourceManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
 ```
 
-- [ ] **Step 4: Прогнать тесты, lint, mypy**
+- [ ] **Step 4: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_source_manifest.py -q && uv run ruff check . && uv run mypy
+uv run pytest tests/unit/test_source_manifest.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `5 passed`.
+Ожидается: `9 passed`.
 
-- [ ] **Step 5: Перенести raw CSV в канонический каталог (локально, вне git)**
+- [ ] **Step 5: Проверить источники на месте, ничего не перемещая**
 
-Перед переносом зафиксировать хеши для контроля:
+Единственная разрешённая операция над исходниками — чтение. Зафиксировать хеши **на исходном пути**:
+
 ```bash
-cd /Users/george/Documents/so_field && shasum -a 256 data/Ромашка_сырые/*.csv > /tmp/so_field_raw_before.sha256 && cat /tmp/so_field_raw_before.sha256
+shasum -a 256 data/Ромашка_сырые/*.csv
 ```
-Перенос:
+Ожидаемые значения для двух малых файлов известны заранее: `coords.csv` → `3298fda637a5f36d2ecbd5ec014e037a95bbd9631973db488c6dcbc1ade78996`, `plastoper.csv` → `129c32e7deb51a06ede288be21b1d878a36fb0f7edf9ce52b591b445674f934b`. Если значение отличается — **остановиться и сообщить**: исходные данные изменились, это не задача E00.
+
+Проверить, что каталог источников не изменялся (ни `mv`, ни новых файлов):
 ```bash
-cd /Users/george/Documents/so_field && mkdir -p data/raw && mv data/Ромашка_сырые/coords.csv data/Ромашка_сырые/gis.csv data/Ромашка_сырые/mer.csv data/Ромашка_сырые/perf.csv data/Ромашка_сырые/plastoper.csv data/raw/ && ls -la data/raw
+ls -1 data/Ромашка_сырые/
 ```
-Проверка, что хеши не изменились (сравнить по столбцу хеша):
-```bash
-cd /Users/george/Documents/so_field && shasum -a 256 data/raw/*.csv | awk '{print $1}' | sort > /tmp/after.txt && awk '{print $1}' /tmp/so_field_raw_before.sha256 | sort > /tmp/before.txt && diff /tmp/before.txt /tmp/after.txt && echo "HASHES IDENTICAL"
-```
-Ожидается: `HASHES IDENTICAL`. Ожидаемые значения для двух малых файлов известны заранее: `coords.csv` → `3298fda637a5f36d2ecbd5ec014e037a95bbd9631973db488c6dcbc1ade78996`, `plastoper.csv` → `129c32e7deb51a06ede288be21b1d878a36fb0f7edf9ce52b591b445674f934b`.
+Ожидается ровно пять файлов: `coords.csv`, `gis.csv`, `mer.csv`, `perf.csv`, `plastoper.csv`. Каталог `data/raw/` **не создаётся**.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/registry/source_manifest.py tests/unit/test_source_manifest.py && git commit -m "feat(e00): add raw source manifest with sha256, size and line counts
+git add src/so_recon/registry/source_manifest.py tests/unit/test_source_manifest.py && git commit -m "feat(e00): add deterministic raw source manifest with physical lines and data rows
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 7: Детерминированный synthetic fixture (Python-часть)
+### Task 8: Детерминированный synthetic fixture и `case.json` (Python-часть)
 
 **Files:**
 - Create: `src/so_recon/synthetic/fixture.py`
 - Test: `tests/unit/test_fixture.py`
 
 **Interfaces:**
-- Consumes: `SmokeFixtureConfig` (Task 4), `sha256_json` (Task 2).
+- Consumes: `SmokeFixtureConfig` (Task 4); `canonical_json`, `sha256_json`, `sha256_bytes` (Task 2); `write_bytes_atomic`, `write_json_atomic` (Task 2).
 - Produces:
+  - `FIXTURE_SCHEMA_VERSION = "1"`, `CASE_SCHEMA_VERSION = "1"`.
   - `@dataclass(frozen=True) class SmokeFixture`: `wells: pa.Table`, `well_month: pa.Table`, `content_hash: str`, `seed: int`.
-  - `build_smoke_fixture(cfg: SmokeFixtureConfig) -> SmokeFixture` — детерминирован по `cfg.seed`; `wells` имеет колонки `well_id: str`, `role: str` (`injector`/`producer`), `x_m: float`, `y_m: float`; `well_month` — `well_id: str`, `month: str` (`YYYY-MM-01`), `liquid_m3: float`, `injection_m3: float`, все объёмы округлены до 6 знаков и неотрицательны; injector имеет `liquid_m3 = 0`, producer — `injection_m3 = 0`.
-  - `write_smoke_fixture(fixture: SmokeFixture, out_dir: Path) -> dict[str, Path]` — пишет `wells.parquet`, `well_month.parquet`, `fixture_meta.json` (`seed`, `content_hash`, `n_rows`); возвращает пути по именам.
-  - `fixture_content_hash(wells: pa.Table, well_month: pa.Table) -> str` — `sha256_json({"wells": wells.to_pylist(), "well_month": well_month.to_pylist()})`.
+  - `build_smoke_fixture(cfg) -> SmokeFixture` — детерминирован по `cfg.seed`; `wells`: `well_id: str`, `role: str` (`injector`/`producer`), `x_m: float`, `y_m: float`; `well_month`: `well_id: str`, `month: str` (`YYYY-MM-01`), `liquid_m3: float`, `injection_m3: float`; объёмы неотрицательны и округлены до 6 знаков; у injector `liquid_m3 = 0`, у producer `injection_m3 = 0`.
+  - `fixture_content_hash(wells, well_month) -> str` — `sha256_json({"wells": ..., "well_month": ...})`, не зависит от кодирования Parquet.
+  - `write_smoke_fixture(fixture, out_dir) -> dict[str, Path]` — `wells.parquet`, `well_month.parquet`, `fixture_meta.json`.
+  - `build_smoke_case(cfg, fixture) -> dict[str, Any]` — **единственный вход Julia**. Полностью выводится из `cfg` и `fixture`; содержит `schema_version`, `seed`, `fixture_content_hash`, `grid`, `rock`, `fluids`, `initial`, `schedule`, `controls`. `controls.injected_pore_volume_fraction` выводится из объёмов fixture: `round(0.25 + 0.5 * total_injection / (total_injection + total_liquid), 9)`, что помещает значение в интервал `(0.25, 0.75]`; при нулевой сумме объёмов — `ValueError`.
+  - `case_bytes(case) -> bytes` — `canonical_json(case).encode("utf-8")`; именно эти байты хеширует и Python, и Julia.
+  - `write_smoke_case(case, path) -> bytes` — атомарная запись `case_bytes`, возвращает записанные байты.
+
+**Замечания ревизии 2, реализуемые здесь:** №3 (Python формирует `case.json` — вход для Julia), №12 (атомарность).
 
 - [ ] **Step 1: Написать падающие тесты**
 
 `tests/unit/test_fixture.py`:
 ```python
+import hashlib
 import json
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pytest
 
 from so_recon.config.schema import SmokeFixtureConfig
-from so_recon.synthetic.fixture import build_smoke_fixture, fixture_content_hash, write_smoke_fixture
+from so_recon.registry.hashing import canonical_json
+from so_recon.synthetic.fixture import (
+    CASE_SCHEMA_VERSION,
+    build_smoke_case,
+    build_smoke_fixture,
+    case_bytes,
+    fixture_content_hash,
+    write_smoke_case,
+    write_smoke_fixture,
+)
 
 
 def test_fixture_is_deterministic_for_same_seed() -> None:
@@ -1718,9 +2629,10 @@ def test_fixture_is_deterministic_for_same_seed() -> None:
 
 
 def test_fixture_changes_with_seed() -> None:
-    a = build_smoke_fixture(SmokeFixtureConfig(seed=7))
-    b = build_smoke_fixture(SmokeFixtureConfig(seed=8))
-    assert a.content_hash != b.content_hash
+    assert (
+        build_smoke_fixture(SmokeFixtureConfig(seed=7)).content_hash
+        != build_smoke_fixture(SmokeFixtureConfig(seed=8)).content_hash
+    )
 
 
 def test_fixture_shape_and_invariants() -> None:
@@ -1736,52 +2648,115 @@ def test_fixture_shape_and_invariants() -> None:
             assert row["liquid_m3"] == 0.0
         else:
             assert row["injection_m3"] == 0.0
-    months = sorted(set(fx.well_month["month"].to_pylist()))
-    assert months == ["2020-01-01", "2020-02-01", "2020-03-01", "2020-04-01"]
+    assert sorted(set(fx.well_month["month"].to_pylist())) == [
+        "2020-01-01", "2020-02-01", "2020-03-01", "2020-04-01"
+    ]
 
 
 def test_write_fixture_roundtrips_and_records_hash(tmp_path: Path) -> None:
     fx = build_smoke_fixture(SmokeFixtureConfig(seed=3, n_wells=2, n_months=2))
     files = write_smoke_fixture(fx, tmp_path / "fixture")
-    wells = pq.read_table(files["wells"])
-    well_month = pq.read_table(files["well_month"])
-    assert fixture_content_hash(wells, well_month) == fx.content_hash
-    meta = json.loads(files["meta"].read_text())
+    assert fixture_content_hash(pq.read_table(files["wells"]), pq.read_table(files["well_month"])) == fx.content_hash
+    meta = json.loads(files["meta"].read_text(encoding="utf-8"))
     assert meta["content_hash"] == fx.content_hash
     assert meta["seed"] == 3
+
+
+def test_case_is_deterministic_and_derived_from_the_fixture() -> None:
+    cfg = SmokeFixtureConfig(seed=5, n_wells=4, n_months=3, nx=7, n_steps=4)
+    fx = build_smoke_fixture(cfg)
+    case = build_smoke_case(cfg, fx)
+    assert case["schema_version"] == CASE_SCHEMA_VERSION
+    assert case["fixture_content_hash"] == fx.content_hash
+    assert case["grid"]["nx"] == 7
+    assert case["schedule"]["n_steps"] == 4
+    frac = case["controls"]["injected_pore_volume_fraction"]
+    assert 0.25 < frac <= 0.75
+    assert build_smoke_case(cfg, build_smoke_fixture(cfg)) == case
+
+
+def test_case_changes_when_the_fixture_changes() -> None:
+    a_cfg = SmokeFixtureConfig(seed=5, n_wells=4, n_months=3)
+    b_cfg = SmokeFixtureConfig(seed=6, n_wells=4, n_months=3)
+    a = build_smoke_case(a_cfg, build_smoke_fixture(a_cfg))
+    b = build_smoke_case(b_cfg, build_smoke_fixture(b_cfg))
+    assert case_bytes(a) != case_bytes(b)
+
+
+def test_case_bytes_are_canonical_and_hashable(tmp_path: Path) -> None:
+    cfg = SmokeFixtureConfig(seed=5, n_wells=2, n_months=2)
+    case = build_smoke_case(cfg, build_smoke_fixture(cfg))
+    path = tmp_path / "case.json"
+    written = write_smoke_case(case, path)
+    assert written == path.read_bytes()
+    assert written == canonical_json(case).encode("utf-8")
+    # This is the exact digest Julia is required to return as input_sha256.
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == hashlib.sha256(written).hexdigest()
+
+
+def test_case_rejects_a_fixture_with_no_volumes() -> None:
+    cfg = SmokeFixtureConfig(seed=1, n_wells=2, n_months=1)
+    fx = build_smoke_fixture(cfg)
+    import pyarrow as pa
+
+    empty = pa.table({
+        "well_id": pa.array([], pa.string()), "month": pa.array([], pa.string()),
+        "liquid_m3": pa.array([], pa.float64()), "injection_m3": pa.array([], pa.float64()),
+    })
+    with pytest.raises(ValueError):
+        build_smoke_case(cfg, type(fx)(wells=fx.wells, well_month=empty, content_hash="h", seed=1))
 ```
 
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_fixture.py -q
+uv run pytest tests/unit/test_fixture.py -q
 ```
 Ожидается: `ModuleNotFoundError: so_recon.synthetic.fixture`.
 
 - [ ] **Step 3: Реализовать `fixture.py`**
 
 ```python
-"""Minimal deterministic synthetic fixture for the E00 smoke run.
+"""Deterministic synthetic fixture and the JutulDarcy case description for the E00 smoke.
 
 Not a physical model: two tiny tables (wells, well_month) generated from a seeded PCG64
 stream, hashed by canonical JSON content so the hash is independent of Parquet encoding.
+The fixture then determines case.json, which is the only input Julia reads — that makes
+the smoke end-to-end: Julia returns the SHA-256 of the bytes it actually read.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from so_recon.config.schema import SmokeFixtureConfig
-from so_recon.registry.hashing import sha256_json
+from so_recon.registry.atomic import write_bytes_atomic, write_json_atomic
+from so_recon.registry.hashing import canonical_json, sha256_json
+
+FIXTURE_SCHEMA_VERSION = "1"
+CASE_SCHEMA_VERSION = "1"
 
 _START_YEAR = 2020
 _START_MONTH = 1
+
+# Fixed case geometry and fluid properties. Only the injection fraction is data-derived.
+_CELL_DX_M = 50.0
+_CELL_DY_M = 50.0
+_CELL_DZ_M = 10.0
+_PERMEABILITY_DARCY = 0.1
+_POROSITY = 0.25
+_WATER_DENSITY = 1000.0
+_OIL_DENSITY = 850.0
+_INITIAL_PRESSURE_BAR = 150.0
+_INITIAL_SW = 0.2
+_PRODUCER_BHP_BAR = 100.0
+_STEP_DAYS = 30.0
 
 
 def _month_label(index: int) -> str:
@@ -1851,87 +2826,133 @@ def write_smoke_fixture(fixture: SmokeFixture, out_dir: Path) -> dict[str, Path]
     meta_path = out_dir / "fixture_meta.json"
     pq.write_table(fixture.wells, wells_path)
     pq.write_table(fixture.well_month, wm_path)
-    meta = {
-        "seed": fixture.seed,
-        "content_hash": fixture.content_hash,
-        "n_rows": {"wells": fixture.wells.num_rows, "well_month": fixture.well_month.num_rows},
-    }
-    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_atomic(
+        meta_path,
+        {
+            "schema_version": FIXTURE_SCHEMA_VERSION,
+            "seed": fixture.seed,
+            "content_hash": fixture.content_hash,
+            "n_rows": {"wells": fixture.wells.num_rows, "well_month": fixture.well_month.num_rows},
+        },
+    )
     return {"wells": wells_path, "well_month": wm_path, "meta": meta_path}
+
+
+def build_smoke_case(cfg: SmokeFixtureConfig, fixture: SmokeFixture) -> dict[str, Any]:
+    """Derive the JutulDarcy case description from the configuration and the fixture."""
+    total_injection = float(sum(fixture.well_month["injection_m3"].to_pylist()))
+    total_liquid = float(sum(fixture.well_month["liquid_m3"].to_pylist()))
+    total = total_injection + total_liquid
+    if total <= 0.0:
+        raise ValueError("fixture carries no volumes; cannot derive an injection target")
+    fraction = round(0.25 + 0.5 * (total_injection / total), 9)
+    return {
+        "schema_version": CASE_SCHEMA_VERSION,
+        "seed": cfg.seed,
+        "fixture_content_hash": fixture.content_hash,
+        "grid": {"nx": cfg.nx, "dx_m": _CELL_DX_M, "dy_m": _CELL_DY_M, "dz_m": _CELL_DZ_M},
+        "rock": {"permeability_darcy": _PERMEABILITY_DARCY, "porosity": _POROSITY},
+        "fluids": {
+            "water_density_kg_m3": _WATER_DENSITY,
+            "oil_density_kg_m3": _OIL_DENSITY,
+        },
+        "initial": {
+            "pressure_bar": _INITIAL_PRESSURE_BAR,
+            "water_saturation": _INITIAL_SW,
+            "oil_saturation": round(1.0 - _INITIAL_SW, 9),
+        },
+        "schedule": {"n_steps": cfg.n_steps, "dt_days": _STEP_DAYS},
+        "controls": {
+            "injected_pore_volume_fraction": fraction,
+            "producer_bhp_bar": _PRODUCER_BHP_BAR,
+        },
+    }
+
+
+def case_bytes(case: dict[str, Any]) -> bytes:
+    """The exact bytes Julia reads and hashes back as input_sha256."""
+    return canonical_json(case).encode("utf-8")
+
+
+def write_smoke_case(case: dict[str, Any], path: Path) -> bytes:
+    payload = case_bytes(case)
+    write_bytes_atomic(path, payload)
+    return payload
 ```
 
-- [ ] **Step 4: Прогнать тесты, lint, mypy**
+- [ ] **Step 4: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_fixture.py -q && uv run ruff check . && uv run mypy
+uv run pytest tests/unit/test_fixture.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `4 passed`. Если mypy жалуется на `pa.Table` в dataclass — override для `pyarrow` уже задан в `pyproject.toml` (`ignore_missing_imports`), тип станет `Any`; это допустимо.
+Ожидается: `8 passed`. Если mypy жалуется на `pa.Table` — override для `pyarrow` задан в `pyproject.toml`, тип станет `Any`; это допустимо.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/synthetic/fixture.py tests/unit/test_fixture.py && git commit -m "feat(e00): add deterministic synthetic smoke fixture with content hash
+git add src/so_recon/synthetic/fixture.py tests/unit/test_fixture.py && git commit -m "feat(e00): add deterministic smoke fixture and derived case.json input
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
-
-### Task 8: Julia-окружение с JutulDarcy и smoke-скрипт
+### Task 9: Julia-окружение с JutulDarcy и сквозной smoke-скрипт
 
 **Files:**
-- Create: `julia/Project.toml`, `julia/Manifest.toml` (генерируется), `julia/README.md`, `julia/smoke/smoke_case.jl`
+- Create: `julia/Project.toml`, `julia/Manifest.toml` (генерируется), `julia/.julia-version`, `julia/README.md`, `julia/smoke/smoke_case.jl`
 
 **Interfaces:**
 - Produces: команда
-  `julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --out <file.json> --nx 20 --nsteps 12`
-  пишет JSON с ключами: `status` (`"ok"`), `julia_version`, `jutuldarcy_version`, `jutul_version`, `nx`, `n_steps`, `cumulative_oil_m3` (>0), `cumulative_water_injected_m3` (>0), `mean_so_final` (в (0,1) и меньше 0.8), `wall_time_s`. Код возврата 0. При ошибке — JSON `{"status":"error","message":...}` и код возврата 1.
+  `julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --case <case.json> --out <result.json>`
+  пишет JSON с ключами: `status` (`"ok"`), `input_sha256` (SHA-256 **байт прочитанного `case.json`**), `case_schema_version`, `julia_version`, `jutuldarcy_version`, `jutul_version`, `nx`, `n_steps`, `cumulative_oil_m3` (>0), `cumulative_water_injected_m3` (>0), `mean_so_final` (в (0,1) и меньше 0.8), `wall_time_s`. Код возврата 0. При ошибке — JSON `{"status":"error","message":...,"wall_time_s":...}` и код возврата 1.
+- Produces: `julia/.julia-version` — **точная project-pinned версия Julia**.
 
-- [ ] **Step 1: Установить Julia 1.12 через juliaup (если `julia` не найден)**
+**Замечания ревизии 2, реализуемые здесь:** №3 (Julia читает `case.json` и возвращает `input_sha256`), №7 (точная project-pinned версия Julia, без утверждений об upstream stable), №11.
+
+> **Формулировка о версии.** Версия Julia в `julia/.julia-version` — это версия, **зафиксированная проектом** и использованная для разрешения `julia/Manifest.toml`. План не утверждает, что она является актуальным upstream stable-релизом. Обновление выполняется осознанно: новая версия → новый `Manifest.toml` → новая строка в `reports/environment_report.md`.
+
+- [ ] **Step 1: Установить Julia через juliaup и зафиксировать точную версию**
+
+Julia и `juliaup` в системе отсутствуют. Установка:
 
 ```bash
-brew install juliaup && juliaup add 1.12 && juliaup default 1.12 && julia --version
+brew install juliaup && juliaup add 1.12 && julia +1.12 --version
 ```
-Ожидается: `julia version 1.12.x`. Если `brew` недоступен, альтернатива из официальной документации juliaup: `curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12`, затем перезапустить shell.
+Если `brew` недоступен — официальная альтернатива: `curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12`, затем перезапустить shell.
 
-- [ ] **Step 2: Создать `julia/Project.toml`**
+Узнать **точный** patch-релиз, который дал канал `1.12`, и закрепить именно его:
 
-```toml
-name = "SOReconEnv"
-uuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"
-authors = ["SO-RECON"]
-version = "0.0.1"
-
-[deps]
-JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-Jutul = "2b460a1a-8a2b-45b2-b125-b5c536396eb9"
-JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
-Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-
-[compat]
-JSON = "0.21, 1"
-Jutul = "0.4"
-JutulDarcy = "0.3"
-julia = "1.12"
-```
-
-> UUID зависимостей проверяются командой `Pkg.add` на следующем шаге: если UUID расходятся с реестром, `Pkg.add` их перепишет. Поэтому фактический путь: создать `Project.toml` только с `[compat]` и добавить пакеты через `Pkg.add`, что само проставит UUID.
-
-Практический порядок:
 ```bash
-cd /Users/george/Documents/so_field && mkdir -p julia/smoke && printf 'name = "SOReconEnv"\nuuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"\nversion = "0.0.1"\n\n[deps]\n\n[compat]\nJSON = "0.21, 1"\nJutul = "0.4"\nJutulDarcy = "0.3"\njulia = "1.12"\n' > julia/Project.toml && julia --project=julia --startup-file=no -e 'using Pkg; Pkg.add(["JutulDarcy", "Jutul", "JSON"]); Pkg.precompile(); Pkg.status()'
+JULIA_EXACT="$(julia +1.12 --version | awk '{print $3}')" && echo "exact: $JULIA_EXACT" && juliaup add "$JULIA_EXACT" && juliaup default "$JULIA_EXACT" && julia --version && mkdir -p julia && printf '%s\n' "$JULIA_EXACT" > julia/.julia-version && cat julia/.julia-version
 ```
-Ожидается (порядка 5–15 минут на первый precompile): `Pkg.status()` показывает `JutulDarcy v0.3.x`, `Jutul v0.4.x`, `JSON`. Появился `julia/Manifest.toml`.
+Ожидается: `julia --version` печатает ровно то же значение, что записано в `julia/.julia-version`. Это значение используется дальше как project-pinned версия.
+
+- [ ] **Step 2: Создать `julia/Project.toml` и разрешить зависимости**
+
+UUID зависимостей проставляет сам `Pkg.add`, поэтому создаётся заготовка только с `[compat]`, а пакеты добавляются командой. `SHA` — stdlib, нужен для `input_sha256`.
+
+```bash
+mkdir -p julia/smoke && printf 'name = "SOReconEnv"\nuuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"\nversion = "0.0.1"\n\n[deps]\n\n[compat]\nJSON = "0.21, 1"\nJutul = "0.4"\nJutulDarcy = "0.3"\njulia = "1.12"\n' > julia/Project.toml && julia --project=julia --startup-file=no -e 'using Pkg; Pkg.add(["JutulDarcy", "Jutul", "JSON", "SHA"]); Pkg.precompile(); Pkg.status()'
+```
+Ожидается (5–15 минут на первый precompile): `Pkg.status()` показывает `JutulDarcy v0.3.x`, `Jutul v0.4.x`, `JSON`, `SHA`. Появился `julia/Manifest.toml`.
+
+Проверить, что `Manifest.toml` записал ту же версию Julia, что зафиксирована:
+```bash
+grep -m1 '^julia_version' julia/Manifest.toml && cat julia/.julia-version
+```
+Ожидается: значения совпадают. Если нет — вернуться к Step 1 и переключить default.
 
 - [ ] **Step 3: Написать `julia/smoke/smoke_case.jl`**
 
 ```julia
-# E00 smoke: tiny 1D oil–water JutulDarcy case. Not a verification test (that is E05);
-# it proves the locked Julia environment runs and produces deterministic scalar summaries.
-using JutulDarcy, Jutul, JSON
+# E00 smoke: tiny 1D oil-water JutulDarcy case. Not a verification test (that is E05);
+# it proves the locked Julia environment runs end to end and produces deterministic
+# scalar summaries. The single input is case.json, written by Python; the script returns
+# the SHA-256 of the bytes it actually read, so the Python side can prove the round trip.
+using JutulDarcy, Jutul, JSON, SHA
 
 function parse_cli(args::Vector{String})
-    opts = Dict{String,String}("nx" => "20", "nsteps" => "12")
+    opts = Dict{String,String}()
     i = 1
     while i <= length(args)
         key = args[i]
@@ -1940,36 +2961,67 @@ function parse_cli(args::Vector{String})
         opts[key[3:end]] = args[i + 1]
         i += 2
     end
+    haskey(opts, "case") || error("--case <case.json> is required")
     haskey(opts, "out") || error("--out <file.json> is required")
     return opts
 end
 
-function run_smoke(nx::Int, nsteps::Int)
+function read_case(path::AbstractString)
+    raw = read(path)                       # exact bytes on disk
+    input_sha = bytes2hex(sha256(raw))
+    case = JSON.parse(String(copy(raw)))   # copy: String(::Vector{UInt8}) takes ownership
+    return case, input_sha
+end
+
+function run_smoke(case::Dict)
     Darcy, bar, kg, meter, day = si_units(:darcy, :bar, :kilogram, :meter, :day)
-    g = CartesianMesh((nx, 1, 1), (nx * 50.0, 50.0, 10.0) .* meter)
-    domain = reservoir_domain(g, permeability = 0.1Darcy, porosity = 0.25)
+
+    grid = case["grid"]
+    rock = case["rock"]
+    fluids = case["fluids"]
+    initial = case["initial"]
+    schedule = case["schedule"]
+    controls = case["controls"]
+
+    nx = Int(grid["nx"])
+    nsteps = Int(schedule["n_steps"])
+
+    g = CartesianMesh(
+        (nx, 1, 1),
+        (nx * Float64(grid["dx_m"]), Float64(grid["dy_m"]), Float64(grid["dz_m"])) .* meter,
+    )
+    domain = reservoir_domain(
+        g,
+        permeability = Float64(rock["permeability_darcy"]) * Darcy,
+        porosity = Float64(rock["porosity"]),
+    )
     injector = setup_vertical_well(domain, 1, 1, name = :Injector)
     producer = setup_vertical_well(domain, nx, 1, name = :Producer)
 
-    rhoWS = 1000.0kg / meter^3
-    rhoOS = 850.0kg / meter^3
+    rhoWS = Float64(fluids["water_density_kg_m3"])kg / meter^3
+    rhoOS = Float64(fluids["oil_density_kg_m3"])kg / meter^3
     sys = ImmiscibleSystem((AqueousPhase(), LiquidPhase()), reference_densities = [rhoWS, rhoOS])
     model = setup_reservoir_model(domain, sys, wells = [injector, producer])
     parameters = setup_parameters(model)
-    state0 = setup_reservoir_state(model, Pressure = 150bar, Saturations = [0.2, 0.8])
+    state0 = setup_reservoir_state(
+        model,
+        Pressure = Float64(initial["pressure_bar"])bar,
+        Saturations = [Float64(initial["water_saturation"]), Float64(initial["oil_saturation"])],
+    )
 
-    dt = fill(30.0day, nsteps)
+    dt = fill(Float64(schedule["dt_days"])day, nsteps)
     pv = pore_volume(model, parameters)
-    inj_rate = 0.5 * sum(pv) / sum(dt)          # inject half a pore volume over the run
+    inj_rate = Float64(controls["injected_pore_volume_fraction"]) * sum(pv) / sum(dt)
     i_ctrl = InjectorControl(TotalRateTarget(inj_rate), [1.0, 0.0], density = rhoWS)
-    p_ctrl = ProducerControl(BottomHolePressureTarget(100bar))
+    p_ctrl = ProducerControl(BottomHolePressureTarget(Float64(controls["producer_bhp_bar"])bar))
     forces = setup_reservoir_forces(model, control = Dict(:Injector => i_ctrl, :Producer => p_ctrl))
 
-    wd, states, t = simulate_reservoir(state0, model, dt,
-        parameters = parameters, forces = forces, info_level = -1)
+    wd, states, t = simulate_reservoir(
+        state0, model, dt, parameters = parameters, forces = forces, info_level = -1
+    )
 
-    orat = wd[:Producer, :orat]                  # surface oil rate, negative for production
-    wrat_inj = wd[:Injector, :wrat]              # surface water rate, positive for injection
+    orat = wd[:Producer, :orat]      # surface oil rate, negative for production
+    wrat_inj = wd[:Injector, :wrat]  # surface water rate, positive for injection
     cum_oil = -sum(orat .* dt)
     cum_winj = sum(wrat_inj .* dt)
     so_final = states[end][:Saturations][2, :]
@@ -1977,6 +3029,7 @@ function run_smoke(nx::Int, nsteps::Int)
 
     return Dict(
         "status" => "ok",
+        "case_schema_version" => string(case["schema_version"]),
         "julia_version" => string(VERSION),
         "jutuldarcy_version" => string(pkgversion(JutulDarcy)),
         "jutul_version" => string(pkgversion(Jutul)),
@@ -1989,19 +3042,36 @@ function run_smoke(nx::Int, nsteps::Int)
 end
 
 function main(args::Vector{String})
-    opts = parse_cli(args)
-    out = opts["out"]
     t0 = time()
     result = try
-        r = run_smoke(parse(Int, opts["nx"]), parse(Int, opts["nsteps"]))
+        opts = parse_cli(args)
+        case, input_sha = read_case(opts["case"])
+        r = run_smoke(case)
+        r["input_sha256"] = input_sha
         r["wall_time_s"] = time() - t0
+        out = opts["out"]
+        mkpath(dirname(abspath(out)))
+        open(out, "w") do io
+            write(io, JSON.json(r))   # JSON.json exists in both JSON.jl 0.21 and 1.x
+        end
         r
     catch err
-        Dict("status" => "error", "message" => sprint(showerror, err), "wall_time_s" => time() - t0)
-    end
-    mkpath(dirname(abspath(out)))
-    open(out, "w") do io
-        write(io, JSON.json(result))   # JSON.json exists in both JSON.jl 0.21 and 1.x
+        r = Dict(
+            "status" => "error",
+            "message" => sprint(showerror, err),
+            "wall_time_s" => time() - t0,
+        )
+        # Best effort: still report through --out when it was parsed successfully.
+        try
+            opts = parse_cli(args)
+            mkpath(dirname(abspath(opts["out"])))
+            open(opts["out"], "w") do io
+                write(io, JSON.json(r))
+            end
+        catch
+            println(stderr, r["message"])
+        end
+        r
     end
     return result["status"] == "ok" ? 0 : 1
 end
@@ -2009,19 +3079,28 @@ end
 exit(main(ARGS))
 ```
 
-- [ ] **Step 4: Запустить скрипт вручную и проверить инварианты**
+- [ ] **Step 4: Запустить скрипт вручную и проверить инварианты и `input_sha256`**
 
 ```bash
-cd /Users/george/Documents/so_field && julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --out /tmp/so_smoke.json --nx 20 --nsteps 12; echo "exit=$?"; cat /tmp/so_smoke.json
+mkdir -p artifacts/tmp && printf '{"controls":{"injected_pore_volume_fraction":0.5,"producer_bhp_bar":100.0},"fixture_content_hash":"manual","fluids":{"oil_density_kg_m3":850.0,"water_density_kg_m3":1000.0},"grid":{"dx_m":50.0,"dy_m":50.0,"dz_m":10.0,"nx":20},"initial":{"oil_saturation":0.8,"pressure_bar":150.0,"water_saturation":0.2},"rock":{"permeability_darcy":0.1,"porosity":0.25},"schedule":{"dt_days":30.0,"n_steps":12},"schema_version":"1","seed":1}' > artifacts/tmp/case.json && julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --case artifacts/tmp/case.json --out artifacts/tmp/smoke.json; echo "exit=$?"; cat artifacts/tmp/smoke.json
 ```
-Ожидается: `exit=0`; в JSON `status: "ok"`, `cumulative_oil_m3 > 0`, `cumulative_water_injected_m3 > 0`, `0 < mean_so_final < 0.8`. Если API-вызов не найден (например, изменилось имя `setup_vertical_well`, `pore_volume` или индексация `wd[:Producer, :orat]`), свериться с документацией установленной версии: `julia --project=julia -e 'using JutulDarcy; println(@doc setup_vertical_well)'`, поправить только имя вызова, не меняя физики кейса. Зафиксировать любую такую правку в `julia/README.md`.
+Ожидается: `exit=0`; в JSON `status: "ok"`, `cumulative_oil_m3 > 0`, `cumulative_water_injected_m3 > 0`, `0 < mean_so_final < 0.8`.
+
+Сверить `input_sha256` с независимым вычислением:
+```bash
+shasum -a 256 artifacts/tmp/case.json | awk '{print $1}' && python3 -c "import json;print(json.load(open('artifacts/tmp/smoke.json'))['input_sha256'])"
+```
+Ожидается: две одинаковые строки. Это и есть доказательство сквозного прохода (замечание №3).
+
+Если API-вызов не найден (например, изменилось имя `setup_vertical_well`, `pore_volume` или индексация `wd[:Producer, :orat]`), свериться с документацией установленной версии: `julia --project=julia -e 'using JutulDarcy; println(@doc setup_vertical_well)'`, поправить **только имя вызова**, не меняя физики кейса, и зафиксировать правку в `julia/README.md`.
 
 - [ ] **Step 5: Проверить детерминизм двумя запусками**
 
 ```bash
-cd /Users/george/Documents/so_field && julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --out /tmp/so_smoke_2.json && python3 -c "
+julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --case artifacts/tmp/case.json --out artifacts/tmp/smoke_2.json && python3 -c "
 import json
-a=json.load(open('/tmp/so_smoke.json')); b=json.load(open('/tmp/so_smoke_2.json'))
+a=json.load(open('artifacts/tmp/smoke.json')); b=json.load(open('artifacts/tmp/smoke_2.json'))
+assert a['input_sha256']==b['input_sha256'], 'input_sha256 differs'
 for k in ('cumulative_oil_m3','cumulative_water_injected_m3','mean_so_final'):
     rel=abs(a[k]-b[k])/max(1.0,abs(a[k])); print(k, a[k], b[k], rel); assert rel <= 1e-6, k
 print('DETERMINISTIC')"
@@ -2033,48 +3112,68 @@ print('DETERMINISTIC')"
 ```markdown
 # Julia environment (SO-RECON)
 
-`Project.toml` + `Manifest.toml` — зафиксированное окружение проекта. Единственный
-operational forward backend — JutulDarcy (SPEC 10.1). Пакет `SOReconSimulator/`
+`Project.toml` + `Manifest.toml` + `.julia-version` — зафиксированное окружение проекта.
+Единственный operational forward backend — JutulDarcy (SPEC 10.1). Пакет `SOReconSimulator/`
 появится в E05 и будет подключён в это окружение через `Pkg.develop`.
 
-Установка (Julia 1.12 через juliaup):
+## Версия Julia
+
+`.julia-version` содержит **точную project-pinned версию**: именно на ней разрешён
+`Manifest.toml`. Это фиксация проекта, а не утверждение о том, какая версия является
+текущим upstream stable-релизом. Несовпадение версии запущенной Julia, `Jutul` или
+`JutulDarcy` с этим lock приводит к `FAIL` в `so-recon smoke`.
+
+Установка pinned-версии:
+
+    juliaup add "$(cat julia/.julia-version)"
+    juliaup default "$(cat julia/.julia-version)"
+
+Установка пакетов:
 
     julia --project=julia --startup-file=no -e 'using Pkg; Pkg.instantiate(); Pkg.precompile()'
 
-Smoke-кейс E00 (не верификация физики — она в E05):
+## Smoke-кейс E00
 
-    julia --project=julia --startup-file=no julia/smoke/smoke_case.jl --out artifacts/tmp/smoke.json
+Не верификация физики — она в E05. Вход — `case.json`, сформированный Python;
+скрипт возвращает `input_sha256` прочитанных байт, что делает проверку сквозной.
+
+    julia --project=julia --startup-file=no julia/smoke/smoke_case.jl \
+        --case artifacts/tmp/case.json --out artifacts/tmp/smoke.json
 
 Обновление зависимостей выполняется только осознанно (`Pkg.update`) с коммитом нового
-`Manifest.toml` и новой строкой в `reports/environment_report.md`.
+`Manifest.toml`, обновлением `.julia-version` и новой строкой в `reports/environment_report.md`.
 ```
 
-- [ ] **Step 7: Убедиться, что `Manifest.toml` не содержит личных путей и закоммитить**
+- [ ] **Step 7: Убедиться, что артефакты не содержат личных путей, и закоммитить**
 
 ```bash
-cd /Users/george/Documents/so_field && ! grep -n "/Users/" julia/Manifest.toml && uv run pytest tests/test_no_absolute_paths.py -q && git add julia && git commit -m "feat(e00): add locked Julia environment with JutulDarcy and 1D oil-water smoke case
+! grep -n "/Users/" julia/Manifest.toml && uv run pytest tests/test_no_absolute_paths.py -q && git add julia && git commit -m "feat(e00): add locked Julia environment and end-to-end smoke case reading case.json
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
+
+> Если `grep` найдёт личный путь в `Manifest.toml` (такое бывает при `Pkg.develop` на локальный каталог) — удалить соответствующую `dev`-зависимость и переразрешить окружение. В E00 `dev`-зависимостей быть не должно.
 
 ---
 
-### Task 9: Python-мост к Julia
+### Task 10: Python-мост к Julia
 
 **Files:**
 - Create: `src/so_recon/simulator/julia_bridge.py`
 - Test: `tests/unit/test_julia_bridge.py`, `tests/integration/test_julia_smoke.py`
 
 **Interfaces:**
-- Consumes: `StrictModel` (Task 4), `ProjectPaths` (Task 3), `JuliaConfig` (Task 4), скрипт Task 8.
+- Consumes: `StrictModel`, `JuliaConfig` (Task 4); `ProjectPaths` (Task 3); скрипт Task 9.
 - Produces:
   - `class JuliaNotFoundError(RuntimeError)`, `class JuliaRunError(RuntimeError)`.
-  - `find_julia(explicit: str | None = None) -> Path` — порядок: `explicit` → env `SO_RECON_JULIA` → `shutil.which("julia")` → `Path.home()/".juliaup"/"bin"/"julia"`; иначе `JuliaNotFoundError`.
-  - `class JuliaLauncher(Protocol)`: `def launch(self, script: Path, args: list[str], out_path: Path) -> None`.
-  - `class SubprocessJuliaLauncher`: `__init__(self, julia_exe: Path, project: Path, timeout_s: int)`; `launch(...)` выполняет `[julia_exe, f"--project={project}", "--startup-file=no", str(script), *args, "--out", str(out_path)]`, при ненулевом коде возврата бросает `JuliaRunError` с хвостом stderr (последние 4000 символов).
-  - `class JuliaSmokeResult(StrictModel)`: `status: Literal["ok"]`, `julia_version: str`, `jutuldarcy_version: str`, `jutul_version: str`, `nx: int`, `n_steps: int`, `cumulative_oil_m3: float`, `cumulative_water_injected_m3: float`, `mean_so_final: float`, `wall_time_s: float`.
-  - `run_julia_smoke(launcher: JuliaLauncher, script: Path, out_path: Path, *, nx: int, n_steps: int) -> JuliaSmokeResult` — вызывает `launch`, читает JSON; если `status != "ok"` — `JuliaRunError(message)`.
-  - `default_launcher(paths: ProjectPaths, cfg: JuliaConfig, julia_exe: str | None = None) -> SubprocessJuliaLauncher`.
+  - `find_julia(explicit=None) -> Path` — порядок: `explicit` → env `SO_RECON_JULIA` → `shutil.which("julia")` → `~/.juliaup/bin/julia`; иначе `JuliaNotFoundError`.
+  - `class JuliaLauncher(Protocol)`: `launch(self, script: Path, args: list[str], out_path: Path) -> None`.
+  - `class SubprocessJuliaLauncher`: `__init__(julia_exe, project, timeout_s)`; `launch` выполняет `[julia_exe, f"--project={project}", "--startup-file=no", str(script), *args, "--out", str(out_path)]`; ненулевой код → `JuliaRunError` с хвостом stderr (последние 4000 символов).
+  - `class JuliaSmokeResult(StrictModel)`: `status: Literal["ok"]`, `input_sha256: str`, `case_schema_version: str`, `julia_version: str`, `jutuldarcy_version: str`, `jutul_version: str`, `nx: int`, `n_steps: int`, `cumulative_oil_m3: float`, `cumulative_water_injected_m3: float`, `mean_so_final: float`, `wall_time_s: float`.
+  - `run_julia_smoke(launcher, script, case_path, out_path, *, expected_input_sha256) -> JuliaSmokeResult` — вызывает `launch(script, ["--case", str(case_path)], out_path)`, читает JSON; `status != "ok"` → `JuliaRunError(message)`; **`input_sha256 != expected_input_sha256` → `JuliaRunError`** (Julia прочитала не тот вход).
+  - `default_launcher(paths, cfg, julia_exe=None) -> SubprocessJuliaLauncher`.
+
+**Замечания ревизии 2, реализуемые здесь:** №3 (сверка `input_sha256`), №5 (`JuliaNotFoundError` поднимается так, что вызывающий может записать FAIL).
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -2093,8 +3192,11 @@ from so_recon.simulator.julia_bridge import (
     run_julia_smoke,
 )
 
-OK_PAYLOAD = {
+CASE_BYTES = b'{"schema_version":"1"}'
+
+OK_PAYLOAD: dict[str, object] = {
     "status": "ok",
+    "case_schema_version": "1",
     "julia_version": "1.12.7",
     "jutuldarcy_version": "0.3.11",
     "jutul_version": "0.4.40",
@@ -2115,20 +3217,45 @@ class FakeLauncher:
     def launch(self, script: Path, args: list[str], out_path: Path) -> None:
         self.calls.append((script, args, out_path))
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(self.payload))
+        out_path.write_text(json.dumps(self.payload), encoding="utf-8")
 
 
-def test_run_julia_smoke_parses_result(tmp_path: Path) -> None:
-    launcher = FakeLauncher(OK_PAYLOAD)
-    res = run_julia_smoke(launcher, tmp_path / "s.jl", tmp_path / "out.json", nx=20, n_steps=12)
+def _case(tmp_path: Path) -> tuple[Path, str]:
+    import hashlib
+
+    p = tmp_path / "case.json"
+    p.write_bytes(CASE_BYTES)
+    return p, hashlib.sha256(CASE_BYTES).hexdigest()
+
+
+def test_run_julia_smoke_parses_result_and_passes_the_case(tmp_path: Path) -> None:
+    case_path, sha = _case(tmp_path)
+    launcher = FakeLauncher({**OK_PAYLOAD, "input_sha256": sha})
+    res = run_julia_smoke(
+        launcher, tmp_path / "s.jl", case_path, tmp_path / "out.json", expected_input_sha256=sha
+    )
     assert res.cumulative_oil_m3 == 1234.5
-    assert launcher.calls[0][1] == ["--nx", "20", "--nsteps", "12"]
+    assert res.input_sha256 == sha
+    assert launcher.calls[0][1] == ["--case", str(case_path)]
+
+
+def test_run_julia_smoke_rejects_a_mismatched_input_hash(tmp_path: Path) -> None:
+    """End-to-end guard: Julia must prove it read exactly the case Python wrote."""
+    case_path, sha = _case(tmp_path)
+    launcher = FakeLauncher({**OK_PAYLOAD, "input_sha256": "f" * 64})
+    with pytest.raises(JuliaRunError, match="input_sha256"):
+        run_julia_smoke(
+            launcher, tmp_path / "s.jl", case_path, tmp_path / "out.json", expected_input_sha256=sha
+        )
 
 
 def test_run_julia_smoke_raises_on_error_status(tmp_path: Path) -> None:
+    case_path, sha = _case(tmp_path)
     launcher = FakeLauncher({"status": "error", "message": "boom", "wall_time_s": 0.1})
     with pytest.raises(JuliaRunError, match="boom"):
-        run_julia_smoke(launcher, tmp_path / "s.jl", tmp_path / "out.json", nx=20, n_steps=12)
+        run_julia_smoke(
+            launcher, tmp_path / "s.jl", case_path, tmp_path / "out.json", expected_input_sha256=sha
+        )
 
 
 def test_find_julia_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2149,11 +3276,11 @@ def test_find_julia_raises_when_absent(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_subprocess_launcher_builds_command_and_reports_failure(tmp_path: Path) -> None:
     fake = tmp_path / "fake_julia.sh"
-    fake.write_text("#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/argv.txt\"\necho fatal >&2\nexit 3\n")
+    fake.write_text('#!/bin/sh\necho "$@" > "$(dirname "$0")/argv.txt"\necho fatal >&2\nexit 3\n')
     fake.chmod(0o755)
     launcher = SubprocessJuliaLauncher(fake, tmp_path / "proj", timeout_s=30)
     with pytest.raises(JuliaRunError, match="fatal"):
-        launcher.launch(tmp_path / "s.jl", ["--nx", "5"], tmp_path / "o.json")
+        launcher.launch(tmp_path / "s.jl", ["--case", "c.json"], tmp_path / "o.json")
     argv = (tmp_path / "argv.txt").read_text().split()
     assert argv[0] == f"--project={tmp_path / 'proj'}"
     assert argv[1] == "--startup-file=no"
@@ -2169,12 +3296,14 @@ import pytest
 from so_recon.config.load import load_project_config
 from so_recon.paths import ProjectPaths
 from so_recon.simulator.julia_bridge import JuliaNotFoundError, default_launcher, run_julia_smoke
+from so_recon.synthetic.fixture import build_smoke_case, build_smoke_fixture, write_smoke_case
+from so_recon.registry.hashing import sha256_bytes
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.julia
-def test_real_julia_smoke_case_runs(tmp_path: Path) -> None:
+def test_real_julia_smoke_case_runs_end_to_end(tmp_path: Path) -> None:
     cfg = load_project_config(ROOT / "configs" / "project.yml")
     paths = ProjectPaths.from_config(ROOT, cfg.paths)
     if not (paths.julia / "Manifest.toml").is_file():
@@ -2183,11 +3312,23 @@ def test_real_julia_smoke_case_runs(tmp_path: Path) -> None:
         launcher = default_launcher(paths, cfg.julia)
     except JuliaNotFoundError:
         pytest.skip("julia executable not found")
+
+    fixture = build_smoke_fixture(cfg.smoke)
+    case = build_smoke_case(cfg.smoke, fixture)
+    case_path = tmp_path / "case.json"
+    payload = write_smoke_case(case, case_path)
+
     res = run_julia_smoke(
-        launcher, paths.root / cfg.julia.smoke_script, tmp_path / "smoke.json",
-        nx=cfg.smoke.nx, n_steps=cfg.smoke.n_steps,
+        launcher,
+        paths.root / cfg.julia.smoke_script,
+        case_path,
+        tmp_path / "smoke.json",
+        expected_input_sha256=sha256_bytes(payload),
     )
     assert res.status == "ok"
+    assert res.input_sha256 == sha256_bytes(payload)
+    assert res.case_schema_version == case["schema_version"]
+    assert res.nx == cfg.smoke.nx and res.n_steps == cfg.smoke.n_steps
     assert res.cumulative_oil_m3 > 0
     assert res.cumulative_water_injected_m3 > 0
     assert 0.0 < res.mean_so_final < 0.8
@@ -2197,7 +3338,7 @@ def test_real_julia_smoke_case_runs(tmp_path: Path) -> None:
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_julia_bridge.py -q
+uv run pytest tests/unit/test_julia_bridge.py -q
 ```
 Ожидается: `ModuleNotFoundError: so_recon.simulator.julia_bridge`.
 
@@ -2225,11 +3366,11 @@ JULIA_ENV_VAR = "SO_RECON_JULIA"
 
 
 class JuliaNotFoundError(RuntimeError):
-    pass
+    """No usable julia executable was found."""
 
 
 class JuliaRunError(RuntimeError):
-    pass
+    """Julia failed, timed out, or returned a result that does not match its input."""
 
 
 def find_julia(explicit: str | None = None) -> Path:
@@ -2286,6 +3427,8 @@ class SubprocessJuliaLauncher:
 
 class JuliaSmokeResult(StrictModel):
     status: Literal["ok"]
+    input_sha256: str
+    case_schema_version: str
     julia_version: str
     jutuldarcy_version: str
     jutul_version: str
@@ -2298,13 +3441,24 @@ class JuliaSmokeResult(StrictModel):
 
 
 def run_julia_smoke(
-    launcher: JuliaLauncher, script: Path, out_path: Path, *, nx: int, n_steps: int
+    launcher: JuliaLauncher,
+    script: Path,
+    case_path: Path,
+    out_path: Path,
+    *,
+    expected_input_sha256: str,
 ) -> JuliaSmokeResult:
-    launcher.launch(script, ["--nx", str(nx), "--nsteps", str(n_steps)], out_path)
+    launcher.launch(script, ["--case", str(case_path)], out_path)
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     if payload.get("status") != "ok":
         raise JuliaRunError(f"julia smoke failed: {payload.get('message', payload)}")
-    return JuliaSmokeResult.model_validate(payload)
+    result = JuliaSmokeResult.model_validate(payload)
+    if result.input_sha256 != expected_input_sha256:
+        raise JuliaRunError(
+            "julia read a different input: "
+            f"input_sha256 {result.input_sha256} != expected {expected_input_sha256}"
+        )
+    return result
 
 
 def default_launcher(
@@ -2312,7 +3466,7 @@ def default_launcher(
 ) -> SubprocessJuliaLauncher:
     return SubprocessJuliaLauncher(
         julia_exe=find_julia(julia_exe),
-        project=paths.root / cfg.project,
+        project=paths.resolve(cfg.project),
         timeout_s=cfg.timeout_s,
     )
 ```
@@ -2320,41 +3474,48 @@ def default_launcher(
 - [ ] **Step 4: Прогнать unit-тесты, затем integration-тест с реальной Julia**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_julia_bridge.py -q && uv run ruff check . && uv run mypy
+uv run pytest tests/unit/test_julia_bridge.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `5 passed`.
+Ожидается: `6 passed`.
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/integration/test_julia_smoke.py -q -m julia
+uv run pytest tests/integration/test_julia_smoke.py -q -m julia
 ```
-Ожидается: `1 passed` (не `skipped`; если skipped — Julia не найдена, вернуться к Task 8 Step 1).
+Ожидается: `1 passed` (не `skipped`; если skipped — Julia не найдена, вернуться к Task 9 Step 1).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/simulator/julia_bridge.py tests/unit/test_julia_bridge.py tests/integration/test_julia_smoke.py && git commit -m "feat(e00): add python-julia bridge with injectable launcher and smoke result model
+git add src/so_recon/simulator/julia_bridge.py tests/unit/test_julia_bridge.py tests/integration/test_julia_smoke.py && git commit -m "feat(e00): add python-julia bridge with case input and input_sha256 round-trip check
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 10: Environment report
+### Task 11: Environment report и версии из lock
 
 **Files:**
 - Create: `src/so_recon/environment/report.py`
 - Test: `tests/unit/test_environment_report.py`
 
 **Interfaces:**
-- Consumes: `StrictModel` (Task 4), `ProjectPaths` (Task 3), `sha256_file` (Task 2), `environment_lock_hash` (Task 5), `git_commit`, `git_is_dirty` (Task 5), `find_julia`, `JuliaNotFoundError` (Task 9).
+- Consumes: `StrictModel` (Task 4); `ProjectPaths` (Task 3); `sha256_file` (Task 2); `environment_lock_hash` (Task 6); `git_commit`, `git_is_dirty` (Task 6); `find_julia`, `JuliaNotFoundError` (Task 10); `write_artifact`, `ArtifactRef` (Task 5); `write_bytes_atomic`, `write_json_atomic` (Task 2).
 - Produces:
-  - `parse_julia_manifest(path: Path) -> tuple[str | None, dict[str, str]]` — `(julia_version, {package: version})` из `Manifest.toml` (формат v2: `data["julia_version"]`, `data["deps"][name][0]["version"]`); включаются пакеты `JutulDarcy`, `Jutul`, `JSON` при наличии.
-  - `class EnvironmentReport(StrictModel)`: `created_at: str`, `os: str`, `arch: str`, `python_version: str`, `uv_version: str | None`, `uv_lock_sha256: str | None`, `julia_executable_version: str | None`, `julia_manifest_version: str | None`, `julia_manifest_sha256: str | None`, `julia_packages: dict[str, str]`, `git_commit: str | None`, `git_dirty: bool | None`, `environment_lock_hash: str`.
-  - `VersionProbe = Callable[[list[str]], str | None]` — выполняет команду и возвращает stdout или `None`.
-  - `subprocess_probe(cmd: list[str]) -> str | None`.
-  - `collect_environment(paths: ProjectPaths, *, now: datetime, probe: VersionProbe = subprocess_probe) -> EnvironmentReport`.
-  - `render_markdown(report: EnvironmentReport) -> str`.
-  - `write_environment_report(report: EnvironmentReport, md_path: Path, json_path: Path) -> None`.
+  - `ENVIRONMENT_SCHEMA_VERSION = "2"`.
+  - `parse_julia_manifest(path) -> tuple[str | None, dict[str, str]]` — `(julia_version, {package: version})` из `Manifest.toml` (формат v2: `data["julia_version"]`, `data["deps"][name][0]["version"]`); отслеживаются `JutulDarcy`, `Jutul`, `JSON`.
+  - `class LockedVersions(StrictModel)`: `julia_pinned: str | None` (из `julia/.julia-version`), `julia_manifest: str | None`, `packages: dict[str, str]`.
+  - `read_locked_versions(paths) -> LockedVersions`.
+  - `check_locked_versions(locked, *, julia_version, jutul_version, jutuldarcy_version) -> list[str]` — **список расхождений**; непустой список означает FAIL (замечание №9). Отсутствующий lock — тоже расхождение (`"... lock missing"`), потому что без lock воспроизводимость не доказана.
+  - `class EnvironmentReport(StrictModel)` — **детерминированный**, без timestamps и git-состояния: `schema_version`, `os`, `arch`, `python_version`, `uv_version: str | None`, `uv_lock_sha256: str | None`, `julia_pinned_version: str | None`, `julia_executable_version: str | None`, `julia_manifest_version: str | None`, `julia_manifest_sha256: str | None`, `julia_packages: dict[str, str]`, `environment_lock_hash: str`.
+  - `class EnvironmentStamp(StrictModel)` — run-scoped: `schema_version`, `report_sha256`, `run_id`, `created_at`, `git_commit: str | None`, `git_dirty: bool | None`.
+  - `VersionProbe = Callable[[list[str]], str | None]`, `subprocess_probe(cmd) -> str | None`.
+  - `collect_environment(paths, *, probe=subprocess_probe) -> EnvironmentReport` — **без параметра `now`**: отчёт не содержит времени.
+  - `render_markdown(report) -> str`, `report_json_bytes(report) -> bytes`, `report_markdown_bytes(report) -> bytes`.
+  - `write_environment_report(report, paths, *, run_dir, md_path, json_path, producer_run_id, now) -> tuple[ArtifactRef, ArtifactRef]` — immutable артефакты в `run_dir`, публикация байт-в-байт в `reports/`.
+  - `write_environment_stamp(stamp, path) -> None`.
+
+**Замечания ревизии 2, реализуемые здесь:** №9 (сверка версий с lock), №10 (детерминированный отчёт, timestamps в run-scoped штампе), №12, №7 (`julia_pinned_version`).
 
 - [ ] **Step 1: Написать падающие тесты**
 
@@ -2367,9 +3528,13 @@ from pathlib import Path
 import pytest
 
 from so_recon.environment.report import (
+    ENVIRONMENT_SCHEMA_VERSION,
+    check_locked_versions,
     collect_environment,
     parse_julia_manifest,
+    read_locked_versions,
     render_markdown,
+    report_json_bytes,
     write_environment_report,
 )
 from so_recon.paths import ProjectPaths
@@ -2394,15 +3559,6 @@ version = "0.3.11"
 [[deps.Other]]
 version = "9.9.9"
 """
-NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
-
-
-def test_parse_julia_manifest(tmp_path: Path) -> None:
-    p = tmp_path / "Manifest.toml"
-    p.write_text(MANIFEST)
-    julia_version, pkgs = parse_julia_manifest(p)
-    assert julia_version == "1.12.7"
-    assert pkgs == {"JSON": "1.1.2", "Jutul": "0.4.40", "JutulDarcy": "0.3.11"}
 
 
 def _probe(cmd: list[str]) -> str | None:
@@ -2413,6 +3569,58 @@ def _probe(cmd: list[str]) -> str | None:
     return None
 
 
+def _with_locks(tmp_path: Path) -> ProjectPaths:
+    (tmp_path / "uv.lock").write_text("lock")
+    (tmp_path / "julia").mkdir(exist_ok=True)
+    (tmp_path / "julia" / "Manifest.toml").write_text(MANIFEST)
+    (tmp_path / "julia" / ".julia-version").write_text("1.12.7\n")
+    return ProjectPaths.default(tmp_path)
+
+
+def test_parse_julia_manifest(tmp_path: Path) -> None:
+    p = tmp_path / "Manifest.toml"
+    p.write_text(MANIFEST)
+    julia_version, pkgs = parse_julia_manifest(p)
+    assert julia_version == "1.12.7"
+    assert pkgs == {"JSON": "1.1.2", "Jutul": "0.4.40", "JutulDarcy": "0.3.11"}
+
+
+def test_locked_versions_match_is_empty(tmp_path: Path) -> None:
+    locked = read_locked_versions(_with_locks(tmp_path))
+    assert locked.julia_pinned == "1.12.7"
+    assert check_locked_versions(
+        locked, julia_version="1.12.7", jutul_version="0.4.40", jutuldarcy_version="0.3.11"
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("julia", "jutul", "darcy", "needle"),
+    [
+        ("1.12.8", "0.4.40", "0.3.11", "julia"),
+        ("1.12.7", "0.4.41", "0.3.11", "Jutul"),
+        ("1.12.7", "0.4.40", "0.3.12", "JutulDarcy"),
+    ],
+)
+def test_version_drift_against_lock_is_a_mismatch(
+    tmp_path: Path, julia: str, jutul: str, darcy: str, needle: str
+) -> None:
+    """Amendment 9: drift from the lock is a failure, not an informational note."""
+    locked = read_locked_versions(_with_locks(tmp_path))
+    mismatches = check_locked_versions(
+        locked, julia_version=julia, jutul_version=jutul, jutuldarcy_version=darcy
+    )
+    assert mismatches
+    assert any(needle in m for m in mismatches)
+
+
+def test_missing_lock_is_a_mismatch(tmp_path: Path) -> None:
+    locked = read_locked_versions(ProjectPaths.default(tmp_path))
+    mismatches = check_locked_versions(
+        locked, julia_version="1.12.7", jutul_version="0.4.40", jutuldarcy_version="0.3.11"
+    )
+    assert any("missing" in m for m in mismatches)
+
+
 def test_collect_environment_with_and_without_lock_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2420,49 +3628,81 @@ def test_collect_environment_with_and_without_lock_files(
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
     paths = ProjectPaths.default(tmp_path)
-    rep = collect_environment(paths, now=NOW, probe=_probe)
+    rep = collect_environment(paths, probe=_probe)
     assert rep.uv_lock_sha256 is None
     assert rep.julia_manifest_version is None
+    assert rep.julia_pinned_version is None
     assert rep.julia_executable_version is None
     assert rep.uv_version == "0.12.7"
 
-    (tmp_path / "uv.lock").write_text("lock")
-    (tmp_path / "julia").mkdir()
-    (tmp_path / "julia" / "Manifest.toml").write_text(MANIFEST)
-    rep2 = collect_environment(paths, now=NOW, probe=_probe)
+    rep2 = collect_environment(_with_locks(tmp_path), probe=_probe)
     assert rep2.uv_lock_sha256 is not None
     assert rep2.julia_manifest_version == "1.12.7"
+    assert rep2.julia_pinned_version == "1.12.7"
     assert rep2.julia_packages["JutulDarcy"] == "0.3.11"
     assert rep2.environment_lock_hash != rep.environment_lock_hash
 
 
-def test_render_and_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_report_is_deterministic_and_carries_no_time_or_git_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant I5: repeated gate runs must not produce a git diff."""
     monkeypatch.delenv("SO_RECON_JULIA", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
-    paths = ProjectPaths.default(tmp_path)
-    rep = collect_environment(paths, now=NOW, probe=_probe)
+    paths = _with_locks(tmp_path)
+    first = report_json_bytes(collect_environment(paths, probe=_probe))
+    second = report_json_bytes(collect_environment(paths, probe=_probe))
+    assert first == second
+    payload = json.loads(first)
+    assert payload["schema_version"] == ENVIRONMENT_SCHEMA_VERSION
+    for forbidden in ("created_at", "git_commit", "git_dirty", "run_id"):
+        assert forbidden not in payload
+
+
+def test_render_and_write_publishes_identical_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    paths = _with_locks(tmp_path)
+    rep = collect_environment(paths, probe=_probe)
     md = render_markdown(rep)
     assert "# Environment report" in md
     assert "environment_lock_hash" in md
-    md_path = tmp_path / "reports" / "environment_report.md"
-    json_path = tmp_path / "reports" / "manifests" / "environment.json"
-    write_environment_report(rep, md_path, json_path)
-    assert md_path.read_text() == md
-    assert json.loads(json_path.read_text())["python_version"] == rep.python_version
+    assert "created_at" not in md
+    run_dir = paths.runs / "run-1"
+    run_dir.mkdir(parents=True)
+    md_path = paths.reports / "environment_report.md"
+    json_path = paths.manifests / "environment.json"
+    md_ref, json_ref = write_environment_report(
+        rep, paths, run_dir=run_dir, md_path=md_path, json_path=json_path,
+        producer_run_id="run-1", now=datetime(2026, 9, 13, tzinfo=UTC),
+    )
+    assert md_path.read_text(encoding="utf-8") == md
+    assert (run_dir / "environment_report.md").read_bytes() == md_path.read_bytes()
+    assert (run_dir / "environment.json").read_bytes() == json_path.read_bytes()
+    assert json.loads(json_path.read_text(encoding="utf-8"))["python_version"] == rep.python_version
+    assert md_ref.producer_run_id == "run-1" and json_ref.producer_run_id == "run-1"
 ```
 
 - [ ] **Step 2: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_environment_report.py -q
+uv run pytest tests/unit/test_environment_report.py -q
 ```
 Ожидается: `ModuleNotFoundError: so_recon.environment.report`.
 
 - [ ] **Step 3: Реализовать `report.py`**
 
 ```python
-"""Environment report: versions and lock hashes (SPEC 19.12; STAGES E00 output)."""
+"""Environment report: versions and lock hashes (SPEC 19.12; STAGES E00 output).
+
+The report is deterministic: it carries no timestamps, run ids or git state, so a repeated
+gate run leaves no git diff (invariant I5). Those facts live in EnvironmentStamp, which is
+written into the run directory and never committed.
+"""
 
 from __future__ import annotations
 
@@ -2476,12 +3716,16 @@ from pathlib import Path
 
 from so_recon.config.schema import StrictModel
 from so_recon.paths import ProjectPaths
+from so_recon.registry.artifact import ArtifactRef, write_artifact
+from so_recon.registry.atomic import write_bytes_atomic, write_json_atomic
 from so_recon.registry.gitinfo import git_commit, git_is_dirty
 from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import environment_lock_hash
 from so_recon.simulator.julia_bridge import JuliaNotFoundError, find_julia
 
+ENVIRONMENT_SCHEMA_VERSION = "2"
 TRACKED_JULIA_PACKAGES = ("JutulDarcy", "Jutul", "JSON")
+JULIA_VERSION_FILE = ".julia-version"
 
 VersionProbe = Callable[[list[str]], str | None]
 
@@ -2506,20 +3750,75 @@ def parse_julia_manifest(path: Path) -> tuple[str | None, dict[str, str]]:
     return (str(julia_version) if julia_version else None), packages
 
 
+class LockedVersions(StrictModel):
+    """Versions the project is pinned to. Runtime drift from these is a failure."""
+
+    julia_pinned: str | None
+    julia_manifest: str | None
+    packages: dict[str, str]
+
+
+def read_locked_versions(paths: ProjectPaths) -> LockedVersions:
+    pin_file = paths.julia / JULIA_VERSION_FILE
+    pinned = pin_file.read_text(encoding="utf-8").strip() if pin_file.is_file() else None
+    manifest = paths.julia / "Manifest.toml"
+    manifest_version: str | None = None
+    packages: dict[str, str] = {}
+    if manifest.is_file():
+        manifest_version, packages = parse_julia_manifest(manifest)
+    return LockedVersions(
+        julia_pinned=pinned or None, julia_manifest=manifest_version, packages=packages
+    )
+
+
+def check_locked_versions(
+    locked: LockedVersions, *, julia_version: str, jutul_version: str, jutuldarcy_version: str
+) -> list[str]:
+    """Return the drift between the running stack and the lock. Non-empty means FAIL."""
+    mismatches: list[str] = []
+    expected_julia = locked.julia_pinned or locked.julia_manifest
+    if expected_julia is None:
+        mismatches.append("julia version lock missing (julia/.julia-version and Manifest.toml)")
+    elif expected_julia != julia_version:
+        mismatches.append(f"julia version: running {julia_version}, locked {expected_julia}")
+    if locked.julia_pinned and locked.julia_manifest and locked.julia_pinned != locked.julia_manifest:
+        mismatches.append(
+            f"julia lock is inconsistent: .julia-version {locked.julia_pinned}, "
+            f"Manifest.toml {locked.julia_manifest}"
+        )
+    for name, running in (("Jutul", jutul_version), ("JutulDarcy", jutuldarcy_version)):
+        expected = locked.packages.get(name)
+        if expected is None:
+            mismatches.append(f"{name} version lock missing in julia/Manifest.toml")
+        elif expected != running:
+            mismatches.append(f"{name} version: running {running}, locked {expected}")
+    return mismatches
+
+
 class EnvironmentReport(StrictModel):
-    created_at: str
+    schema_version: str = ENVIRONMENT_SCHEMA_VERSION
     os: str
     arch: str
     python_version: str
     uv_version: str | None
     uv_lock_sha256: str | None
+    julia_pinned_version: str | None
     julia_executable_version: str | None
     julia_manifest_version: str | None
     julia_manifest_sha256: str | None
     julia_packages: dict[str, str]
+    environment_lock_hash: str
+
+
+class EnvironmentStamp(StrictModel):
+    """Run-scoped facts kept out of the committed report (invariant I5)."""
+
+    schema_version: str
+    report_sha256: str
+    run_id: str
+    created_at: str
     git_commit: str | None
     git_dirty: bool | None
-    environment_lock_hash: str
 
 
 def _second_token(text: str | None) -> str | None:
@@ -2534,8 +3833,7 @@ def _julia_exe_version(probe: VersionProbe) -> str | None:
         exe = find_julia()
     except JuliaNotFoundError:
         return None
-    out = probe([str(exe), "--version"])
-    # "julia version 1.12.7"
+    out = probe([str(exe), "--version"])  # "julia version 1.12.7"
     if not out:
         return None
     parts = out.split()
@@ -2543,176 +3841,310 @@ def _julia_exe_version(probe: VersionProbe) -> str | None:
 
 
 def collect_environment(
-    paths: ProjectPaths, *, now: datetime, probe: VersionProbe = subprocess_probe
+    paths: ProjectPaths, *, probe: VersionProbe = subprocess_probe
 ) -> EnvironmentReport:
     uv_lock = paths.root / "uv.lock"
     manifest = paths.julia / "Manifest.toml"
-    julia_manifest_version: str | None = None
-    julia_packages: dict[str, str] = {}
-    if manifest.is_file():
-        julia_manifest_version, julia_packages = parse_julia_manifest(manifest)
+    locked = read_locked_versions(paths)
     return EnvironmentReport(
-        created_at=now.isoformat(),
         os=f"{platform.system()} {platform.release()}",
         arch=platform.machine(),
         python_version=platform.python_version(),
         uv_version=_second_token(probe(["uv", "--version"])),
         uv_lock_sha256=sha256_file(uv_lock) if uv_lock.is_file() else None,
+        julia_pinned_version=locked.julia_pinned,
         julia_executable_version=_julia_exe_version(probe),
-        julia_manifest_version=julia_manifest_version,
+        julia_manifest_version=locked.julia_manifest,
         julia_manifest_sha256=sha256_file(manifest) if manifest.is_file() else None,
-        julia_packages=julia_packages,
-        git_commit=git_commit(paths.root),
-        git_dirty=git_is_dirty(paths.root),
+        julia_packages=locked.packages,
         environment_lock_hash=environment_lock_hash(paths),
     )
 
 
 def render_markdown(report: EnvironmentReport) -> str:
     rows = [
-        ("created_at", report.created_at),
+        ("schema_version", report.schema_version),
         ("os", report.os),
         ("arch", report.arch),
         ("python_version", report.python_version),
         ("uv_version", report.uv_version),
         ("uv_lock_sha256", report.uv_lock_sha256),
+        ("julia_pinned_version", report.julia_pinned_version),
         ("julia_executable_version", report.julia_executable_version),
         ("julia_manifest_version", report.julia_manifest_version),
         ("julia_manifest_sha256", report.julia_manifest_sha256),
-        ("git_commit", report.git_commit),
-        ("git_dirty", report.git_dirty),
         ("environment_lock_hash", report.environment_lock_hash),
     ]
-    lines = ["# Environment report", "", "| key | value |", "|---|---|"]
+    lines = [
+        "# Environment report",
+        "",
+        "Детерминированный отчёт: без timestamps и git-состояния, чтобы повторный gate",
+        "не создавал diff. Время запуска и git-состояние — в `artifacts/runs/<run_id>/environment_stamp.json`.",
+        "",
+        "| key | value |",
+        "|---|---|",
+    ]
     lines += [f"| `{k}` | `{v}` |" for k, v in rows]
-    lines += ["", "## Julia packages", "", "| package | version |", "|---|---|"]
+    lines += ["", "## Julia packages (locked)", "", "| package | version |", "|---|---|"]
     lines += [f"| `{k}` | `{v}` |" for k, v in sorted(report.julia_packages.items())]
     return "\n".join(lines) + "\n"
 
 
-def write_environment_report(report: EnvironmentReport, md_path: Path, json_path: Path) -> None:
-    md_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(render_markdown(report), encoding="utf-8")
-    json_path.write_text(
-        json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+def report_json_bytes(report: EnvironmentReport) -> bytes:
+    payload = report.model_dump(mode="json")
+    return (
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    ).encode("utf-8")
+
+
+def report_markdown_bytes(report: EnvironmentReport) -> bytes:
+    return render_markdown(report).encode("utf-8")
+
+
+def write_environment_report(
+    report: EnvironmentReport,
+    paths: ProjectPaths,
+    *,
+    run_dir: Path,
+    md_path: Path,
+    json_path: Path,
+    producer_run_id: str,
+    now: datetime,
+) -> tuple[ArtifactRef, ArtifactRef]:
+    """Immutable run artifacts first, then byte-identical published copies."""
+    md_payload = report_markdown_bytes(report)
+    json_payload = report_json_bytes(report)
+    md_ref = write_artifact(
+        run_dir / "environment_report.md", md_payload, paths,
+        schema_version=ENVIRONMENT_SCHEMA_VERSION, producer_run_id=producer_run_id,
+        media_type="text/markdown", now=now,
+    )
+    json_ref = write_artifact(
+        run_dir / "environment.json", json_payload, paths,
+        schema_version=ENVIRONMENT_SCHEMA_VERSION, producer_run_id=producer_run_id,
+        media_type="application/json", now=now,
+    )
+    write_bytes_atomic(md_path, md_payload)
+    write_bytes_atomic(json_path, json_payload)
+    return md_ref, json_ref
+
+
+def write_environment_stamp(stamp: EnvironmentStamp, path: Path) -> None:
+    write_json_atomic(path, stamp.model_dump(mode="json"))
+
+
+def build_environment_stamp(
+    paths: ProjectPaths, *, report_sha256: str, run_id: str, now: datetime
+) -> EnvironmentStamp:
+    return EnvironmentStamp(
+        schema_version=ENVIRONMENT_SCHEMA_VERSION,
+        report_sha256=report_sha256,
+        run_id=run_id,
+        created_at=now.isoformat(),
+        git_commit=git_commit(paths.root),
+        git_dirty=git_is_dirty(paths.root),
     )
 ```
 
-- [ ] **Step 4: Прогнать тесты, lint, mypy**
+- [ ] **Step 4: Прогнать тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_environment_report.py -q && uv run ruff check . && uv run mypy
+uv run pytest tests/unit/test_environment_report.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `3 passed`.
+Ожидается: `9 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/environment/report.py tests/unit/test_environment_report.py && git commit -m "feat(e00): add environment report with python/julia versions and lock hashes
+git add src/so_recon/environment/report.py tests/unit/test_environment_report.py && git commit -m "feat(e00): add deterministic environment report and lock-version drift check
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
-
-### Task 11: Сценарий smoke и CLI `so-recon`
+### Task 12: Runner, сценарий smoke и CLI `so-recon`
 
 **Files:**
-- Create: `src/so_recon/smoke.py`, `src/so_recon/cli.py`, `tests/conftest.py`
-- Test: `tests/unit/test_smoke.py`, `tests/unit/test_cli.py`
+- Create: `src/so_recon/runner.py`, `src/so_recon/smoke.py`, `src/so_recon/cli.py`, `tests/conftest.py`
+- Test: `tests/unit/test_runner.py`, `tests/unit/test_smoke.py`, `tests/unit/test_cli.py`
 
 **Interfaces:**
-- Consumes: всё из Tasks 2–10.
+- Consumes: всё из Tasks 2–11.
+- Produces (`so_recon.runner`):
+  - `CommandBody = Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]`
+  - `execute_run(*, command, argv, cfg, paths, body, schema_versions=None, parent_run_ids=()) -> RunContext` — открывает `RunContext`, настраивает логирование в `run_dir/run.log`, выполняет `body`. **Любое** исключение из `body` перехватывается: полный traceback уходит в `run.log`, в `notes` попадает `exception: <Type>: <msg>`, запись закрывается со `status="FAIL"`. Функция никогда не пробрасывает исключение наружу — гарантия инварианта I6. Возвращает всегда закрытый (`PASS`/`FAIL`) контекст.
 - Produces (`so_recon.smoke`):
-  - `class SmokeExpectation(StrictModel)`: `frozen_at: str`, `fixture_content_hash: str`, `nx: int`, `n_steps: int`, `cumulative_oil_m3: float`, `cumulative_water_injected_m3: float`, `mean_so_final: float`, `julia_version: str`, `jutuldarcy_version: str`.
-  - `EXPECTED_FILENAME = "smoke_expected.json"` (лежит в `paths.configs`).
-  - `compare_with_expected(expected: SmokeExpectation, fixture_hash: str, result: JuliaSmokeResult, rel_tol: float) -> list[str]` — список расхождений (пустой = совпало). Хеш и целые сравниваются точно; float — `abs(a-b) <= rel_tol*max(1,|b|)`; расхождение версий Julia/JutulDarcy — **не ошибка**, а заметка вида `note: julia_version 1.12.7 -> 1.12.8` (добавляется в `notes`, не в mismatches).
-  - `run_smoke(*, cfg: ProjectConfig, paths: ProjectPaths, argv: list[str], launcher: JuliaLauncher, freeze_expected: bool = False) -> RunContext` — шаги: `RunContext.start(command="smoke")` → `configure_logging` → fixture в `run_dir/fixture/` → Julia в `run_dir/julia_smoke.json` → если `freeze_expected`: записать `configs/smoke_expected.json` и `PASS`; иначе, если файл ожиданий отсутствует — `FAIL` с заметкой `expected file missing; run with --freeze-expected`; иначе сравнить → `PASS`/`FAIL`. Любое исключение Julia/IO → `FAIL` с текстом в `notes`, исключение пробрасывается дальше после записи `run.json`.
+  - `EXPECTED_FILENAME = "smoke_expected.json"`, `EXPECTED_SCHEMA_VERSION = "2"`.
+  - `class SmokeExpectation(StrictModel)` — **без timestamps** (инвариант I5): `schema_version`, `fixture_content_hash`, `case_sha256`, `nx`, `n_steps`, `cumulative_oil_m3`, `cumulative_water_injected_m3`, `mean_so_final`, `julia_version`, `jutul_version`, `jutuldarcy_version`.
+  - `compare_with_expected(expected, *, fixture_hash, case_sha256, result, rel_tol) -> list[str]` — хеши и целые сравниваются точно; float — `abs(a-b) <= rel_tol*max(1,|b|)`; **версии Julia/Jutul/JutulDarcy сравниваются точно и расхождение является mismatch** (замечание №9), а не заметкой.
+  - `smoke_body(cfg, paths, launcher_factory, freeze_expected) -> CommandBody` — сценарий: fixture → `case.json` → Julia → сверка с lock → сверка с ожиданиями. `launcher_factory` вызывается **внутри** тела, поэтому отсутствие Julia даёт FAIL-запись (замечание №5).
+  - `run_smoke(*, cfg, paths, argv, launcher_factory, freeze_expected=False) -> RunContext` — `execute_run` со `smoke_body`.
 - Produces (`so_recon.cli`):
-  - `main(argv: Sequence[str] | None = None, *, launcher_factory: Callable[[ProjectPaths, JuliaConfig], JuliaLauncher] | None = None) -> int`.
-  - Общие флаги: `--config PATH` (по умолчанию `<root>/configs/project.yml`), `--root PATH` (по умолчанию `find_repo_root()`).
-  - `so-recon manifest` → `reports/manifests/source_manifest.json`, run record `command="manifest"`, `raw_input_hashes` заполнены; код 0/1.
-  - `so-recon env-report` → `reports/environment_report.md` + `reports/manifests/environment.json`, run record `command="env-report"`.
-  - `so-recon smoke [--freeze-expected] [--julia PATH]` → код 0 при `PASS`, 1 при `FAIL`; печатает `run_dir` и статус в stdout.
+  - `main(argv=None, *, launcher_factory=None) -> int`.
+  - Общие флаги: `--config PATH`, `--root PATH`.
+  - `so-recon manifest`, `so-recon env-report`, `so-recon smoke [--freeze-expected] [--julia PATH]`. Код возврата 0 при `PASS`, 1 при `FAIL`, 2 при неверных аргументах (argparse).
 
-- [ ] **Step 1: Написать `tests/conftest.py` с фикстурой временного проекта**
+**Замечания ревизии 2, реализуемые здесь:** №3 (сквозной сценарий), №4 (`outputs` — `ArtifactRef`), №5 (FAIL при любом исключении, включая отсутствие Julia и ошибку конфигурации), №9 (несовпадение с lock → FAIL), №10 (`smoke_expected.json` без timestamps), №12.
+
+> **Единственный случай без run-записи** — невозможность определить repository root: писать некуда. Он обрабатывается печатью в stderr и кодом 1, и зафиксирован в отчёте E00 как известное ограничение.
+
+- [ ] **Step 1: Написать `tests/conftest.py`**
 
 ```python
+import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 PROJECT_YAML = """
 spec_version: "3.0"
 config_version: "test.1"
-paths: {}
+paths:
+  raw: data/sources
 sources:
   files:
-    - {name: a, path: data/raw/a.csv, encoding: utf-8, delimiter: ",", decimal: "."}
-    - {name: b, path: data/raw/b.csv, encoding: cp1251, delimiter: ";", decimal: ","}
+    - {name: a, path: data/sources/a.csv, encoding: utf-8, delimiter: ",", decimal: "."}
+    - {name: b, path: data/sources/b.csv, encoding: cp1251, delimiter: ";", decimal: ","}
 smoke: {seed: 11, n_wells: 2, n_months: 2, nx: 5, n_steps: 2, rel_tol: 1.0e-6}
 julia: {}
+"""
+
+JULIA_MANIFEST = """
+julia_version = "1.12.7"
+manifest_format = "2.0"
+
+[[deps.JSON]]
+version = "1.1.2"
+
+[[deps.Jutul]]
+version = "0.4.40"
+
+[[deps.JutulDarcy]]
+version = "0.3.11"
 """
 
 
 @pytest.fixture
 def tmp_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A minimal repository layout: marker files, config, two fake raw sources."""
+    """A minimal repository layout: marker files, config, two fake immutable sources."""
     monkeypatch.delenv("SO_RECON_ROOT", raising=False)
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
     (tmp_path / "src" / "so_recon").mkdir(parents=True)
     (tmp_path / "configs").mkdir()
     (tmp_path / "configs" / "project.yml").write_text(PROJECT_YAML, encoding="utf-8")
-    (tmp_path / "data" / "raw").mkdir(parents=True)
-    (tmp_path / "data" / "raw" / "a.csv").write_bytes(b"x,y\n1,2\n")
-    (tmp_path / "data" / "raw" / "b.csv").write_bytes(b"x;y\r\n1;2\r\n")
+    (tmp_path / "data" / "sources").mkdir(parents=True)
+    (tmp_path / "data" / "sources" / "a.csv").write_bytes(b"x,y\n1,2\n")
+    (tmp_path / "data" / "sources" / "b.csv").write_bytes(b"x;y\r\n1;2\r\n")
     (tmp_path / "julia" / "smoke").mkdir(parents=True)
     (tmp_path / "julia" / "smoke" / "smoke_case.jl").write_text("# fake\n")
+    (tmp_path / "julia" / "Manifest.toml").write_text(JULIA_MANIFEST, encoding="utf-8")
+    (tmp_path / "julia" / ".julia-version").write_text("1.12.7\n", encoding="utf-8")
     (tmp_path / "uv.lock").write_text("lock\n")
     return tmp_path
 
 
 @pytest.fixture
-def fake_launcher_factory() -> Callable[[dict[str, object]], object]:
-    import json
+def fake_launcher_factory() -> Callable[..., Any]:
+    """Build a launcher that echoes a fixed payload, optionally hashing the real case file."""
 
     class FakeLauncher:
-        def __init__(self, payload: dict[str, object]) -> None:
+        def __init__(self, payload: dict[str, Any], *, echo_input_sha: bool = True) -> None:
             self.payload = payload
+            self.echo_input_sha = echo_input_sha
             self.calls = 0
+            self.cases: list[Path] = []
 
         def launch(self, script: Path, args: list[str], out_path: Path) -> None:
             self.calls += 1
+            case_path = Path(args[args.index("--case") + 1])
+            self.cases.append(case_path)
+            payload = dict(self.payload)
+            if self.echo_input_sha and "input_sha256" not in payload:
+                import hashlib
+
+                payload["input_sha256"] = hashlib.sha256(case_path.read_bytes()).hexdigest()
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(self.payload))
+            out_path.write_text(json.dumps(payload), encoding="utf-8")
 
     return FakeLauncher
 ```
 
-- [ ] **Step 2: Написать падающие тесты для `smoke.py`**
+- [ ] **Step 2: Написать падающие тесты `tests/unit/test_runner.py`**
 
-Тесты вызывают `run_smoke` несколько раз подряд с одинаковым конфигом; уникальность `run_id` обеспечивает суффиксация из Task 5.
+```python
+import json
+import logging
+from pathlib import Path
 
-`tests/unit/test_smoke.py`:
+from so_recon.config.load import load_project_config
+from so_recon.paths import ProjectPaths
+from so_recon.registry.run import RunContext, RunStatus
+from so_recon.runner import execute_run
+
+
+def _setup(tmp_project: Path) -> tuple[object, ProjectPaths]:
+    cfg = load_project_config(tmp_project / "configs" / "project.yml")
+    return cfg, ProjectPaths.from_config(tmp_project, cfg.paths)
+
+
+def test_execute_run_records_pass(tmp_project: Path) -> None:
+    cfg, paths = _setup(tmp_project)
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        log.info("working")
+        return "PASS", ["done"]
+
+    ctx = execute_run(command="x", argv=["so-recon", "x"], cfg=cfg, paths=paths, body=body)
+    record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert record["status"] == "PASS"
+    assert record["notes"] == ["done"]
+    assert (ctx.run_dir / "run.log").is_file()
+
+
+def test_execute_run_converts_any_exception_into_a_fail_record(tmp_project: Path) -> None:
+    """Invariant I6: an unexpected exception must still leave a FAIL run record."""
+    cfg, paths = _setup(tmp_project)
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        raise RuntimeError("unexpected boom")
+
+    ctx = execute_run(command="x", argv=["so-recon", "x"], cfg=cfg, paths=paths, body=body)
+    record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert record["status"] == "FAIL"
+    assert any("unexpected boom" in n for n in record["notes"])
+    assert "RuntimeError" in (ctx.run_dir / "run.log").read_text(encoding="utf-8")
+
+
+def test_execute_run_works_without_config(tmp_project: Path) -> None:
+    paths = ProjectPaths.default(tmp_project)
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        return "FAIL", ["config error"]
+
+    ctx = execute_run(command="x", argv=[], cfg=None, paths=paths, body=body)
+    assert json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))["status"] == "FAIL"
+```
+
+- [ ] **Step 3: Написать падающие тесты `tests/unit/test_smoke.py`**
+
 ```python
 import json
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from so_recon.config.load import load_project_config
 from so_recon.paths import ProjectPaths
-from so_recon.simulator.julia_bridge import JuliaRunError, JuliaSmokeResult
+from so_recon.simulator.julia_bridge import JuliaNotFoundError, JuliaSmokeResult
 from so_recon.smoke import EXPECTED_FILENAME, SmokeExpectation, compare_with_expected, run_smoke
 
-OK = {
-    "status": "ok", "julia_version": "1.12.7", "jutuldarcy_version": "0.3.11",
-    "jutul_version": "0.4.40", "nx": 5, "n_steps": 2, "cumulative_oil_m3": 100.0,
-    "cumulative_water_injected_m3": 150.0, "mean_so_final": 0.6, "wall_time_s": 1.0,
+OK: dict[str, Any] = {
+    "status": "ok", "case_schema_version": "1", "julia_version": "1.12.7",
+    "jutuldarcy_version": "0.3.11", "jutul_version": "0.4.40", "nx": 5, "n_steps": 2,
+    "cumulative_oil_m3": 100.0, "cumulative_water_injected_m3": 150.0,
+    "mean_so_final": 0.6, "wall_time_s": 1.0,
 }
 
 
@@ -2721,18 +4153,54 @@ def _setup(tmp_project: Path) -> tuple[Any, ProjectPaths]:
     return cfg, ProjectPaths.from_config(tmp_project, cfg.paths)
 
 
+def _expectation(**over: Any) -> SmokeExpectation:
+    base: dict[str, Any] = {
+        "schema_version": "2", "fixture_content_hash": "h", "case_sha256": "c",
+        "nx": 5, "n_steps": 2, "cumulative_oil_m3": 100.0,
+        "cumulative_water_injected_m3": 150.0, "mean_so_final": 0.6,
+        "julia_version": "1.12.7", "jutul_version": "0.4.40", "jutuldarcy_version": "0.3.11",
+    }
+    base.update(over)
+    return SmokeExpectation(**base)
+
+
+def _result(**over: Any) -> JuliaSmokeResult:
+    return JuliaSmokeResult.model_validate({**OK, "input_sha256": "i", **over})
+
+
 def test_compare_with_expected_tolerances() -> None:
-    exp = SmokeExpectation(
-        frozen_at="t", fixture_content_hash="h", nx=5, n_steps=2, cumulative_oil_m3=100.0,
-        cumulative_water_injected_m3=150.0, mean_so_final=0.6, julia_version="1.12.7",
-        jutuldarcy_version="0.3.11",
+    exp = _expectation()
+    assert compare_with_expected(
+        exp, fixture_hash="h", case_sha256="c",
+        result=_result(cumulative_oil_m3=100.0 + 5e-5), rel_tol=1e-6,
+    ) == []
+    mism = compare_with_expected(
+        exp, fixture_hash="h", case_sha256="c",
+        result=_result(cumulative_oil_m3=101.0), rel_tol=1e-6,
     )
-    res = JuliaSmokeResult.model_validate({**OK, "cumulative_oil_m3": 100.0 + 5e-5})
-    assert compare_with_expected(exp, "h", res, rel_tol=1e-6) == []
-    res_bad = JuliaSmokeResult.model_validate({**OK, "cumulative_oil_m3": 101.0})
-    mism = compare_with_expected(exp, "h", res_bad, rel_tol=1e-6)
     assert any("cumulative_oil_m3" in m for m in mism)
-    assert any("fixture_content_hash" in m for m in compare_with_expected(exp, "x", res, 1e-6))
+
+
+def test_compare_detects_input_drift() -> None:
+    exp = _expectation()
+    assert any(
+        "fixture_content_hash" in m
+        for m in compare_with_expected(exp, fixture_hash="x", case_sha256="c", result=_result(), rel_tol=1e-6)
+    )
+    assert any(
+        "case_sha256" in m
+        for m in compare_with_expected(exp, fixture_hash="h", case_sha256="x", result=_result(), rel_tol=1e-6)
+    )
+
+
+def test_version_drift_is_a_mismatch_not_a_note() -> None:
+    """Amendment 9: a JutulDarcy bump must fail the smoke, not be logged as a note."""
+    exp = _expectation()
+    mism = compare_with_expected(
+        exp, fixture_hash="h", case_sha256="c",
+        result=_result(jutuldarcy_version="0.3.12"), rel_tol=1e-6,
+    )
+    assert any("jutuldarcy_version" in m for m in mism)
 
 
 def test_run_smoke_fails_without_expected_then_freezes_then_passes(
@@ -2741,85 +4209,159 @@ def test_run_smoke_fails_without_expected_then_freezes_then_passes(
     cfg, paths = _setup(tmp_project)
     launcher = fake_launcher_factory(OK)
 
-    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher=launcher)
+    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: launcher)
     assert ctx.record.status == "FAIL"
     assert any("freeze-expected" in n for n in ctx.record.notes)
 
-    ctx2 = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher=launcher, freeze_expected=True)
+    ctx2 = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: launcher,
+                     freeze_expected=True)
     assert ctx2.record.status == "PASS"
     expected_path = paths.configs / EXPECTED_FILENAME
-    assert expected_path.is_file()
-    frozen = json.loads(expected_path.read_text())
+    frozen = json.loads(expected_path.read_text(encoding="utf-8"))
     assert frozen["nx"] == 5 and frozen["cumulative_oil_m3"] == 100.0
+    assert "frozen_at" not in frozen, "the committed expectation must carry no timestamp"
 
-    ctx3 = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher=launcher)
+    ctx3 = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: launcher)
     assert ctx3.record.status == "PASS"
     assert ctx3.record.julia_version == "1.12.7"
     assert ctx3.record.jutuldarcy_version == "0.3.11"
     assert (ctx3.run_dir / "fixture" / "wells.parquet").is_file()
+    assert (ctx3.run_dir / "case.json").is_file()
     assert (ctx3.run_dir / "julia_smoke.json").is_file()
     assert (ctx3.run_dir / "run.log").is_file()
-    assert ctx3.record.outputs["julia_smoke"].endswith("julia_smoke.json")
+    assert ctx3.record.outputs["case"].path.endswith("case.json")
+    assert ctx3.record.outputs["case"].sha256 == launcher_case_sha(ctx3.run_dir)
 
 
-def test_run_smoke_detects_drift(tmp_project: Path, fake_launcher_factory: Any) -> None:
+def launcher_case_sha(run_dir: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256((run_dir / "case.json").read_bytes()).hexdigest()
+
+
+def test_run_smoke_detects_numeric_drift(tmp_project: Path, fake_launcher_factory: Any) -> None:
     cfg, paths = _setup(tmp_project)
-    run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher=fake_launcher_factory(OK),
-              freeze_expected=True)
+    run_smoke(cfg=cfg, paths=paths, argv=["smoke"],
+              launcher_factory=lambda: fake_launcher_factory(OK), freeze_expected=True)
     drifted = fake_launcher_factory({**OK, "mean_so_final": 0.61})
-    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher=drifted)
+    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: drifted)
     assert ctx.record.status == "FAIL"
     assert any("mean_so_final" in n for n in ctx.record.notes)
 
 
-def test_run_smoke_records_failure_and_reraises(tmp_project: Path, fake_launcher_factory: Any) -> None:
+def test_run_smoke_fails_when_versions_drift_from_the_lock(
+    tmp_project: Path, fake_launcher_factory: Any
+) -> None:
+    """Amendment 9: running JutulDarcy differs from julia/Manifest.toml -> FAIL."""
     cfg, paths = _setup(tmp_project)
-    broken = fake_launcher_factory({"status": "error", "message": "solver blew up", "wall_time_s": 0})
-    with pytest.raises(JuliaRunError):
-        run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher=broken)
-    runs = sorted(paths.runs.iterdir())
-    record = json.loads((runs[-1] / "run.json").read_text())
+    run_smoke(cfg=cfg, paths=paths, argv=["smoke"],
+              launcher_factory=lambda: fake_launcher_factory(OK), freeze_expected=True)
+    drifted = fake_launcher_factory({**OK, "jutuldarcy_version": "0.3.99"})
+    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: drifted)
+    assert ctx.record.status == "FAIL"
+    assert any("JutulDarcy" in n or "jutuldarcy" in n for n in ctx.record.notes)
+
+
+def test_run_smoke_records_fail_when_julia_is_missing(tmp_project: Path) -> None:
+    """Amendment 5: a missing Julia executable must still produce a FAIL run record."""
+    cfg, paths = _setup(tmp_project)
+
+    def factory() -> Any:
+        raise JuliaNotFoundError("julia executable not found")
+
+    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=factory)
+    assert ctx.record.status == "FAIL"
+    record = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
     assert record["status"] == "FAIL"
-    assert any("solver blew up" in n for n in record["notes"])
+    assert any("julia executable not found" in n for n in record["notes"])
+
+
+def test_run_smoke_records_fail_when_julia_reports_an_error(
+    tmp_project: Path, fake_launcher_factory: Any
+) -> None:
+    cfg, paths = _setup(tmp_project)
+    broken = fake_launcher_factory(
+        {"status": "error", "message": "solver blew up", "wall_time_s": 0.0}, echo_input_sha=False
+    )
+    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: broken)
+    assert ctx.record.status == "FAIL"
+    assert any("solver blew up" in n for n in ctx.record.notes)
+
+
+def test_run_smoke_detects_a_tampered_case_file(tmp_project: Path, fake_launcher_factory: Any) -> None:
+    """End-to-end guard: Julia must return the hash of the bytes it actually read."""
+    cfg, paths = _setup(tmp_project)
+    liar = fake_launcher_factory({**OK, "input_sha256": "f" * 64}, echo_input_sha=False)
+    ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: liar)
+    assert ctx.record.status == "FAIL"
+    assert any("input_sha256" in n for n in ctx.record.notes)
 ```
 
-- [ ] **Step 3: Написать падающие тесты для CLI**
+- [ ] **Step 4: Написать падающие тесты `tests/unit/test_cli.py`**
 
-`tests/unit/test_cli.py`:
 ```python
 import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from so_recon.cli import main
 
-OK = {
-    "status": "ok", "julia_version": "1.12.7", "jutuldarcy_version": "0.3.11",
-    "jutul_version": "0.4.40", "nx": 5, "n_steps": 2, "cumulative_oil_m3": 100.0,
-    "cumulative_water_injected_m3": 150.0, "mean_so_final": 0.6, "wall_time_s": 1.0,
+OK: dict[str, Any] = {
+    "status": "ok", "case_schema_version": "1", "julia_version": "1.12.7",
+    "jutuldarcy_version": "0.3.11", "jutul_version": "0.4.40", "nx": 5, "n_steps": 2,
+    "cumulative_oil_m3": 100.0, "cumulative_water_injected_m3": 150.0,
+    "mean_so_final": 0.6, "wall_time_s": 1.0,
 }
 
 
-def test_manifest_command_writes_manifest_and_run_record(tmp_project: Path) -> None:
-    code = main(["--root", str(tmp_project), "manifest"])
-    assert code == 0
-    manifest = json.loads((tmp_project / "reports" / "manifests" / "source_manifest.json").read_text())
-    assert [s["name"] for s in manifest["sources"]] == ["a", "b"]
-    runs = list((tmp_project / "artifacts" / "runs").iterdir())
+def _only_run(tmp_project: Path) -> dict[str, Any]:
+    runs = sorted((tmp_project / "artifacts" / "runs").iterdir())
     assert len(runs) == 1
-    record = json.loads((runs[0] / "run.json").read_text())
+    return json.loads((runs[0] / "run.json").read_text(encoding="utf-8"))
+
+
+def test_manifest_command_writes_manifest_and_run_record(tmp_project: Path) -> None:
+    assert main(["--root", str(tmp_project), "manifest"]) == 0
+    manifest = json.loads(
+        (tmp_project / "reports" / "manifests" / "source_manifest.json").read_text(encoding="utf-8")
+    )
+    assert [s["name"] for s in manifest["sources"]] == ["a", "b"]
+    assert manifest["sources"][0]["physical_line_count"] == 2
+    assert manifest["sources"][0]["data_rows"] == 1
+    record = _only_run(tmp_project)
     assert record["command"] == "manifest"
     assert record["status"] == "PASS"
     assert set(record["raw_input_hashes"]) == {"a", "b"}
+    assert record["outputs"]["source_manifest"]["schema_version"] == "2"
+
+
+def test_manifest_is_byte_identical_on_a_second_run(tmp_project: Path) -> None:
+    """Amendment 10: repeated runs must not change the committed manifest."""
+    published = tmp_project / "reports" / "manifests" / "source_manifest.json"
+    assert main(["--root", str(tmp_project), "manifest"]) == 0
+    first = published.read_bytes()
+    assert main(["--root", str(tmp_project), "manifest"]) == 0
+    assert published.read_bytes() == first
 
 
 def test_manifest_command_fails_on_missing_source(tmp_project: Path) -> None:
-    (tmp_project / "data" / "raw" / "b.csv").unlink()
+    (tmp_project / "data" / "sources" / "b.csv").unlink()
     assert main(["--root", str(tmp_project), "manifest"]) == 1
-    runs = list((tmp_project / "artifacts" / "runs").iterdir())
-    record = json.loads((runs[0] / "run.json").read_text())
+    record = _only_run(tmp_project)
     assert record["status"] == "FAIL"
-    assert any("data/raw/b.csv" in n for n in record["notes"])
+    assert any("data/sources/b.csv" in n for n in record["notes"])
+
+
+def test_broken_config_still_produces_a_fail_run_record(tmp_project: Path) -> None:
+    """Amendment 5: a configuration error must not leave the run unrecorded."""
+    (tmp_project / "configs" / "project.yml").write_text("spec_version: \"9.9\"\n", encoding="utf-8")
+    assert main(["--root", str(tmp_project), "manifest"]) == 1
+    record = _only_run(tmp_project)
+    assert record["status"] == "FAIL"
+    assert record["config_version"] == "unavailable"
+    assert any("config" in n.lower() for n in record["notes"])
 
 
 def test_env_report_command(tmp_project: Path, monkeypatch: Any) -> None:
@@ -2827,14 +4369,21 @@ def test_env_report_command(tmp_project: Path, monkeypatch: Any) -> None:
     monkeypatch.setenv("HOME", str(tmp_project))
     assert main(["--root", str(tmp_project), "env-report"]) == 0
     assert (tmp_project / "reports" / "environment_report.md").is_file()
-    env = json.loads((tmp_project / "reports" / "manifests" / "environment.json").read_text())
+    env = json.loads(
+        (tmp_project / "reports" / "manifests" / "environment.json").read_text(encoding="utf-8")
+    )
     assert env["uv_lock_sha256"] is not None
+    assert env["julia_pinned_version"] == "1.12.7"
+    assert "created_at" not in env
 
 
-def test_smoke_command_freeze_then_pass(tmp_project: Path, fake_launcher_factory: Any, capsys: Any) -> None:
+def test_smoke_command_freeze_then_pass(
+    tmp_project: Path, fake_launcher_factory: Any, capsys: Any
+) -> None:
     launcher = fake_launcher_factory(OK)
-    factory = lambda paths, cfg: launcher  # noqa: E731
-    assert main(["--root", str(tmp_project), "smoke", "--freeze-expected"], launcher_factory=factory) == 0
+    factory = lambda paths, cfg, julia: launcher  # noqa: E731
+    assert main(["--root", str(tmp_project), "smoke", "--freeze-expected"],
+                launcher_factory=factory) == 0
     assert main(["--root", str(tmp_project), "smoke"], launcher_factory=factory) == 0
     out = capsys.readouterr().out
     assert "status=PASS" in out
@@ -2843,56 +4392,151 @@ def test_smoke_command_freeze_then_pass(tmp_project: Path, fake_launcher_factory
 
 def test_smoke_command_returns_1_on_fail(tmp_project: Path, fake_launcher_factory: Any) -> None:
     launcher = fake_launcher_factory(OK)
-    assert main(["--root", str(tmp_project), "smoke"], launcher_factory=lambda p, c: launcher) == 1
+    assert main(["--root", str(tmp_project), "smoke"],
+                launcher_factory=lambda p, c, j: launcher) == 1
+
+
+def test_smoke_command_without_julia_returns_1_and_records_fail(
+    tmp_project: Path, monkeypatch: Any
+) -> None:
+    # PATH and HOME are redirected so the developer's real julia cannot be discovered:
+    # this test is about the FAIL record, not about running a simulation.
+    monkeypatch.setenv("PATH", str(tmp_project))
+    monkeypatch.setenv("HOME", str(tmp_project))
+    assert main(["--root", str(tmp_project), "smoke", "--julia", str(tmp_project / "absent")]) == 1
+    record = _only_run(tmp_project)
+    assert record["status"] == "FAIL"
+    assert any("julia" in n.lower() for n in record["notes"])
 
 
 def test_unknown_command_returns_2(tmp_project: Path) -> None:
-    import pytest
-
     with pytest.raises(SystemExit) as exc:
         main(["--root", str(tmp_project), "nope"])
     assert exc.value.code == 2
 ```
 
-- [ ] **Step 4: Убедиться, что тесты падают**
+- [ ] **Step 5: Убедиться, что тесты падают**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest tests/unit/test_smoke.py tests/unit/test_cli.py -q
+uv run pytest tests/unit/test_runner.py tests/unit/test_smoke.py tests/unit/test_cli.py -q
 ```
-Ожидается: `ModuleNotFoundError` для `so_recon.smoke` и `so_recon.cli`.
+Ожидается: `ModuleNotFoundError` для `so_recon.runner`, `so_recon.smoke`, `so_recon.cli`.
 
-- [ ] **Step 5: Реализовать `smoke.py`**
+- [ ] **Step 6: Реализовать `runner.py`**
 
 ```python
-"""E00 smoke scenario: deterministic fixture + JutulDarcy smoke case + comparison with frozen expectations."""
+"""One place that guarantees invariant I6: every command run leaves a run record.
+
+Whatever the body raises — a missing source, a missing Julia executable, a bug — the
+traceback goes to run.log, the message goes to run.json notes, and the record is closed
+with status FAIL. execute_run never propagates an exception from the body.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable, Sequence
+
+from so_recon.config.schema import ProjectConfig
+from so_recon.logging_setup import configure_logging
+from so_recon.paths import ProjectPaths
+from so_recon.registry.run import RunContext, RunStatus
+
+CommandBody = Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]
+
+
+def execute_run(
+    *,
+    command: str,
+    argv: Sequence[str],
+    cfg: ProjectConfig | None,
+    paths: ProjectPaths,
+    body: CommandBody,
+    schema_versions: dict[str, str] | None = None,
+    parent_run_ids: Sequence[str] = (),
+) -> RunContext:
+    ctx = RunContext.start(
+        command=command,
+        argv=argv,
+        cfg=cfg,
+        paths=paths,
+        schema_versions=schema_versions,
+        parent_run_ids=parent_run_ids,
+    )
+    log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
+    try:
+        status, notes = body(ctx, log)
+    except Exception as exc:  # noqa: BLE001 - deliberate: every failure becomes a FAIL record
+        log.exception("command %s failed", command)
+        ctx.finish("FAIL", notes=[f"exception: {type(exc).__name__}: {exc}"])
+    else:
+        ctx.finish(status, notes=notes)
+    finally:
+        for handler in logging.getLogger("so_recon").handlers:
+            handler.flush()
+    return ctx
+```
+
+- [ ] **Step 7: Реализовать `smoke.py`**
+
+```python
+"""E00 smoke scenario: deterministic fixture -> case.json -> JutulDarcy -> frozen expectations."""
 
 from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from pathlib import Path
 
 from so_recon.config.schema import ProjectConfig, StrictModel
-from so_recon.logging_setup import configure_logging
+from so_recon.environment.report import check_locked_versions, read_locked_versions
 from so_recon.paths import ProjectPaths
-from so_recon.registry.run import RunContext
-from so_recon.simulator.julia_bridge import JuliaLauncher, JuliaSmokeResult, run_julia_smoke
-from so_recon.synthetic.fixture import build_smoke_fixture, write_smoke_fixture
+from so_recon.registry.artifact import register_artifact, write_artifact, write_json_artifact
+from so_recon.registry.atomic import write_bytes_atomic
+from so_recon.registry.hashing import sha256_bytes
+from so_recon.registry.run import RunContext, RunStatus
+from so_recon.runner import CommandBody, execute_run
+from so_recon.simulator.julia_bridge import (
+    JuliaLauncher,
+    JuliaSmokeResult,
+    run_julia_smoke,
+)
+from so_recon.synthetic.fixture import (
+    CASE_SCHEMA_VERSION,
+    FIXTURE_SCHEMA_VERSION,
+    build_smoke_case,
+    build_smoke_fixture,
+    case_bytes,
+    write_smoke_fixture,
+)
 
 EXPECTED_FILENAME = "smoke_expected.json"
-SCHEMA_VERSIONS = {"smoke_fixture": "1", "julia_smoke_result": "1", "run_record": "1"}
+EXPECTED_SCHEMA_VERSION = "2"
+SCHEMA_VERSIONS = {
+    "smoke_fixture": FIXTURE_SCHEMA_VERSION,
+    "smoke_case": CASE_SCHEMA_VERSION,
+    "julia_smoke_result": "1",
+    "smoke_expected": EXPECTED_SCHEMA_VERSION,
+    "run_record": "1",
+}
+
+LauncherFactory = Callable[[], JuliaLauncher]
 
 
 class SmokeExpectation(StrictModel):
-    frozen_at: str
+    """Frozen expectations. Committed, therefore deterministic: no timestamps (I5)."""
+
+    schema_version: str = EXPECTED_SCHEMA_VERSION
     fixture_content_hash: str
+    case_sha256: str
     nx: int
     n_steps: int
     cumulative_oil_m3: float
     cumulative_water_injected_m3: float
     mean_so_final: float
     julia_version: str
+    jutul_version: str
     jutuldarcy_version: str
 
 
@@ -2901,155 +4545,231 @@ def _close(a: float, b: float, rel_tol: float) -> bool:
 
 
 def compare_with_expected(
-    expected: SmokeExpectation, fixture_hash: str, result: JuliaSmokeResult, rel_tol: float
+    expected: SmokeExpectation,
+    *,
+    fixture_hash: str,
+    case_sha256: str,
+    result: JuliaSmokeResult,
+    rel_tol: float,
 ) -> list[str]:
     mismatches: list[str] = []
-    if fixture_hash != expected.fixture_content_hash:
-        mismatches.append(
-            f"fixture_content_hash: got {fixture_hash}, expected {expected.fixture_content_hash}"
-        )
-    for name in ("nx", "n_steps"):
-        got, exp = getattr(result, name), getattr(expected, name)
+    for label, got, exp in (
+        ("fixture_content_hash", fixture_hash, expected.fixture_content_hash),
+        ("case_sha256", case_sha256, expected.case_sha256),
+        # A version bump changes the numbers it is compared against, so it is a failure,
+        # not a note: reproducibility is only claimed against the locked stack.
+        ("julia_version", result.julia_version, expected.julia_version),
+        ("jutul_version", result.jutul_version, expected.jutul_version),
+        ("jutuldarcy_version", result.jutuldarcy_version, expected.jutuldarcy_version),
+    ):
         if got != exp:
-            mismatches.append(f"{name}: got {got}, expected {exp}")
+            mismatches.append(f"{label}: got {got}, expected {exp}")
+    for name in ("nx", "n_steps"):
+        got_i, exp_i = getattr(result, name), getattr(expected, name)
+        if got_i != exp_i:
+            mismatches.append(f"{name}: got {got_i}, expected {exp_i}")
     for name in ("cumulative_oil_m3", "cumulative_water_injected_m3", "mean_so_final"):
-        got, exp = getattr(result, name), getattr(expected, name)
-        if not _close(got, exp, rel_tol):
-            mismatches.append(f"{name}: got {got!r}, expected {exp!r} (rel_tol={rel_tol})")
+        got_f, exp_f = getattr(result, name), getattr(expected, name)
+        if not _close(got_f, exp_f, rel_tol):
+            mismatches.append(f"{name}: got {got_f!r}, expected {exp_f!r} (rel_tol={rel_tol})")
     return mismatches
 
 
-def version_notes(expected: SmokeExpectation, result: JuliaSmokeResult) -> list[str]:
-    notes: list[str] = []
-    if expected.julia_version != result.julia_version:
-        notes.append(f"note: julia_version {expected.julia_version} -> {result.julia_version}")
-    if expected.jutuldarcy_version != result.jutuldarcy_version:
-        notes.append(
-            f"note: jutuldarcy_version {expected.jutuldarcy_version} -> {result.jutuldarcy_version}"
-        )
-    return notes
-
-
-def _write_expected(path: Path, expectation: SmokeExpectation) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(expectation.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def run_smoke(
+def smoke_body(
     *,
     cfg: ProjectConfig,
     paths: ProjectPaths,
-    argv: list[str],
-    launcher: JuliaLauncher,
-    freeze_expected: bool = False,
-) -> RunContext:
-    paths.ensure_dirs()
-    ctx = RunContext.start(
-        command="smoke", argv=argv, cfg=cfg, paths=paths, schema_versions=SCHEMA_VERSIONS
-    )
-    log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
-    outputs: dict[str, str] = {"run_log": paths.relative(ctx.run_dir / "run.log")}
-    try:
+    launcher_factory: LauncherFactory,
+    freeze_expected: bool,
+) -> CommandBody:
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        now = datetime.now(UTC)
+
         fixture = build_smoke_fixture(cfg.smoke)
-        write_smoke_fixture(fixture, ctx.run_dir / "fixture")
-        outputs["fixture_dir"] = paths.relative(ctx.run_dir / "fixture")
+        files = write_smoke_fixture(fixture, ctx.run_dir / "fixture")
+        for key, file_path in files.items():
+            ctx.add_output(
+                f"fixture_{key}",
+                register_artifact(
+                    file_path, paths,
+                    schema_version=FIXTURE_SCHEMA_VERSION, producer_run_id=ctx.run_id,
+                    media_type=(
+                        "application/vnd.apache.parquet"
+                        if file_path.suffix == ".parquet"
+                        else "application/json"
+                    ),
+                    now=now,
+                ),
+            )
         log.info("fixture built: seed=%d hash=%s", fixture.seed, fixture.content_hash)
+
+        case = build_smoke_case(cfg.smoke, fixture)
+        payload = case_bytes(case)
+        case_sha = sha256_bytes(payload)
+        case_ref = write_artifact(
+            ctx.run_dir / "case.json", payload, paths,
+            schema_version=CASE_SCHEMA_VERSION, producer_run_id=ctx.run_id,
+            media_type="application/json", now=now,
+        )
+        ctx.add_output("case", case_ref)
+        log.info("case written: sha256=%s", case_sha)
+
+        # The factory runs here on purpose: a missing Julia must become a FAIL record.
+        launcher = launcher_factory()
 
         julia_out = ctx.run_dir / "julia_smoke.json"
         result = run_julia_smoke(
-            launcher, paths.root / cfg.julia.smoke_script, julia_out,
-            nx=cfg.smoke.nx, n_steps=cfg.smoke.n_steps,
+            launcher,
+            paths.resolve(cfg.julia.smoke_script),
+            ctx.run_dir / "case.json",
+            julia_out,
+            expected_input_sha256=case_sha,
         )
-        outputs["julia_smoke"] = paths.relative(julia_out)
-        ctx.update(julia_version=result.julia_version, jutuldarcy_version=result.jutuldarcy_version)
+        ctx.update(
+            julia_version=result.julia_version,
+            jutul_version=result.jutul_version,
+            jutuldarcy_version=result.jutuldarcy_version,
+        )
+        ctx.add_output(
+            "julia_smoke",
+            write_artifact(
+                julia_out, julia_out.read_bytes(), paths,
+                schema_version="1", producer_run_id=ctx.run_id,
+                media_type="application/json", parent_artifact_ids=[case_ref.artifact_id], now=now,
+            ),
+        )
         log.info(
             "julia smoke ok: oil=%.6g winj=%.6g mean_so=%.6f (%.1fs)",
             result.cumulative_oil_m3, result.cumulative_water_injected_m3,
             result.mean_so_final, result.wall_time_s,
         )
 
+        # Drift from the locked Julia stack is a failure (amendment 9).
+        lock_mismatches = check_locked_versions(
+            read_locked_versions(paths),
+            julia_version=result.julia_version,
+            jutul_version=result.jutul_version,
+            jutuldarcy_version=result.jutuldarcy_version,
+        )
+        if lock_mismatches:
+            for m in lock_mismatches:
+                log.error("locked version mismatch: %s", m)
+            return "FAIL", lock_mismatches
+
         expected_path = paths.configs / EXPECTED_FILENAME
         if freeze_expected:
             expectation = SmokeExpectation(
-                frozen_at=datetime.now(UTC).isoformat(),
                 fixture_content_hash=fixture.content_hash,
+                case_sha256=case_sha,
                 nx=result.nx,
                 n_steps=result.n_steps,
                 cumulative_oil_m3=result.cumulative_oil_m3,
                 cumulative_water_injected_m3=result.cumulative_water_injected_m3,
                 mean_so_final=result.mean_so_final,
                 julia_version=result.julia_version,
+                jutul_version=result.jutul_version,
                 jutuldarcy_version=result.jutuldarcy_version,
             )
-            _write_expected(expected_path, expectation)
-            outputs["smoke_expected"] = paths.relative(expected_path)
-            ctx.finish("PASS", outputs, notes=[f"expected frozen to {paths.relative(expected_path)}"])
-            return ctx
+            ref = write_json_artifact(
+                ctx.run_dir / EXPECTED_FILENAME, expectation.model_dump(mode="json"), paths,
+                schema_version=EXPECTED_SCHEMA_VERSION, producer_run_id=ctx.run_id,
+                parent_artifact_ids=[case_ref.artifact_id], now=now,
+            )
+            write_bytes_atomic(expected_path, (ctx.run_dir / EXPECTED_FILENAME).read_bytes())
+            ctx.add_output("smoke_expected", ref)
+            return "PASS", [f"expected frozen to {paths.relative(expected_path)}"]
 
         if not expected_path.is_file():
-            ctx.finish(
-                "FAIL", outputs,
-                notes=[f"expected file missing: {paths.relative(expected_path)}; "
-                       "run with --freeze-expected"],
-            )
-            return ctx
+            return "FAIL", [
+                f"expected file missing: {paths.relative(expected_path)}; "
+                "run with --freeze-expected"
+            ]
 
         expected = SmokeExpectation.model_validate(
             json.loads(expected_path.read_text(encoding="utf-8"))
         )
-        mismatches = compare_with_expected(expected, fixture.content_hash, result, cfg.smoke.rel_tol)
-        notes = version_notes(expected, result)
+        mismatches = compare_with_expected(
+            expected, fixture_hash=fixture.content_hash, case_sha256=case_sha,
+            result=result, rel_tol=cfg.smoke.rel_tol,
+        )
         if mismatches:
             for m in mismatches:
                 log.error("smoke mismatch: %s", m)
-            ctx.finish("FAIL", outputs, notes=[*notes, *mismatches])
-        else:
-            ctx.finish("PASS", outputs, notes=notes)
-        return ctx
-    except Exception as exc:
-        log.exception("smoke failed")
-        ctx.finish("FAIL", outputs, notes=[f"exception: {type(exc).__name__}: {exc}"])
-        raise
-    finally:
-        logging.shutdown()
+            return "FAIL", mismatches
+        return "PASS", []
+
+    return body
+
+
+def run_smoke(
+    *,
+    cfg: ProjectConfig,
+    paths: ProjectPaths,
+    argv: Sequence[str],
+    launcher_factory: LauncherFactory,
+    freeze_expected: bool = False,
+) -> RunContext:
+    paths.ensure_dirs()
+    return execute_run(
+        command="smoke",
+        argv=argv,
+        cfg=cfg,
+        paths=paths,
+        schema_versions=SCHEMA_VERSIONS,
+        body=smoke_body(
+            cfg=cfg, paths=paths, launcher_factory=launcher_factory,
+            freeze_expected=freeze_expected,
+        ),
+    )
 ```
 
-- [ ] **Step 6: Реализовать `cli.py`**
+> Файлы fixture регистрируются как артефакты через `register_artifact`, поэтому `wells.parquet` и `well_month.parquet` попадают в lineage `run.json` с собственными `sha256` (замечание №4).
+
+- [ ] **Step 8: Реализовать `cli.py`**
 
 ```python
-"""so-recon command line: manifest | env-report | smoke."""
+"""so-recon command line: manifest | env-report | smoke.
+
+Every subcommand runs inside execute_run, so any failure — including a configuration
+error or a missing Julia executable — leaves a run.json with status FAIL (invariant I6).
+The single exception is a repository root that cannot be located: there is nowhere to write.
+"""
 
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from so_recon.config.load import ConfigError, load_project_config
+from so_recon.config.load import load_project_config
 from so_recon.config.schema import JuliaConfig, ProjectConfig
-from so_recon.environment.report import collect_environment, write_environment_report
-from so_recon.logging_setup import configure_logging
-from so_recon.paths import ProjectPaths, find_repo_root
-from so_recon.registry.run import RunContext
+from so_recon.environment.report import (
+    ENVIRONMENT_SCHEMA_VERSION,
+    build_environment_stamp,
+    collect_environment,
+    report_json_bytes,
+    write_environment_report,
+    write_environment_stamp,
+)
+from so_recon.paths import ProjectPaths, RepoRootNotFoundError, find_repo_root
+from so_recon.registry.hashing import sha256_bytes
+from so_recon.registry.run import RunContext, RunStatus
 from so_recon.registry.source_manifest import (
-    MissingSourceError,
+    MANIFEST_SCHEMA_VERSION,
+    SourceManifestStamp,
     build_source_manifest,
+    manifest_bytes,
+    write_manifest_stamp,
     write_source_manifest,
 )
-from so_recon.simulator.julia_bridge import (
-    JuliaLauncher,
-    JuliaNotFoundError,
-    JuliaRunError,
-    default_launcher,
-)
+from so_recon.runner import execute_run
+from so_recon.simulator.julia_bridge import JuliaLauncher, default_launcher
 from so_recon.smoke import run_smoke
 
-LauncherFactory = Callable[[ProjectPaths, JuliaConfig], JuliaLauncher]
+LauncherFactory = Callable[[ProjectPaths, JuliaConfig, str | None], JuliaLauncher]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -3066,251 +4786,376 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
-def _load(args: argparse.Namespace) -> tuple[ProjectConfig, ProjectPaths]:
-    root = args.root.resolve() if args.root else find_repo_root()
-    config_path = args.config or (root / "configs" / "project.yml")
-    cfg = load_project_config(config_path)
-    return cfg, ProjectPaths.from_config(root, cfg.paths)
-
-
-def _cmd_manifest(cfg: ProjectConfig, paths: ProjectPaths, argv: list[str]) -> int:
-    paths.ensure_dirs()
-    ctx = RunContext.start(command="manifest", argv=argv, cfg=cfg, paths=paths)
-    log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
-    try:
-        manifest = build_source_manifest(
-            cfg.sources, paths, config_version=cfg.config_version,
-            git_commit=ctx.record.git_commit, now=datetime.now(UTC),
+def _manifest_body(
+    cfg: ProjectConfig, paths: ProjectPaths
+) -> Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]:
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        now = datetime.now(UTC)
+        manifest = build_source_manifest(cfg.sources, paths, config_version=cfg.config_version)
+        ref, published = write_source_manifest(
+            manifest, paths, run_dir=ctx.run_dir,
+            published_path=paths.manifests / "source_manifest.json",
+            producer_run_id=ctx.run_id, now=now,
         )
-    except MissingSourceError as exc:
-        log.error("missing required sources: %s", exc.missing)
-        ctx.finish("FAIL", {}, notes=[f"missing: {m}" for m in exc.missing])
-        return 1
-    out = paths.manifests / "source_manifest.json"
-    write_source_manifest(manifest, out)
-    ctx.update(raw_input_hashes=manifest.hashes())
-    ctx.finish("PASS", {"source_manifest": paths.relative(out)})
-    print(f"run_id={ctx.run_id} status=PASS manifest={paths.relative(out)}")
-    return 0
+        write_manifest_stamp(
+            SourceManifestStamp(
+                manifest_version=MANIFEST_SCHEMA_VERSION,
+                manifest_sha256=ref.sha256,
+                run_id=ctx.run_id,
+                created_at=now.isoformat(),
+                git_commit=ctx.record.git_commit,
+                git_dirty=ctx.record.git_dirty,
+            ),
+            ctx.run_dir / "source_manifest_stamp.json",
+        )
+        ctx.update(raw_input_hashes=manifest.hashes())
+        ctx.add_output("source_manifest", ref)
+        log.info("source manifest published to %s", paths.relative(published))
+        return "PASS", []
+
+    return body
 
 
-def _cmd_env_report(cfg: ProjectConfig, paths: ProjectPaths, argv: list[str]) -> int:
-    paths.ensure_dirs()
-    ctx = RunContext.start(command="env-report", argv=argv, cfg=cfg, paths=paths)
-    configure_logging(ctx.run_id, ctx.run_dir / "run.log")
-    report = collect_environment(paths, now=datetime.now(UTC))
-    md = paths.reports / "environment_report.md"
-    js = paths.manifests / "environment.json"
-    write_environment_report(report, md, js)
-    ctx.update(
-        julia_version=report.julia_manifest_version,
-        jutuldarcy_version=report.julia_packages.get("JutulDarcy"),
+def _env_report_body(
+    paths: ProjectPaths,
+) -> Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]:
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        now = datetime.now(UTC)
+        report = collect_environment(paths)
+        md_ref, json_ref = write_environment_report(
+            report, paths, run_dir=ctx.run_dir,
+            md_path=paths.reports / "environment_report.md",
+            json_path=paths.manifests / "environment.json",
+            producer_run_id=ctx.run_id, now=now,
+        )
+        write_environment_stamp(
+            build_environment_stamp(
+                paths, report_sha256=sha256_bytes(report_json_bytes(report)),
+                run_id=ctx.run_id, now=now,
+            ),
+            ctx.run_dir / "environment_stamp.json",
+        )
+        ctx.update(
+            julia_version=report.julia_manifest_version,
+            jutul_version=report.julia_packages.get("Jutul"),
+            jutuldarcy_version=report.julia_packages.get("JutulDarcy"),
+            schema_versions={"environment_report": ENVIRONMENT_SCHEMA_VERSION},
+        )
+        ctx.add_output("environment_report", md_ref)
+        ctx.add_output("environment_json", json_ref)
+        log.info("environment report written")
+        return "PASS", []
+
+    return body
+
+
+def _report(ctx: RunContext, paths: ProjectPaths) -> int:
+    print(
+        f"run_id={ctx.run_id} status={ctx.record.status} run_dir={paths.relative(ctx.run_dir)}"
     )
-    ctx.finish("PASS", {"environment_report": paths.relative(md), "environment_json": paths.relative(js)})
-    print(f"run_id={ctx.run_id} status=PASS report={paths.relative(md)}")
-    return 0
-
-
-def _cmd_smoke(
-    cfg: ProjectConfig, paths: ProjectPaths, argv: list[str], args: argparse.Namespace,
-    launcher_factory: LauncherFactory | None,
-) -> int:
-    if launcher_factory is not None:
-        launcher: JuliaLauncher = launcher_factory(paths, cfg.julia)
-    else:
-        launcher = default_launcher(paths, cfg.julia, args.julia)
-    ctx = run_smoke(cfg=cfg, paths=paths, argv=argv, launcher=launcher,
-                    freeze_expected=args.freeze_expected)
-    print(f"run_id={ctx.run_id} status={ctx.record.status} run_dir={paths.relative(ctx.run_dir)}")
     for note in ctx.record.notes:
         print(f"  {note}")
     return 0 if ctx.record.status == "PASS" else 1
 
 
+def _record_startup_failure(
+    root: Path, command: str, argv: Sequence[str], exc: Exception
+) -> int:
+    """Configuration could not be loaded: still leave a FAIL record (invariant I6)."""
+    paths = ProjectPaths.default(root)
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        return "FAIL", [f"config error: {exc}"]
+
+    ctx = execute_run(command=command, argv=argv, cfg=None, paths=paths, body=body)
+    print(f"config error: {exc}", file=sys.stderr)
+    return _report(ctx, paths)
+
+
 def main(argv: Sequence[str] | None = None, *, launcher_factory: LauncherFactory | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(raw_argv)
-    try:
-        cfg, paths = _load(args)
-    except ConfigError as exc:
-        print(f"config error: {exc}", file=sys.stderr)
-        return 1
     full_argv = ["so-recon", *raw_argv]
+
     try:
-        if args.command == "manifest":
-            return _cmd_manifest(cfg, paths, full_argv)
-        if args.command == "env-report":
-            return _cmd_env_report(cfg, paths, full_argv)
-        return _cmd_smoke(cfg, paths, full_argv, args, launcher_factory)
-    except (JuliaNotFoundError, JuliaRunError) as exc:
-        # run.json already carries status=FAIL and the note (see run_smoke)
-        print(f"julia error: {exc}", file=sys.stderr)
+        root = args.root.resolve() if args.root else find_repo_root()
+    except RepoRootNotFoundError as exc:
+        # The only path with no run record: there is no repository to write into.
+        print(f"cannot locate repository root: {exc}", file=sys.stderr)
         return 1
+
+    try:
+        cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
+        paths = ProjectPaths.from_config(root, cfg.paths)
+    except Exception as exc:  # noqa: BLE001 - any config failure must still be recorded
+        return _record_startup_failure(root, args.command, full_argv, exc)
+
+    if args.command == "smoke":
+        factory = launcher_factory or default_launcher
+        ctx = run_smoke(
+            cfg=cfg, paths=paths, argv=full_argv,
+            launcher_factory=lambda: factory(paths, cfg.julia, args.julia),
+            freeze_expected=args.freeze_expected,
+        )
+        return _report(ctx, paths)
+
+    paths.ensure_dirs()
+    body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
+    ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
+    return _report(ctx, paths)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **Step 7: Прогнать все unit-тесты, lint, mypy**
+> `default_launcher(paths, cfg, julia_exe)` уже имеет нужную сигнатуру из Task 10, поэтому подходит на роль `LauncherFactory` без обёртки.
+
+- [ ] **Step 9: Прогнать все тесты, lint, format, mypy**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest -q -m "not julia" && uv run ruff check . && uv run ruff format --check . && uv run mypy
+uv run pytest -q -m "not julia" && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: все тесты проходят (около 45), ruff и mypy без ошибок. При замечаниях `ruff format` — выполнить `uv run ruff format .` и перепроверить.
+Ожидается: все тесты проходят, ruff и mypy без ошибок. При замечаниях `ruff format` — выполнить `uv run ruff format .` и перепроверить.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-cd /Users/george/Documents/so_field && git add src/so_recon/smoke.py src/so_recon/cli.py tests/conftest.py tests/unit/test_smoke.py tests/unit/test_cli.py && git commit -m "feat(e00): add so-recon CLI with manifest, env-report and smoke commands
+git add src/so_recon/runner.py src/so_recon/smoke.py src/so_recon/cli.py tests/conftest.py tests/unit/test_runner.py tests/unit/test_smoke.py tests/unit/test_cli.py && git commit -m "feat(e00): add run executor guaranteeing FAIL records, smoke scenario and so-recon CLI
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 12: Прогон gate, заморозка ожиданий, отчёт `reports/stages/E00.md`
+### Task 13: Прогон gate, заморозка ожиданий, отчёт `reports/stages/E00.md`
 
 **Files:**
-- Create: `configs/smoke_expected.json` (генерируется), `reports/manifests/source_manifest.json`, `reports/manifests/environment.json`, `reports/environment_report.md` (генерируются), `reports/stages/E00.md`
+- Create: `configs/smoke_expected.json`, `reports/manifests/source_manifest.json`, `reports/manifests/environment.json`, `reports/environment_report.md` (генерируются), `reports/stages/E00.md`
 - Modify: `README.md` (при необходимости уточнить команды)
 
 **Interfaces:**
-- Consumes: CLI (Task 11), `make gate` (Task 1).
+- Consumes: CLI (Task 12), `scripts/gate.sh` (Task 1).
 - Produces: статус этапа E00 и разрешённые входы для E01/E05.
+
+**Замечания ревизии 2, реализуемые здесь:** №1 (сверка `physical_line_count`/`data_rows`), №6 (запуск gate и gate-clean), №10 (доказательство отсутствия git-diff при повторном gate), №11.
 
 - [ ] **Step 1: Заморозить ожидания smoke на реальной Julia**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run so-recon smoke --freeze-expected && cat configs/smoke_expected.json
+uv run so-recon smoke --freeze-expected && cat configs/smoke_expected.json
 ```
-Ожидается: `status=PASS`, файл содержит `fixture_content_hash`, `cumulative_oil_m3`, `mean_so_final`, `julia_version`, `jutuldarcy_version`.
+Ожидается: `status=PASS`; файл содержит `fixture_content_hash`, `case_sha256`, `cumulative_oil_m3`, `mean_so_final`, `julia_version`, `jutul_version`, `jutuldarcy_version` и **не содержит** временных меток.
 
 - [ ] **Step 2: Повторный прогон без заморозки должен пройти**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run so-recon smoke && ls artifacts/runs | tail -3
+uv run so-recon smoke && ls artifacts/runs | tail -3
 ```
 Ожидается: `status=PASS`, без заметок о расхождениях.
 
-- [ ] **Step 3: Сформировать source manifest и environment report на реальных данных**
-
+Проверить, что `configs/smoke_expected.json` не изменился повторным запуском:
 ```bash
-cd /Users/george/Documents/so_field && uv run so-recon manifest && uv run so-recon env-report && cat reports/manifests/source_manifest.json && cat reports/environment_report.md
-```
-Проверить вручную по `DATA_AUDIT.md` §2: `line_count` для `coords` = 4 241, `gis` = 107 176, `mer` = 1 388 595, `perf` = 33 236, `plastoper` = 3 572 (данные + заголовок; `wc -l` показывал именно эти значения). Если число отличается — **не править код**: зафиксировать расхождение в E00.md как замечание к `DATA_AUDIT.md`.
-
-- [ ] **Step 4: Полный gate на чистой установке**
-
-```bash
-cd /Users/george/Documents/so_field && make gate 2>&1 | tail -40
-```
-Ожидается: `uv sync --frozen` без изменения `uv.lock`; `Pkg.instantiate()` без изменения `Manifest.toml`; три команды CLI со `status=PASS`; pytest — все пройдены, включая `tests/integration/test_julia_smoke.py` (не skipped); ruff и mypy чисты. Проверить, что lock-файлы не изменились:
-```bash
-cd /Users/george/Documents/so_field && git status --short uv.lock julia/Manifest.toml && echo "(empty above = locks unchanged)"
+git status --porcelain -- configs/smoke_expected.json; echo "(empty above = unchanged)"
 ```
 
-- [ ] **Step 5: Написать `reports/stages/E00.md`**
+- [ ] **Step 3: Сформировать manifest и environment report на реальных данных**
+
+```bash
+uv run so-recon manifest && uv run so-recon env-report && cat reports/manifests/source_manifest.json && cat reports/environment_report.md
+```
+
+Сверить счётчики с проверенной таблицей (раздел «Проверенные контракты исходных файлов»):
+
+| файл | physical_line_count | data_rows |
+|---|---:|---:|
+| coords.csv | 4241 | 4240 |
+| gis.csv | 107176 | 107175 |
+| mer.csv | 1388595 | 1388594 |
+| perf.csv | 33236 | 33235 |
+| plastoper.csv | 3573 | 3572 |
+
+Автоматическая сверка:
+```bash
+python3 - <<'PY'
+import json
+expected = {"coords": (4241, 4240), "gis": (107176, 107175), "mer": (1388595, 1388594),
+            "perf": (33236, 33235), "plastoper": (3573, 3572)}
+m = json.load(open("reports/manifests/source_manifest.json", encoding="utf-8"))
+bad = []
+for s in m["sources"]:
+    got = (s["physical_line_count"], s["data_rows"])
+    if got != expected[s["name"]]:
+        bad.append((s["name"], got, expected[s["name"]]))
+print("MISMATCHES:", bad if bad else "none")
+PY
+```
+`data_rows` должны совпасть с колонкой «Строк» в `DATA_AUDIT.md` §2. Если число отличается — **не править код**: зафиксировать расхождение в `E00.md` как замечание и обосновать (физический счёт против разобранных записей).
+
+Убедиться, что источники не тронуты:
+```bash
+ls -1 data/Ромашка_сырые/ && test ! -e data/raw && echo "sources untouched, no data/raw created"
+```
+
+- [ ] **Step 4: Зафиксировать сгенерированные детерминированные артефакты в git**
+
+Их нужно закоммитить **до** gate, чтобы шаг проверки детерминизма в `gate.sh` сравнивал отслеживаемые файлы.
+
+```bash
+git add configs/smoke_expected.json reports/manifests/source_manifest.json reports/manifests/environment.json reports/environment_report.md && git commit -m "chore(e00): freeze smoke expectations and publish source/environment manifests
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 5: Полный gate на чистом Python-окружении**
+
+```bash
+make gate 2>&1 | tail -40
+```
+Ожидается: все восемь шагов проходят, последняя строка — `== gate PASS ... ==`, включая `deterministic artifacts unchanged (no git pollution)`. Дополнительно убедиться вручную:
+```bash
+git status --porcelain -- uv.lock julia/Manifest.toml julia/.julia-version reports configs; echo "(empty above = no git pollution)"
+```
+
+- [ ] **Step 6: Gate на чистом Julia depot**
+
+```bash
+make gate-clean 2>&1 | tail -20
+```
+Ожидается: `== gate PASS ... ==`. Шаг долгий (полная загрузка и precompile JutulDarcy во временный depot). Если он не укладывается в разумное время или падает по сети — **не считать это провалом E00**: зафиксировать в `E00.md` как ограничение со статусом `PASS_WITH_LIMITATIONS` и указать причину.
+
+- [ ] **Step 7: Написать `reports/stages/E00.md`**
 
 Заполнить фактическими значениями из `artifacts/runs/<run_id>/run.json`, `reports/manifests/source_manifest.json`, `reports/environment_report.md`, `configs/smoke_expected.json`. Шаблон:
 
 ```markdown
 # E00 — Основание проекта и воспроизводимое окружение
 
-**Статус:** PASS | PASS_WITH_LIMITATIONS  (выбрать по результату Step 4)
+**Статус:** PASS | PASS_WITH_LIMITATIONS  (выбрать по результату Steps 5–6)
 **Дата:** <YYYY-MM-DD>
-**SPEC.md:** 3.0 · **STAGES.md:** 3.0 · **config_version:** E00.1
-**Git commit отчёта:** <sha из `git rev-parse HEAD` после финального коммита кода; сам отчёт коммитится следом>
+**SPEC.md:** 3.0 · **STAGES.md:** 3.0 · **config_version:** E00.2
+**Git commit кода:** <sha последнего коммита кода; сам отчёт коммитится следом>
 
 ## 1. Входные артефакты и hashes
 
-Источник: `reports/manifests/source_manifest.json` (run_id `<...>`).
+Источник: `reports/manifests/source_manifest.json` (детерминированный; run-штамп — в `artifacts/runs/<run_id>/source_manifest_stamp.json`).
 
-| файл | sha256 | байт | строк |
-|---|---|---:|---:|
-| data/raw/coords.csv | <sha> | <n> | <n> |
-| data/raw/gis.csv | <sha> | <n> | <n> |
-| data/raw/mer.csv | <sha> | <n> | <n> |
-| data/raw/perf.csv | <sha> | <n> | <n> |
-| data/raw/plastoper.csv | <sha> | <n> | <n> |
+| файл | sha256 | байт | physical_line_count | data_rows |
+|---|---|---:|---:|---:|
+| data/Ромашка_сырые/coords.csv | <sha> | <n> | 4241 | 4240 |
+| data/Ромашка_сырые/gis.csv | <sha> | <n> | 107176 | 107175 |
+| data/Ромашка_сырые/mer.csv | <sha> | <n> | 1388595 | 1388594 |
+| data/Ромашка_сырые/perf.csv | <sha> | <n> | 33236 | 33235 |
+| data/Ромашка_сырые/plastoper.csv | <sha> | <n> | 3573 | 3572 |
 
-Сверка с `DATA_AUDIT.md` §2: <совпадает / перечислить расхождения>.
+`physical_line_count` — физические строки (включая последнюю строку без перевода строки в `plastoper.csv`); `data_rows = physical_line_count - 1` (один заголовок). Сверка с `DATA_AUDIT.md` §2 (колонка «Строк» = `data_rows`): <совпадает / перечислить расхождения>.
+
+Исходники **не перемещались и не изменялись**: остаются в `data/Ромашка_сырые/`, открываются только на чтение.
 
 ## 2. Окружение
 
-Источник: `reports/environment_report.md`.
+Источник: `reports/environment_report.md` (детерминированный; время и git-состояние — в `artifacts/runs/<run_id>/environment_stamp.json`).
 
 - Python <ver>, uv <ver>, `uv.lock` sha256 `<...>`
-- Julia <ver>, `julia/Manifest.toml` sha256 `<...>`, JutulDarcy <ver>, Jutul <ver>
+- Julia <ver> — **project-pinned** (`julia/.julia-version`), не утверждение об upstream stable
+- `julia/Manifest.toml` sha256 `<...>`, JutulDarcy <ver>, Jutul <ver>
 - environment_lock_hash `<...>`
 - ОС/арх: <...>
 
 ## 3. Выполненные команды
 
-    make gate
     uv run so-recon smoke --freeze-expected   # однократно, run_id <...>
     uv run so-recon smoke                     # run_id <...>, PASS
     uv run so-recon manifest                  # run_id <...>, PASS
     uv run so-recon env-report                # run_id <...>, PASS
-    uv run pytest -q                          # <N> passed
+    make gate                                 # PASS
+    make gate-clean                           # PASS | не выполнен (причина)
 
 ## 4. Результаты проверок
 
+- Smoke сквозной: Python пишет `case.json` (sha256 `<...>`), Julia возвращает `input_sha256`, значения совпали.
 - Smoke fixture: content_hash `<...>` (seed 20260913, 4 скважины × 12 месяцев).
 - JutulDarcy smoke (1D, nx=20, 12 шагов по 30 сут): cumulative_oil_m3 = <...>, cumulative_water_injected_m3 = <...>, mean_so_final = <...>; повторный прогон в допуске rel_tol = 1e-6.
+- Версии Julia/Jutul/JutulDarcy совпадают с lock (расхождение дало бы FAIL).
 - Тесты: <N> passed, 0 failed; integration-тест Julia выполнен (не skipped).
-- Lint/типизация: ruff clean, mypy strict clean.
+- Lint/типизация: `ruff check`, `ruff format --check`, `mypy --strict` чисты.
 - Guard абсолютных путей: `tests/test_no_absolute_paths.py` PASS.
-- Lock-файлы после `make gate` не изменились.
+- Детерминизм: повторный `make gate` не изменил ни один отслеживаемый файл.
+- FAIL-запись: проверена тестами для отсутствующего источника, битой конфигурации, отсутствующей Julia и ошибки решателя.
 
 ## 5. Созданные артефакты
 
-- `pyproject.toml`, `uv.lock`, `.python-version`, `Makefile`, `README.md`
-- `julia/Project.toml`, `julia/Manifest.toml`, `julia/smoke/smoke_case.jl`
+- `pyproject.toml`, `uv.lock`, `.python-version`, `Makefile`, `scripts/gate.sh`, `scripts/gate_clean.sh`, `README.md`
+- `julia/Project.toml`, `julia/Manifest.toml`, `julia/.julia-version`, `julia/smoke/smoke_case.jl`
 - `configs/project.yml`, `configs/smoke_expected.json`
-- `src/so_recon/` (paths, config, registry, environment, synthetic, simulator, smoke, cli)
+- `src/so_recon/` (paths, config, registry, environment, synthetic, simulator, runner, smoke, cli)
 - `reports/manifests/source_manifest.json`, `reports/manifests/environment.json`, `reports/environment_report.md`
 - `artifacts/runs/<run_id>/` (локально, не в git)
 
 ## 6. Ограничения
 
-- CI не настроен (нет remote; precompile JutulDarcy в CI дорог). Роль чистой установки выполняет `make gate`.
+- CI не настроен (нет remote; precompile JutulDarcy в CI дорог). Роль чистой установки выполняют `make gate` и `make gate-clean`.
 - Julia-smoke — проверка работоспособности окружения, не верификация физики (E05).
-- Raw CSV перенесены в `data/raw/` локально; хеши совпали с исходными.
+- `physical_line_count` — физический счёт строк; переводы строк внутри закавыченных полей не учитываются, потому что E00 не парсит CSV. Реальное число записей определяется в E01.
+- Единственный случай без run-записи — недоступный repository root: писать некуда.
+- GNU Make 3.81 не поддерживает `.SHELLFLAGS`, поэтому `pipefail` реализован в `scripts/gate.sh`.
 - Расхождения документации: `STAGES.md` §8 ссылается на `docs/README_SO_RECON.md`, фактический файл `docs/README.md`. <другие найденные>
 
 ## 7. Что передаётся следующим этапам
 
-- E01: `ProjectPaths`, `ProjectConfig`/`SourceFileSpec` (encoding/delimiter/decimal для пяти файлов), `RunContext`, `source_manifest.json` как эталон входов, `hash_and_count`.
-- E05: `julia/` окружение с зафиксированным JutulDarcy, `SubprocessJuliaLauncher`/`JuliaLauncher` как точка расширения, шаблон JSON-обмена.
-- Все этапы: правило «один запуск = один `run_id` + `run.json` + `resolved_config.json` + `run.log`».
+- E01: `ProjectPaths`, `ProjectConfig`/`SourceFileSpec` (encoding/delimiter/decimal/header_lines для пяти файлов), `RunContext`/`execute_run`, `ArtifactRef`, `source_manifest.json` как эталон входов, `hash_and_count`.
+- E05: `julia/` окружение с зафиксированным JutulDarcy, `SubprocessJuliaLauncher`/`JuliaLauncher` как точка расширения, контракт обмена `case.json` → результат с `input_sha256`.
+- Все этапы: правило «один запуск = один `run_id` + `run.json` + `resolved_config.json` + `run.log`», immutable `ArtifactRef` и разделение детерминированных коммитируемых артефактов и run-штампов.
 ```
 
-- [ ] **Step 6: Финальные проверки и коммит отчёта и сгенерированных файлов**
+- [ ] **Step 8: Финальные проверки и коммит отчёта**
 
 ```bash
-cd /Users/george/Documents/so_field && uv run pytest -q && uv run ruff check . && uv run mypy && git add configs/smoke_expected.json reports/manifests/source_manifest.json reports/manifests/environment.json reports/environment_report.md reports/stages/E00.md README.md && git commit -m "docs(e00): freeze smoke expectations, add source/environment manifests and stage report
+uv run pytest -q && uv run ruff check . && uv run ruff format --check . && uv run mypy && git add reports/stages/E00.md README.md && git commit -m "docs(e00): add E00 stage report with verified hashes, line counts and gate results
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
-Затем проставить в `reports/stages/E00.md` фактический commit hash кода (если он указан как предыдущий коммит — ничего менять не нужно) и убедиться, что `git status` чист, кроме `.idea/workspace.xml`.
+Убедиться, что `git status` чист:
+```bash
+git status --short
+```
 
 ---
 
 ## Self-Review
 
 **Spec coverage (STAGES E00 «Основная работа» → задачи):**
-- структура Python/Julia-проекта и typed configuration → Tasks 1, 4, 8;
-- lock-файлы Python, Julia, JutulDarcy → Tasks 1 (`uv.lock`), 8 (`Manifest.toml`, compat 0.3);
-- каталоги raw/interim/processed/artifacts/reports → Task 3 (`ProjectPaths`), Task 4 (`PathsConfig`), Task 6 (перенос raw);
-- manifest исходных файлов, configs и environment → Task 6 (source), Task 5 (`resolved_config.json`, `run.json`), Task 10 (environment);
-- минимальный synthetic fixture и smoke test → Tasks 7, 8, 9, 11;
-- единый CLI/run ID и правила логирования → Tasks 5, 11.
-**Ключевые выходы:** `pyproject.toml`+`uv.lock` (T1), `Project.toml`+`Manifest.toml` (T8), каркас каталогов (T1, T8), `source_manifest.json` (T6/T12), `environment_report.md` (T10/T12), `reports/stages/E00.md` (T12).
-**Gate:** чистая установка → `make gate` (T1, T12); детерминированный fixture → T7 + T8 Step 5 + `smoke_expected.json` (T12); версии и hashes → `run.json`, manifests (T5, T6, T10); нет абсолютных путей → `tests/test_no_absolute_paths.py` (T3) и валидаторы относительных путей в конфиге (T4).
-**SPEC 19.12 поля lineage в `RunRecord`:** raw hashes ✓, schema versions ✓, git commit ✓, environment lock hash ✓, Julia/Jutul версия ✓, checkpoint hash (поле, `None`) ✓, resolved config hash ✓, parent IDs ✓, timestamp ✓, command/run ID ✓.
+- структура Python/Julia-проекта и typed configuration → Tasks 1, 4, 9;
+- lock-файлы Python, Julia, JutulDarcy → Tasks 1 (`uv.lock`), 9 (`Manifest.toml`, `.julia-version`, compat 0.3);
+- каталоги raw/interim/processed/artifacts/reports → Task 3 (`ProjectPaths`), Task 4 (`PathsConfig`); источники остаются на исходном пути;
+- manifest исходных файлов, configs и environment → Task 7 (source), Task 6 (`resolved_config.json`, `run.json`), Task 11 (environment);
+- минимальный synthetic fixture и smoke test → Tasks 8, 9, 10, 12;
+- единый CLI/run ID и правила логирования → Tasks 6, 12.
 
-**Placeholder scan:** значения `<...>` присутствуют только в шаблоне отчёта Task 12 Step 5 и обозначают фактические результаты прогона; все кодовые шаги содержат полный код.
+**Ключевые выходы:** `pyproject.toml`+`uv.lock` (T1), `Project.toml`+`Manifest.toml`+`.julia-version` (T9), каркас каталогов (T1), `source_manifest.json` (T7/T13), `environment_report.md` (T11/T13), `reports/stages/E00.md` (T13).
 
-**Type consistency:** `ProjectPaths.from_config(root, cfg.paths)` используется одинаково в T9, T11; `RunContext.start(command=, argv=, cfg=, paths=, ...)` — T5 сигнатура, T11 вызовы; `run_julia_smoke(launcher, script, out_path, *, nx, n_steps)` — T9 определение, T9/T11 вызовы; `JuliaSmokeResult` поля совпадают с JSON-ключами `smoke_case.jl` (T8) и `SmokeExpectation` (T11); `environment_lock_hash(paths)` — T5 определение, T10 использование; `hash_and_count` возвращает `(sha, size, lines)` — T6 тесты и код согласованы.
+**Gate:** чистая установка → `make gate` (T1, T13) и `make gate-clean` (T1, T13); детерминированный fixture → T8 + T9 Step 5 + `smoke_expected.json` (T13); версии и hashes → `run.json`, manifests (T6, T7, T11); нет абсолютных путей → `tests/test_no_absolute_paths.py` (T3) и валидаторы путей (T3/T4).
+
+**SPEC 19.12 поля lineage в `RunRecord`:** raw hashes ✓, schema versions ✓, git commit ✓, environment lock hash ✓, Julia/Jutul/JutulDarcy версии ✓, checkpoint hash (поле, `None`) ✓, resolved config hash ✓, parent artifact IDs (в `ArtifactRef.parent_artifact_ids`) ✓, timestamp ✓, command/run ID ✓.
+
+**Покрытие 12 замечаний ревизии 2:**
+
+| № | Замечание | Где реализовано | Чем проверено |
+|---:|---|---|---|
+| 1 | `plastoper` decimal `","`; `physical_line_count` 3573 / `data_rows` 3572 | T4 (`configs/project.yml`, `header_lines`), T7 (`SourceEntry`) | `test_repo_config_file_is_valid_and_matches_audited_contracts`, `test_hash_and_count_without_trailing_newline`, `test_manifest_splits_physical_lines_from_data_rows`, T13 Step 3 |
+| 2 | Удалён разрушительный `mv`; источники неизменяемы | T3 (`ensure_dirs` не создаёт raw), T4 (пути), T7 (только `"rb"`) | `test_ensure_dirs_creates_runtime_dirs_but_not_sources`, `test_sources_are_never_modified`, T13 Step 3 |
+| 3 | Сквозной smoke: `case.json` → Julia → `input_sha256` | T8 (`build_smoke_case`), T9 (`read_case`), T10 (сверка), T12 | `test_case_bytes_are_canonical_and_hashable`, `test_run_julia_smoke_rejects_a_mismatched_input_hash`, `test_run_smoke_detects_a_tampered_case_file`, T9 Step 4 |
+| 4 | `ArtifactRef` + immutability | T5 (`artifact.py`), T6 (`outputs`) | `test_rewriting_with_different_content_is_refused`, `test_run_context_writes_lineage_files` |
+| 5 | FAIL при любом исключении, включая отсутствие Julia | T6 (degraded ctx), T12 (`execute_run`, factory внутри тела) | `test_execute_run_converts_any_exception_into_a_fail_record`, `test_run_smoke_records_fail_when_julia_is_missing`, `test_broken_config_still_produces_a_fail_run_record` |
+| 6 | Gate: pipefail/tee, `ruff format --check`, `gate-clean` с временным depot | T1 (`scripts/gate.sh`, `scripts/gate_clean.sh`) | T1 Step 10 (`bash -n`), T13 Steps 5–6 |
+| 7 | Точные версии Python и Julia; Julia — project-pinned | T1 (`.python-version` 3.13.2), T9 (`.julia-version`, README) | T1 Step 8, T9 Step 1–2, `test_collect_environment...` (`julia_pinned_version`) |
+| 8 | Запрет `..`, Windows absolute/UNC, symlink-escape | T3 (`validate_relative_path`, `resolve_within_root`), T4 (валидаторы) | `test_validate_relative_path_rejects` (16 кейсов), `test_resolve_within_root_rejects_symlink_escape`, `test_dangerous_paths_config_values_are_rejected` |
+| 9 | Несовпадение с lock → FAIL | T11 (`check_locked_versions`), T12 (`compare_with_expected`, вызов в `smoke_body`) | `test_version_drift_against_lock_is_a_mismatch`, `test_version_drift_is_a_mismatch_not_a_note`, `test_run_smoke_fails_when_versions_drift_from_the_lock` |
+| 10 | Детерминированные manifests отдельно от run-timestamps | T7 (`SourceManifest`/`SourceManifestStamp`), T11 (`EnvironmentReport`/`EnvironmentStamp`), T12 (`SmokeExpectation` без `frozen_at`), T1 (проверка в gate) | `test_manifest_has_no_timestamps_or_git_state`, `test_report_is_deterministic_and_carries_no_time_or_git_state`, `test_manifest_is_byte_identical_on_a_second_run`, T13 Step 5 |
+| 11 | Нет личных абсолютных путей в командах плана | все задачи (команды из корня репозитория) | `tests/test_no_absolute_paths.py`, ручная вычитка плана |
+| 12 | Атомарная запись `run.json` и manifests | T2 (`atomic.py`), используется в T5–T12 | `test_failed_write_leaves_no_debris_and_keeps_old_content`, `test_write_atomic_leaves_no_temporary_files` |
+
+**Placeholder scan:** значения `<...>` присутствуют только в шаблоне отчёта Task 13 Step 7 и обозначают фактические результаты прогона; все кодовые шаги содержат полный код.
+
+**Type consistency:** `ProjectPaths.from_config(root, cfg.paths)` — T3 определение, T4/T10/T12 вызовы; `RunContext.start(command=, argv=, cfg=, paths=, ...)` — T6 сигнатура, T12 вызовы через `execute_run`; `run_julia_smoke(launcher, script, case_path, out_path, *, expected_input_sha256)` — T10 определение, T10/T12 вызовы; поля `JuliaSmokeResult` совпадают с JSON-ключами `smoke_case.jl` (T9) и с `SmokeExpectation` (T12); `check_locked_versions(locked, *, julia_version, jutul_version, jutuldarcy_version)` — T11 определение, T12 вызов; `hash_and_count` возвращает `(sha, size, physical_line_count)` — T7 тесты и код согласованы; `write_artifact(path, data, paths, *, schema_version, producer_run_id, media_type, parent_artifact_ids, now)` — T5 определение, T7/T11/T12 вызовы.
