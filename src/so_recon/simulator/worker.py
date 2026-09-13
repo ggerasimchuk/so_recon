@@ -39,10 +39,11 @@ usually goes wrong:
 Job identity is checked on both sides. Python stamps what only it knows — the environment
 lock hash and the solver-config digest the descriptor declares — into
 `ForwardResult.solver_metadata`, and `main.jl` re-hashes the bytes of the case, of every
-array the case references and of the solver configuration before it runs anything at all.
-Until the JutulDarcy adapter lands, `run` can only answer `INVALID_INPUT: adapter
-unavailable`, and this side refuses a `COMPLETE` reply outright: a transport must not be
-able to manufacture a successful physics result without a solver.
+array the case references and of the solver configuration before it runs anything at all,
+then hands the verified job to the JutulDarcy adapter. What a reply is allowed to claim is
+decided by `ForwardResult` itself: a `COMPLETE` that does not carry the whole requested time
+axis, its states and every output path cannot become a record, and is reported as a protocol
+failure. Nothing here invents the outputs a worker did not send.
 """
 
 from __future__ import annotations
@@ -63,7 +64,7 @@ from subprocess import PIPE, Popen, TimeoutExpired
 from types import TracebackType
 from typing import IO, Any, Literal, get_args
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from so_recon.config.resources import ResourceProfile, require_resource_profile
 from so_recon.config.schema import StrictModel
@@ -142,6 +143,21 @@ def validate_reply(reply: dict[str, object], job_id: str) -> None:
             f"unknown worker status {reply.get('status')!r}; the contract allows "
             f"{sorted(WORKER_STATUSES)}"
         )
+
+
+def _first_validation_error(exc: ValidationError) -> str:
+    """The first rule a rejected record broke, without the whole pydantic report.
+
+    A reason string is persisted into `run.json` and read by a person deciding what went
+    wrong. The full report repeats the model, the input and a documentation URL for every
+    field; the first message names the rule that was actually broken.
+    """
+    errors = exc.errors()
+    if not errors:  # pragma: no cover - pydantic always reports at least one
+        return str(exc)
+    first = errors[0]
+    location = ".".join(str(part) for part in first.get("loc", ())) or "record"
+    return f"{location}: {first.get('msg', 'invalid')}"
 
 
 def _signal_name(number: int) -> str:
@@ -710,19 +726,9 @@ class PersistentJuliaWorker:
         self, job: JobDescriptor, reply: dict[str, Any], cost_inputs: _CostInputs
     ) -> ForwardResult:
         status: ForwardStatus = reply["status"]
-        if status == "COMPLETE":
-            # Defence in depth for the sequencing of this stage: no solver adapter is
-            # wired yet, so nothing downstream may treat a reply as a finished physics
-            # result. Task 5 replaces this branch with the real COMPLETE decoding.
-            return self._classified(
-                job,
-                "PROTOCOL_FAILURE",
-                "the worker reported COMPLETE, but no JutulDarcy adapter is wired into "
-                "this build; a transport cannot produce a physics result without a solver",
-                cost_inputs,
-            )
-        reason = reply.get("reason")
-        if not isinstance(reason, str) or not reason:
+        raw_reason = reply.get("reason")
+        reason = raw_reason if isinstance(raw_reason, str) and raw_reason else None
+        if status != "COMPLETE" and reason is None:
             return self._classified(
                 job,
                 "PROTOCOL_FAILURE",
@@ -768,21 +774,35 @@ class PersistentJuliaWorker:
             metadata["result_sha256"] = digest
             cost_inputs = cost_inputs.with_output_bytes(_directory_bytes(result_dir))
         declared = reply.get("physics_class")
-        return self._build_result(
-            job,
-            status=status,
-            reason=reason,
-            physics_class=declared if isinstance(declared, str) and declared else "unknown",
-            cost_inputs=cost_inputs,
-            extra_metadata=metadata,
-        )
+        try:
+            return self._build_result(
+                job,
+                status=status,
+                reason=reason,
+                physics_class=declared if isinstance(declared, str) and declared else "unknown",
+                cost_inputs=cost_inputs,
+                extra_metadata=metadata,
+            )
+        except ValidationError as exc:
+            # `ForwardResult` is the authority on what each status has to carry — a
+            # COMPLETE result needs the whole requested time axis, its states and every
+            # output path (plan 3.2). A reply that claims a status it did not deliver is a
+            # protocol failure, and it is refused by the record's own rules rather than by
+            # a second copy of them here.
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the worker reported {status}, but that cannot be recorded as a forward "
+                f"result: {_first_validation_error(exc)}",
+                cost_inputs,
+            )
 
     def _build_result(
         self,
         job: JobDescriptor,
         *,
         status: ForwardStatus,
-        reason: str,
+        reason: str | None,
         physics_class: str,
         cost_inputs: _CostInputs,
         extra_metadata: Mapping[str, str],
@@ -918,8 +938,9 @@ class _CostInputs:
             cpu_s=self.cpu_s,
             peak_rss_bytes=self.peak_rss_bytes,
             output_bytes=self.output_bytes,
-            # No physics ran in this build, so there are no solver counters to report.
-            # Task 5 fills these from the adapter's own statistics.
+            # Building a model takes no time steps, so there are no solver counters to
+            # report yet; the stage that integrates the schedule fills these from the
+            # simulator's own statistics rather than from a guess made here.
             accepted_steps=0,
             cut_steps=0,
             nonlinear_iterations=0,

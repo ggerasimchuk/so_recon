@@ -12,9 +12,11 @@ What this asserts that the transport tests cannot:
 * The process is stable across jobs: both pings and both jobs are answered by one pid.
 * Julia re-hashes the bytes it was told to run on. A descriptor whose declared digests are
   wrong is refused with a digest mismatch, by the same code path that accepts a good one.
-* `run` cannot succeed. With no adapter wired, the only answer it has is
-  `INVALID_INPUT: adapter unavailable` — and it still publishes a failure record into the
-  job's own directory, whose bytes the Python side verifies against the digest it was sent.
+* `run` cannot succeed. The adapter builds the model, but this build integrates no time
+  axis, so the answer is an explicit `outputs unavailable` refusal — and it still publishes
+  a record into the job's own directory, whose bytes the Python side verifies against the
+  digest it was sent. What the constructor actually built is checked in
+  `test_e01_physics.py`; this file is about the transport and the identity check.
 * stdout carried protocol frames only: every frame in this session parsed, and the native
   per-job log files were created beside them.
 """
@@ -155,10 +157,11 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
         )
         result = worker.submit(good, ledger)
 
-        # No solver is wired, so this is the only answer `run` has. The physics class was
-        # still read out of the verified case.
+        # A model was built, but a forward result needs states this build cannot produce,
+        # so the answer names what is missing. The physics class was read out of the
+        # verified case.
         assert result.status == "INVALID_INPUT"
-        assert result.reason == "adapter unavailable"
+        assert result.reason is not None and result.reason.startswith("outputs unavailable")
         assert result.physics_class == "OW"
         assert result.job_id == good.job_id
         assert result.case_sha256 == good.case_sha256

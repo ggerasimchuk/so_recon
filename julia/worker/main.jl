@@ -27,19 +27,25 @@
 # declares; the case's own model_hash must match the descriptor's too. The Python side
 # stamps what only it knows (the environment lock hash) onto the result.
 #
-# Until the JutulDarcy adapter lands (Task 5), `run` performs that whole identity check
-# and then answers INVALID_INPUT with the reason "adapter unavailable". There is no code
-# path in this file that can answer COMPLETE: a transport must not be able to manufacture
-# a successful physics result without a solver.
+# Once those checks pass, `run` hands the job to the JutulDarcy adapter, which builds the
+# model, its parameters and its initial state inside one call and lets them go when that
+# call returns. The adapter cannot answer COMPLETE either: integrating the requested time
+# axis and publishing its outputs is a later stage, so a job is answered with the model it
+# was able to build and an explicit refusal — a transport must not be able to manufacture a
+# successful physics result out of a constructor.
 
 using Jutul, JutulDarcy, JSON, HDF5, SHA
 using LinearAlgebra: BLAS
+
+# The adapter is loaded once, with the packages. It holds no model: `run_job` builds one per
+# job and returns it, which is what keeps job B's result independent of job A.
+include(joinpath(@__DIR__, "..", "adapter", "SOReconAdapter.jl"))
+using .SOReconAdapter
 
 const PROTOCOL_VERSION = "worker-1"
 const JOB_SCHEMA_VERSION = "job-1"
 const RESULT_SCHEMA_VERSION = "worker-result-1"
 const RESULT_FILENAME = "result.json"
-const ADAPTER_UNAVAILABLE = "adapter unavailable"
 
 """Write one protocol frame. Never called while stdout is redirected to a job log."""
 function emit(payload::AbstractDict)
@@ -137,8 +143,9 @@ end
 """
 Run one job. Everything it needs is a local of this function and dies with it.
 
-Task 5 builds the JutulDarcy model and state here, inside this same scope, for the same
-reason: what the next job sees must not depend on what this one allocated.
+The model, its parameters and its initial state are built by the adapter inside this same
+scope, for the same reason: what the next job sees must not depend on what this one
+allocated. Jobs A, B and A again get three independently built models from one process.
 """
 function execute_job(request::AbstractDict)
     job_id = String(request["job_id"])
@@ -202,21 +209,36 @@ function execute_job(request::AbstractDict)
         end
     end
 
-    # Both branches are INVALID_INPUT, and neither can become COMPLETE: no solver is
-    # wired into this build, so nothing here has computed any physics to report.
-    reason = if isempty(problems)
-        ADAPTER_UNAVAILABLE
-    else
+    # Bytes first, physics second. A job whose inputs do not hash to what the descriptor
+    # declared never reaches the adapter at all; one whose inputs check out is built into a
+    # model here, inside this scope, and the model is released when this function returns.
+    status = "INVALID_INPUT"
+    built = nothing
+    reason = if !isempty(problems)
         string("declared inputs do not match their bytes: ", join(problems, "; "))
+    else
+        try
+            outcome = SOReconAdapter.run_job(job, root)
+            status = outcome.status
+            built = outcome.model
+            outcome.reason
+        catch err
+            # The inputs were what they claimed to be, so this is not an input problem: the
+            # case describes something the native constructor cannot build.
+            status = "PHYSICALLY_INVALID"
+            string("the case could not be built into a JutulDarcy model: ",
+                   sprint(showerror, err))
+        end
     end
 
     record = Dict(
         "schema_version" => RESULT_SCHEMA_VERSION,
         "job_id" => job_id,
         "attempt" => get(job, "attempt", nothing),
-        "status" => "INVALID_INPUT",
+        "status" => status,
         "reason" => reason,
         "physics_class" => physics_class,
+        "model" => built,
         "case_sha256" => get(job, "case_sha256", nothing),
         "model_hash" => get(job, "model_hash", nothing),
         "solver_config_sha256" => get(job, "solver_config_sha256", nothing),
@@ -232,7 +254,7 @@ function execute_job(request::AbstractDict)
 
     reply = Dict{String,Any}(
         "job_id" => job_id,
-        "status" => "INVALID_INPUT",
+        "status" => status,
         "reason" => reason,
         "physics_class" => physics_class,
         "result_path" => nothing,

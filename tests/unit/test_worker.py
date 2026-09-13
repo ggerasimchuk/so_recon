@@ -4,8 +4,9 @@ Everything here is about the *transport*: framing, deadlines, process lifetime a
 classification of a job that produced no reply. None of it is about physics. The fake
 executable below exists only so that a hung process, a malformed frame, a stale reply, a
 crash, a flooded stderr and an over-long line can be described exactly instead of being
-waited for. It is never a stand-in for a solver, and no test here lets it report a
-COMPLETE physics result — the worker refuses one outright while no adapter is wired.
+waited for. It is never a stand-in for a solver: the one test that makes it claim
+COMPLETE asserts that the claim is refused, because the reply carries none of the outputs
+a COMPLETE result is defined by.
 
 Two injections keep every wait bounded and deterministic:
 
@@ -699,18 +700,28 @@ def test_an_unmeasurable_process_tree_is_named_rather_than_recorded_as_zero(
     assert "recorded as 0" in result.cost.measurement_method
 
 
-def test_a_complete_reply_is_refused_while_no_solver_adapter_is_wired(
+def test_a_complete_reply_that_carries_no_outputs_is_refused(
     project: ProjectPaths,
     worker_factory: Callable[..., PersistentJuliaWorker],
     scenario: Callable[..., None],
 ) -> None:
+    """A COMPLETE claim is judged by what the reply delivered, not by who made it.
+
+    `ForwardResult` defines COMPLETE as the whole requested time axis, its states and every
+    output path (plan 3.2). A reply that says COMPLETE and sends none of them cannot become
+    a record, so it is reported as a protocol failure naming the first rule it broke — and
+    the run is a FAIL rather than a success nobody can reproduce.
+    """
     scenario(reply={"status": "COMPLETE"})
     worker = worker_factory()
 
     result = worker.submit(write_job_inputs(project), make_ledger(project))
 
     assert result.status == "PROTOCOL_FAILURE"
-    assert result.reason is not None and "COMPLETE" in result.reason
+    assert result.reason is not None
+    assert "COMPLETE" in result.reason and "result path" in result.reason
+    # The failed attempt is still on the ledger, with the status that was recorded.
+    assert result.cost.output_bytes == 0
 
 
 def test_a_job_past_its_timeout_is_terminated_and_recorded(
