@@ -22,3 +22,6 @@ build/
 # os / ide
 .DS_Store
 /.idea/
+
+# git worktrees for isolated plan execution
+/.worktree/
