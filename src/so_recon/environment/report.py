@@ -238,6 +238,10 @@ def write_environment_report(
         media_type="application/json",
         now=now,
     )
+    # write_bytes_atomic performs no validation, so prove containment here: a
+    # mis-constructed path would otherwise write outside the repository (I4).
+    paths.relative(md_path)
+    paths.relative(json_path)
     write_bytes_atomic(md_path, md_payload)
     write_bytes_atomic(json_path, json_payload)
     return md_ref, json_ref

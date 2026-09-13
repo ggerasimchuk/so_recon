@@ -159,6 +159,9 @@ def write_source_manifest(
         media_type=MANIFEST_MEDIA_TYPE,
         now=now,
     )
+    # write_bytes_atomic performs no validation, so prove containment here: a
+    # mis-constructed published_path would otherwise write outside the repository (I4).
+    paths.relative(published_path)
     write_bytes_atomic(published_path, payload)
     return ref, published_path
 
