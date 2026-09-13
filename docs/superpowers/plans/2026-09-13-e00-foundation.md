@@ -3421,6 +3421,31 @@ def test_run_julia_smoke_raises_on_error_status(tmp_path: Path) -> None:
         )
 
 
+def test_launcher_surfaces_julias_structured_error(tmp_path: Path) -> None:
+    """When Julia fails it writes its message to --out and exits 1 with EMPTY stderr.
+
+    Verified against the real script: stderr is 0 bytes and the cause lives only in the
+    file, so reporting the stderr tail alone would discard the diagnosis entirely.
+    """
+    fake = tmp_path / "fake_julia.sh"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'out=""\n'
+        "while [ $# -gt 0 ]; do\n"
+        '  if [ "$1" = "--out" ]; then out="$2"; fi\n'
+        "  shift\n"
+        "done\n"
+        'cat > "$out" <<\'JSON\'\n'
+        '{"status":"error","message":"KeyError: key \\"rock\\" not found"}\n'
+        "JSON\n"
+        "exit 1\n"
+    )
+    fake.chmod(0o755)
+    launcher = SubprocessJuliaLauncher(fake, tmp_path / "proj", timeout_s=30)
+    with pytest.raises(JuliaRunError, match="rock"):
+        launcher.launch(tmp_path / "s.jl", ["--case", "c.json"], tmp_path / "o.json")
+
+
 def test_find_julia_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "julia"
     exe.write_text("#!/bin/sh\n")
@@ -3458,9 +3483,9 @@ import pytest
 
 from so_recon.config.load import load_project_config
 from so_recon.paths import ProjectPaths
+from so_recon.registry.hashing import sha256_bytes
 from so_recon.simulator.julia_bridge import JuliaNotFoundError, default_launcher, run_julia_smoke
 from so_recon.synthetic.fixture import build_smoke_case, build_smoke_fixture, write_smoke_case
-from so_recon.registry.hashing import sha256_bytes
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -3536,6 +3561,24 @@ class JuliaRunError(RuntimeError):
     """Julia failed, timed out, or returned a result that does not match its input."""
 
 
+def _failure_detail(out_path: Path, stderr: str) -> str:
+    """Prefer Julia's own error message over the stderr tail.
+
+    The smoke script catches its own exceptions, writes {"status":"error","message":...}
+    to --out and exits 1, so stderr is typically EMPTY and the real cause lives only in
+    that file. Reporting the stderr tail alone would hand the operator a FAIL record
+    saying nothing at all.
+    """
+    try:
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("message"):
+        return f"julia reported: {payload['message']}"
+    tail = stderr[-4000:].strip()
+    return f"stderr tail:\n{tail}" if tail else "julia produced no stderr and no error message"
+
+
 def find_julia(explicit: str | None = None) -> Path:
     candidates: list[Path] = []
     if explicit:
@@ -3584,7 +3627,7 @@ class SubprocessJuliaLauncher:
             raise JuliaRunError(f"julia timed out after {self.timeout_s}s") from exc
         if proc.returncode != 0:
             raise JuliaRunError(
-                f"julia exited with {proc.returncode}; stderr tail:\n{proc.stderr[-4000:]}"
+                f"julia exited with {proc.returncode}; {_failure_detail(out_path, proc.stderr)}"
             )
 
 
@@ -3639,7 +3682,7 @@ def default_launcher(
 ```bash
 uv run pytest tests/unit/test_julia_bridge.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `6 passed`.
+Ожидается: `7 passed`.
 
 ```bash
 uv run pytest tests/integration/test_julia_smoke.py -q -m julia
