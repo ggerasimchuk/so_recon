@@ -1895,8 +1895,12 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from so_recon.config.schema import ProjectConfig, SourcesConfig
 from so_recon.paths import ProjectPaths
+from so_recon.registry import run as run_module
 from so_recon.registry.artifact import write_json_artifact
 from so_recon.registry.run import UNAVAILABLE, RunContext, environment_lock_hash, make_run_id
 
@@ -1968,6 +1972,44 @@ def test_run_context_without_config_still_records_a_run(tmp_path: Path) -> None:
     assert record["resolved_config_hash"] == UNAVAILABLE
     assert any("boom" in n for n in record["notes"])
     assert not (ctx.run_dir / "resolved_config.json").exists()
+
+
+def test_update_rejects_an_invalid_status(tmp_path: Path) -> None:
+    """Lineage must never be silently corrupt: an unvalidated update would write a bogus
+    status straight into run.json."""
+    paths = ProjectPaths.default(tmp_path)
+    ctx = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=NOW)
+    with pytest.raises(ValidationError):
+        ctx.update(status="PASSED")  # not a member of RunStatus
+    on_disk = json.loads((ctx.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert on_disk["status"] == "RUNNING", "a refused update must not reach the file"
+
+
+def test_missing_git_metadata_is_recorded_as_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare null git_commit cannot be told apart from a broken git; say which."""
+    paths = ProjectPaths.default(tmp_path)
+    monkeypatch.setattr(run_module, "git_commit", lambda root: None)
+    ctx = RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=NOW)
+    assert ctx.record.git_commit is None
+    assert any("git commit unavailable" in n for n in ctx.record.notes)
+
+
+def test_failed_start_leaves_no_empty_run_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Invariant I6: a claimed directory with no run.json is a run that happened and
+    cannot be recorded. The claim must be released instead."""
+    paths = ProjectPaths.default(tmp_path)
+
+    def boom(path: Path, obj: object, **kwargs: object) -> bytes:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(run_module, "write_json_atomic", boom)
+    with pytest.raises(OSError, match="disk full"):
+        RunContext.start(command="x", argv=[], cfg=_cfg(), paths=paths, now=NOW)
+    assert list(paths.runs.iterdir()) == [], "the claimed run directory was not released"
 
 
 def test_run_context_suffixes_same_second_runs(tmp_path: Path) -> None:
@@ -2058,6 +2100,7 @@ def git_is_dirty(root: Path) -> bool | None:
 from __future__ import annotations
 
 import platform
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -2158,17 +2201,24 @@ class RunContext:
         now = now or datetime.now(UTC)
         cfg_hash = config_hash(cfg) if cfg is not None else UNAVAILABLE
         commit = git_commit(paths.root)
+        dirty = git_is_dirty(paths.root)
+        notes: list[str] = []
+        if commit is None:
+            # A silent null commit is indistinguishable from "no git installed", "not a
+            # repository" and "git failed" — and SPEC 19.12 exists precisely to make a run
+            # traceable. Say so in the record rather than leaving a bare null.
+            notes.append("git commit unavailable: not a git repository, or git could not be run")
+        if dirty:
+            notes.append("working tree was dirty at run start")
         base_id = make_run_id(command, cfg_hash, commit, now)
         run_id, run_dir = _claim_run_dir(paths.runs, base_id)
-        if cfg is not None:
-            write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
         record = RunRecord(
             run_id=run_id,
             command=command,
             argv=list(argv),
             created_at=now.isoformat(),
             git_commit=commit,
-            git_dirty=git_is_dirty(paths.root),
+            git_dirty=dirty,
             spec_version=SPEC_VERSION,
             config_version=cfg.config_version if cfg is not None else UNAVAILABLE,
             resolved_config_hash=cfg_hash,
@@ -2179,17 +2229,35 @@ class RunContext:
             parent_run_ids=list(parent_run_ids),
             status="RUNNING",
             outputs={},
-            notes=[],
+            notes=notes,
         )
         ctx = cls(run_id=run_id, run_dir=run_dir, record=record)
-        ctx.write()
+        try:
+            ctx.write()
+        except BaseException:
+            # A claimed directory holding no run.json is a run that happened but cannot be
+            # recorded — exactly what invariant I6 forbids. Release the claim instead.
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise
+        # run.json now exists, so a failure below is recorded by the caller's FAIL path
+        # rather than vanishing.
+        if cfg is not None:
+            write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
         return ctx
 
     def write(self) -> None:
         write_json_atomic(self.run_dir / "run.json", self.record.model_dump(mode="json"))
 
     def update(self, **fields: Any) -> None:
-        self.record = self.record.model_copy(update=fields)
+        """Merge fields into the record, re-validating the result.
+
+        model_copy(update=...) skips validation, and pydantic then serialises a bad value in
+        warn mode rather than raising — so a wrong status or a malformed output would be
+        written into run.json silently. Static typing does not close this: values reaching
+        here can arrive through Any-typed boundaries such as parsed JSON or subprocess
+        output. Lineage is the one thing that must not be quietly corrupt.
+        """
+        self.record = RunRecord.model_validate({**self.record.model_dump(), **fields})
         self.write()
 
     def add_output(self, key: str, ref: ArtifactRef) -> None:
@@ -2209,7 +2277,7 @@ class RunContext:
         )
 ```
 
-> `model_copy(update=...)` не валидирует поля; это допустимо, потому что все обновления идут из кода, а не из внешних данных. Тип `Any` в `update` осознан.
+> `update` перепроверяет запись через `model_validate`. Это осознанно дороже, чем `model_copy(update=...)`: последний не валидирует поля, а pydantic затем сериализует некорректное значение в режиме warn, не поднимая исключения — то есть неверный `status` или испорченный `outputs` молча попал бы в `run.json`. Статическая типизация тут не спасает: значения могут приходить через границы с типом `Any` (разобранный JSON, вывод subprocess). Тип `Any` в сигнатуре `update` осознан.
 
 - [ ] **Step 5: Реализовать `logging_setup.py`**
 
@@ -2267,7 +2335,7 @@ def configure_logging(
 ```bash
 uv run pytest tests/unit/test_run_registry.py tests/unit/test_logging_setup.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `7 passed`, без ошибок.
+Ожидается: `10 passed`, без ошибок.
 
 - [ ] **Step 7: Commit**
 
