@@ -3072,9 +3072,28 @@ JULIA_EXACT="$(julia +1.12 --version | awk '{print $3}')" && echo "exact: $JULIA
 
 UUID зависимостей проставляет сам `Pkg.add`, поэтому создаётся заготовка только с `[compat]`, а пакеты добавляются командой. `SHA` — stdlib, нужен для `input_sha256`.
 
+Современный `Pkg` отвергает `[compat]`-запись для пакета, которого ещё нет в `[deps]`, поэтому compat задаётся **после** `Pkg.add`, а не в заготовке:
+
 ```bash
-mkdir -p julia/smoke && printf 'name = "SOReconEnv"\nuuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"\nversion = "0.0.1"\n\n[deps]\n\n[compat]\nJSON = "0.21, 1"\nJutul = "0.4"\nJutulDarcy = "0.3"\njulia = "1.12"\n' > julia/Project.toml && julia --project=julia --startup-file=no -e 'using Pkg; Pkg.add(["JutulDarcy", "Jutul", "JSON", "SHA"]); Pkg.precompile(); Pkg.status()'
+mkdir -p julia/smoke && printf 'name = "SOReconEnv"\nuuid = "0f9b3f1e-7c4a-4a7e-9a3d-5e00e00e0001"\nversion = "0.0.1"\n\n[deps]\n' > julia/Project.toml && julia --project=julia --startup-file=no -e 'using Pkg; Pkg.add(["JutulDarcy", "Jutul", "JSON", "SHA"]); Pkg.precompile(); Pkg.status()'
 ```
+
+Затем прописать `[compat]` **точными** пинами. В Pkg голая строка `"1.8.0"` — это caret-диапазон `[1.8.0, 2.0.0)`, а не фиксация: без префикса `=` последующий `Pkg.add`/`Pkg.develop` (например, подключение `SOReconSimulator` в E05) молча переразрешил бы версии. Запись `julia` остаётся диапазоном — это соглашение Pkg, а точный патч фиксируется в `julia/.julia-version`:
+
+```toml
+[compat]
+JSON = "=1.8.0"
+Jutul = "=0.4.31"
+JutulDarcy = "=0.3.11"
+SHA = "=0.7.0"
+julia = "1.12"
+```
+
+Проверить, что пины приняты и ничего не переразрешилось:
+```bash
+julia --project=julia --startup-file=no -e 'using Pkg; Pkg.resolve(); Pkg.status()'
+```
+Ожидается: `No packages added to or removed from`, и статус показывает ровно те же версии.
 Ожидается (5–15 минут на первый precompile): `Pkg.status()` показывает `JutulDarcy v0.3.x`, `Jutul v0.4.x`, `JSON`, `SHA`. Появился `julia/Manifest.toml`.
 
 Проверить, что `Manifest.toml` записал ту же версию Julia, что зафиксирована:
