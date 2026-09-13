@@ -2674,6 +2674,9 @@ def write_source_manifest(
         media_type=MANIFEST_MEDIA_TYPE,
         now=now,
     )
+    # write_bytes_atomic performs no validation, so prove containment here: a
+    # mis-constructed published_path would otherwise write outside the repository (I4).
+    paths.relative(published_path)
     write_bytes_atomic(published_path, payload)
     return ref, published_path
 
@@ -3745,7 +3748,7 @@ from so_recon.environment.report import (
     report_json_bytes,
     write_environment_report,
 )
-from so_recon.paths import ProjectPaths
+from so_recon.paths import PathEscapeError, ProjectPaths
 
 MANIFEST = """
 julia_version = "1.12.7"
@@ -3827,6 +3830,54 @@ def test_missing_lock_is_a_mismatch(tmp_path: Path) -> None:
         locked, julia_version="1.12.7", jutul_version="0.4.40", jutuldarcy_version="0.3.11"
     )
     assert any("missing" in m for m in mismatches)
+
+
+def test_inconsistent_julia_locks_are_a_mismatch(tmp_path: Path) -> None:
+    """.julia-version and Manifest.toml disagreeing is itself drift, whichever one the
+    running version happens to match."""
+    paths = _with_locks(tmp_path)
+    (tmp_path / "julia" / ".julia-version").write_text("1.12.9\n")
+    mismatches = check_locked_versions(
+        read_locked_versions(paths),
+        julia_version="1.12.9", jutul_version="0.4.40", jutuldarcy_version="0.3.11",
+    )
+    assert any("inconsistent" in m for m in mismatches)
+
+
+def test_a_single_missing_package_lock_is_a_mismatch(tmp_path: Path) -> None:
+    paths = _with_locks(tmp_path)
+    without_jutul = "\n".join(
+        block for block in MANIFEST.split("\n\n") if "deps.Jutul]]" not in block
+    )
+    (tmp_path / "julia" / "Manifest.toml").write_text(without_jutul)
+    mismatches = check_locked_versions(
+        read_locked_versions(paths),
+        julia_version="1.12.7", jutul_version="0.4.40", jutuldarcy_version="0.3.11",
+    )
+    assert any("Jutul version lock missing" in m for m in mismatches)
+    assert not any("JutulDarcy version lock missing" in m for m in mismatches)
+
+
+def test_publishing_outside_the_repository_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """write_bytes_atomic does not validate paths, so the caller must (invariant I4)."""
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "repo"
+    paths = ProjectPaths.default(root)
+    rep = collect_environment(paths, probe=_probe)
+    run_dir = paths.runs / "run-1"
+    run_dir.mkdir(parents=True)
+    outside = tmp_path / "elsewhere.md"
+    with pytest.raises(PathEscapeError):
+        write_environment_report(
+            rep, paths, run_dir=run_dir, md_path=outside,
+            json_path=paths.manifests / "environment.json",
+            producer_run_id="run-1", now=datetime(2026, 9, 13, tzinfo=UTC),
+        )
+    assert not outside.exists()
 
 
 def test_collect_environment_with_and_without_lock_files(
@@ -4132,6 +4183,10 @@ def write_environment_report(
         schema_version=ENVIRONMENT_SCHEMA_VERSION, producer_run_id=producer_run_id,
         media_type="application/json", now=now,
     )
+    # write_bytes_atomic performs no validation, so prove containment here: a
+    # mis-constructed path would otherwise write outside the repository (I4).
+    paths.relative(md_path)
+    paths.relative(json_path)
     write_bytes_atomic(md_path, md_payload)
     write_bytes_atomic(json_path, json_payload)
     return md_ref, json_ref
@@ -4159,7 +4214,7 @@ def build_environment_stamp(
 ```bash
 uv run pytest tests/unit/test_environment_report.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: `9 passed`.
+Ожидается: `12 passed`.
 
 - [ ] **Step 5: Commit**
 
