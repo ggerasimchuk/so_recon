@@ -12,12 +12,27 @@ import tempfile
 from pathlib import Path
 
 
-def _fsync_dir(directory: Path) -> None:
+def fsync_dir(directory: Path) -> None:
+    """Persist a rename into `directory`, so a crash cannot lose the entry itself."""
     fd = os.open(directory, os.O_RDONLY)
     try:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def stage_path(path: Path) -> Path:
+    """Reserve a unique, empty temporary neighbour of `path`.
+
+    For writers that insist on owning their own file handle — HDF5 is one — so they
+    cannot be handed the descriptor `write_bytes_atomic` opens. The neighbour lives in
+    the destination directory, which keeps the later rename on one filesystem and
+    therefore atomic.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(fd)
+    return Path(name)
 
 
 def write_bytes_atomic(path: Path, data: bytes) -> None:
@@ -36,7 +51,7 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    _fsync_dir(path.parent)
+    fsync_dir(path.parent)
 
 
 def write_text_atomic(path: Path, text: str) -> None:
