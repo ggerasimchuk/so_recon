@@ -29,7 +29,10 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)  # noqa: PTH105 -- explicit so tests can monkeypatch os.replace
+        # Path.replace, not os.replace: the ruff PTH ruleset this project selects forbids
+        # os.replace (PTH105), and Path.replace delegates to it anyway, looking the attribute
+        # up on the os module at call time — so monkeypatching os.replace still intercepts it.
+        tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

@@ -52,6 +52,7 @@ def test_cleanup_removes_the_temp_file_when_the_replace_fails(
     def boom(src: object, dst: object) -> None:
         raise OSError("replace failed")
 
+    # Path.replace delegates to os.replace, resolving the attribute at call time.
     monkeypatch.setattr(atomic_module.os, "replace", boom)
     with pytest.raises(OSError, match="replace failed"):
         write_bytes_atomic(target, b"replacement")
