@@ -8,6 +8,9 @@ SCAN_DIRS = (
     "julia",
     "tests",
     "scripts",
+    # Committed stage reports and manifests: they quote hashes and run ids, never
+    # a path from the machine that produced them.
+    "reports",
     "Makefile",
     "pyproject.toml",
     "README.md",
