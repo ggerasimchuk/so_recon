@@ -21,6 +21,10 @@ from so_recon.registry.hashing import sha256_bytes, sha256_file, sha256_json
 
 RunStatus = Literal["RUNNING", "PASS", "FAIL"]
 
+#: Schema version of run.json itself. Every command records it in `schema_versions`, so a
+#: run record says which shape it is in without the reader having to infer it.
+RUN_RECORD_SCHEMA_VERSION = "1"
+
 #: Marker used when a run has to be recorded before the configuration could be loaded.
 UNAVAILABLE = "unavailable"
 

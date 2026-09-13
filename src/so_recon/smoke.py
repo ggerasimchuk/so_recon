@@ -13,7 +13,7 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import register_artifact, write_artifact, write_json_artifact
 from so_recon.registry.atomic import write_bytes_atomic
 from so_recon.registry.hashing import sha256_bytes
-from so_recon.registry.run import RunContext, RunStatus
+from so_recon.registry.run import RUN_RECORD_SCHEMA_VERSION, RunContext, RunStatus
 from so_recon.runner import CommandBody, execute_run
 from so_recon.simulator.julia_bridge import (
     JuliaLauncher,
@@ -36,7 +36,7 @@ SCHEMA_VERSIONS = {
     "smoke_case": CASE_SCHEMA_VERSION,
     "julia_smoke_result": "1",
     "smoke_expected": EXPECTED_SCHEMA_VERSION,
-    "run_record": "1",
+    "run_record": RUN_RECORD_SCHEMA_VERSION,
 }
 
 LauncherFactory = Callable[[], JuliaLauncher]
@@ -210,6 +210,12 @@ def smoke_body(
                 parent_artifact_ids=[case_ref.artifact_id],
                 now=now,
             )
+            # Same containment proof as the other two publish sites (source_manifest.py,
+            # environment/report.py): write_bytes_atomic validates nothing. Safe today
+            # only because paths.configs is pre-validated and the filename is a constant —
+            # an asymmetry that would become a real escape the moment E01 adds a publish
+            # path built from configuration (invariant I4).
+            paths.relative(expected_path)
             write_bytes_atomic(expected_path, (ctx.run_dir / EXPECTED_FILENAME).read_bytes())
             ctx.add_output("smoke_expected", ref)
             return "PASS", [f"expected frozen to {paths.relative(expected_path)}"]

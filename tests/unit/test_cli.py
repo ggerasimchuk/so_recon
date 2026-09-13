@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -21,10 +22,26 @@ OK: dict[str, Any] = {
 }
 
 
-def _only_run(tmp_project: Path) -> dict[str, Any]:
+def _only_run_dir(tmp_project: Path) -> Path:
     runs = sorted((tmp_project / "artifacts" / "runs").iterdir())
     assert len(runs) == 1
-    return json.loads((runs[0] / "run.json").read_text(encoding="utf-8"))
+    return runs[0]
+
+
+def _only_run(tmp_project: Path) -> dict[str, Any]:
+    return json.loads((_only_run_dir(tmp_project) / "run.json").read_text(encoding="utf-8"))
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _assert_run_scoped_stamp(stamp: dict[str, Any], run_dir: Path) -> None:
+    """The amendment-10 contract: run-scoped facts live here, not in the committed file."""
+    assert stamp["run_id"] == run_dir.name
+    assert stamp["created_at"].startswith("20")
+    assert "git_commit" in stamp  # None outside a git checkout, but always recorded
+    assert "git_dirty" in stamp
 
 
 def test_manifest_command_writes_manifest_and_run_record(tmp_project: Path) -> None:
@@ -40,6 +57,29 @@ def test_manifest_command_writes_manifest_and_run_record(tmp_project: Path) -> N
     assert record["status"] == "PASS"
     assert set(record["raw_input_hashes"]) == {"a", "b"}
     assert record["outputs"]["source_manifest"]["schema_version"] == "2"
+    assert record["schema_versions"] == {"source_manifest": "2", "run_record": "1"}
+
+
+def test_manifest_command_writes_a_run_scoped_stamp(tmp_project: Path) -> None:
+    """Amendment 10: the run-scoped facts the deterministic manifest must NOT carry.
+
+    Without this test both stamp writers could be deleted outright and the suite would
+    still be green, so the deliverable that keeps `run_id`/`created_at`/`git_commit` out
+    of the committed manifest would be unguarded.
+    """
+    assert main(["--root", str(tmp_project), "manifest"]) == 0
+    run_dir = _only_run_dir(tmp_project)
+    stamp_path = run_dir / "source_manifest_stamp.json"
+    assert stamp_path.is_file()
+    stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    _assert_run_scoped_stamp(stamp, run_dir)
+    published = tmp_project / "reports" / "manifests" / "source_manifest.json"
+    assert stamp["manifest_sha256"] == _sha256(published)
+    assert stamp["manifest_version"] == "2"
+    # The stamp is the ONLY place these live: the published manifest stays deterministic.
+    committed = json.loads(published.read_text(encoding="utf-8"))
+    for run_scoped in ("run_id", "created_at", "git_commit", "git_dirty"):
+        assert run_scoped not in committed
 
 
 def test_manifest_is_byte_identical_on_a_second_run(tmp_project: Path) -> None:
@@ -80,6 +120,25 @@ def test_env_report_command(tmp_project: Path, monkeypatch: Any) -> None:
     assert env["uv_lock_sha256"] is not None
     assert env["julia_pinned_version"] == "1.12.7"
     assert "created_at" not in env
+
+
+def test_env_report_command_writes_a_run_scoped_stamp(tmp_project: Path, monkeypatch: Any) -> None:
+    """The second half of the amendment-10 deliverable, guarded the same way."""
+    monkeypatch.setenv("PATH", str(tmp_project))
+    monkeypatch.setenv("HOME", str(tmp_project))
+    assert main(["--root", str(tmp_project), "env-report"]) == 0
+    run_dir = _only_run_dir(tmp_project)
+    stamp_path = run_dir / "environment_stamp.json"
+    assert stamp_path.is_file()
+    stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    _assert_run_scoped_stamp(stamp, run_dir)
+    published = tmp_project / "reports" / "manifests" / "environment.json"
+    assert stamp["report_sha256"] == _sha256(published)
+    # Important 3: the host fingerprint moved here, and none of it was lost on the way.
+    assert stamp["os"] and stamp["arch"]
+    for moved in ("os", "arch", "uv_version", "julia_executable_version"):
+        assert moved in stamp
+        assert moved not in json.loads(published.read_text(encoding="utf-8"))
 
 
 def test_smoke_command_freeze_then_pass(

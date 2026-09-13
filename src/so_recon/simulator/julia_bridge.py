@@ -46,20 +46,41 @@ def _failure_detail(out_path: Path, stderr: str) -> str:
     return f"stderr tail:\n{tail}" if tail else "julia produced no stderr and no error message"
 
 
+def _is_executable(p: Path) -> bool:
+    return p.is_file() and os.access(p, os.X_OK)
+
+
 def find_julia(explicit: str | None = None) -> Path:
-    candidates: list[Path] = []
-    if explicit:
-        candidates.append(Path(explicit))
-    env = os.environ.get(JULIA_ENV_VAR)
-    if env:
-        candidates.append(Path(env))
+    """Locate the julia executable. A named interpreter is authoritative, never a hint.
+
+    `--julia <path>` and `$SO_RECON_JULIA` both name ONE specific interpreter, so a
+    value that is not a usable executable is an error rather than a reason to search on.
+    Falling through would let `--julia /opt/julia-1.11/bin/juli` (a typo) run the julia
+    that happens to be on PATH and record ITS version in run.json while argv records the
+    1.11 request — false provenance, exactly what E00 exists to prevent. The two are
+    treated identically because they are the same act: an operator pointing the run at a
+    chosen interpreter; a stale export is as dangerous as a mistyped flag, and more so,
+    because nothing on the command line reveals it.
+
+    Only the unnamed fallbacks (PATH, then juliaup) are a search, and there a missing
+    candidate legitimately means "try the next one".
+    """
+    named = (("--julia", explicit), (f"${JULIA_ENV_VAR}", os.environ.get(JULIA_ENV_VAR)))
+    for source, value in named:
+        if value:
+            candidate = Path(value)
+            if not _is_executable(candidate):
+                raise JuliaNotFoundError(
+                    f"{source} names {value!r}, which is not an executable file; "
+                    "refusing to fall back to another julia"
+                )
+            return candidate
     which = shutil.which("julia")
-    if which:
-        candidates.append(Path(which))
-    candidates.append(Path.home() / ".juliaup" / "bin" / "julia")
-    for c in candidates:
-        if c.is_file() and os.access(c, os.X_OK):
-            return c
+    if which and _is_executable(Path(which)):
+        return Path(which)
+    juliaup = Path.home() / ".juliaup" / "bin" / "julia"
+    if _is_executable(juliaup):
+        return juliaup
     raise JuliaNotFoundError(
         f"julia executable not found; install via juliaup or set {JULIA_ENV_VAR}"
     )

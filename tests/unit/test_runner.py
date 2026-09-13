@@ -62,6 +62,31 @@ def test_unusable_runs_directory_is_a_clean_named_failure(tmp_project: Path) -> 
         execute_run(command="manifest", argv=[], cfg=cfg, paths=paths, body=body)
 
 
+@pytest.mark.parametrize("body_raises", [False, True])
+def test_a_failure_while_closing_the_record_is_a_named_error(
+    tmp_project: Path, monkeypatch: pytest.MonkeyPatch, body_raises: bool
+) -> None:
+    """Closing is a write too (I6's boundary), and it must not escape as a traceback.
+
+    Both branches are covered: the PASS path and the FAIL path each call finish(), so a
+    guard on only one of them would leave the other open.
+    """
+    cfg, paths = _setup(tmp_project)
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(RunContext, "finish", boom)
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        if body_raises:
+            raise RuntimeError("inner boom")
+        return "PASS", []
+
+    with pytest.raises(RunRecordUnavailableError, match="cannot close the run record"):
+        execute_run(command="x", argv=["so-recon", "x"], cfg=cfg, paths=paths, body=body)
+
+
 def test_execute_run_works_without_config(tmp_project: Path) -> None:
     paths = ProjectPaths.default(tmp_project)
 

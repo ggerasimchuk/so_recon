@@ -110,6 +110,49 @@ def test_find_julia_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert find_julia() == exe
 
 
+def test_explicit_julia_is_authoritative_and_never_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mistyped --julia must fail, not silently run another interpreter.
+
+    Without this the run would use the julia on PATH and record ITS version in run.json
+    while argv records the requested one — false provenance.
+    """
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    (on_path / "julia").write_text("#!/bin/sh\n")
+    (on_path / "julia").chmod(0o755)
+    monkeypatch.setenv("PATH", str(on_path))
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
+    assert find_julia() == on_path / "julia"  # the fallback really is reachable
+    typo = str(tmp_path / "julia-1.11" / "bin" / "juli")
+    with pytest.raises(JuliaNotFoundError, match="--julia"):
+        find_julia(typo)
+
+
+def test_a_stale_julia_env_var_is_authoritative_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """$SO_RECON_JULIA names one interpreter for the same reason --julia does."""
+    on_path = tmp_path / "bin"
+    on_path.mkdir()
+    (on_path / "julia").write_text("#!/bin/sh\n")
+    (on_path / "julia").chmod(0o755)
+    monkeypatch.setenv("PATH", str(on_path))
+    monkeypatch.setenv("SO_RECON_JULIA", str(tmp_path / "removed" / "julia"))
+    with pytest.raises(JuliaNotFoundError, match="SO_RECON_JULIA"):
+        find_julia()
+
+
+def test_a_directory_is_not_a_julia_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
+    (tmp_path / "julia").mkdir()
+    with pytest.raises(JuliaNotFoundError):
+        find_julia(str(tmp_path / "julia"))
+
+
 def test_find_julia_raises_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SO_RECON_JULIA", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))

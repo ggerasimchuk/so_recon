@@ -1,4 +1,5 @@
 import json
+import platform
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 from so_recon.environment.report import (
     ENVIRONMENT_SCHEMA_VERSION,
+    build_environment_stamp,
     check_locked_versions,
     collect_environment,
     parse_julia_manifest,
@@ -140,7 +142,7 @@ def test_publishing_outside_the_repository_is_refused(
     monkeypatch.setenv("HOME", str(tmp_path))
     root = tmp_path / "repo"
     paths = ProjectPaths.default(root)
-    rep = collect_environment(paths, probe=_probe)
+    rep = collect_environment(paths)
     run_dir = paths.runs / "run-1"
     run_dir.mkdir(parents=True)
     outside = tmp_path / "elsewhere.md"
@@ -164,14 +166,12 @@ def test_collect_environment_with_and_without_lock_files(
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
     paths = ProjectPaths.default(tmp_path)
-    rep = collect_environment(paths, probe=_probe)
+    rep = collect_environment(paths)
     assert rep.uv_lock_sha256 is None
     assert rep.julia_manifest_version is None
     assert rep.julia_pinned_version is None
-    assert rep.julia_executable_version is None
-    assert rep.uv_version == "0.12.7"
 
-    rep2 = collect_environment(_with_locks(tmp_path), probe=_probe)
+    rep2 = collect_environment(_with_locks(tmp_path))
     assert rep2.uv_lock_sha256 is not None
     assert rep2.julia_manifest_version == "1.12.7"
     assert rep2.julia_pinned_version == "1.12.7"
@@ -187,13 +187,76 @@ def test_report_is_deterministic_and_carries_no_time_or_git_state(
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
     paths = _with_locks(tmp_path)
-    first = report_json_bytes(collect_environment(paths, probe=_probe))
-    second = report_json_bytes(collect_environment(paths, probe=_probe))
+    first = report_json_bytes(collect_environment(paths))
+    second = report_json_bytes(collect_environment(paths))
     assert first == second
     payload = json.loads(first)
     assert payload["schema_version"] == ENVIRONMENT_SCHEMA_VERSION
     for forbidden in ("created_at", "git_commit", "git_dirty", "run_id"):
         assert forbidden not in payload
+
+
+def test_the_committed_report_carries_no_machine_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Amendment 10: a collaborator on another OS must not see the gate report drift.
+
+    `os`, `arch`, `uv_version` and `julia_executable_version` describe the host, not the
+    pinned environment, so a committed file containing them turns every cross-machine gate
+    run into a false `gate FAIL: tracked deterministic artifacts changed`. `python_version`
+    deliberately STAYS: it is pinned by `.python-version`, so a difference there is real
+    drift and the gate should fail on it.
+    """
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    paths = _with_locks(tmp_path)
+    report = collect_environment(paths)
+    payload = json.loads(report_json_bytes(report))
+    md = render_markdown(report)
+    for fingerprint in ("os", "arch", "uv_version", "julia_executable_version"):
+        assert fingerprint not in payload
+        # A table row, not a bare substring: the preamble names these fields on purpose,
+        # to say where they went.
+        assert f"| `{fingerprint}` |" not in md
+    assert payload["python_version"] == platform.python_version()
+    assert set(payload) == {
+        "schema_version",
+        "python_version",
+        "uv_lock_sha256",
+        "julia_pinned_version",
+        "julia_manifest_version",
+        "julia_manifest_sha256",
+        "julia_packages",
+        "environment_lock_hash",
+    }
+
+
+def test_the_stamp_keeps_every_moved_field_per_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is lost by the move: the host facts are recorded per run instead."""
+    monkeypatch.delenv("SO_RECON_JULIA", raising=False)
+    (tmp_path / "bin").mkdir()
+    julia = tmp_path / "bin" / "julia"
+    julia.write_text("#!/bin/sh\n")
+    julia.chmod(0o755)
+    monkeypatch.setenv("SO_RECON_JULIA", str(julia))
+    paths = _with_locks(tmp_path)
+    stamp = build_environment_stamp(
+        paths,
+        report_sha256="d" * 64,
+        run_id="run-1",
+        now=datetime(2026, 9, 13, tzinfo=UTC),
+        probe=_probe,
+    )
+    assert stamp.os == f"{platform.system()} {platform.release()}"
+    assert stamp.arch == platform.machine()
+    assert stamp.uv_version == "0.12.7"
+    assert stamp.julia_executable_version == "1.12.7"
+    assert stamp.report_sha256 == "d" * 64
+    assert stamp.run_id == "run-1"
+    assert stamp.created_at.startswith("2026-09-13")
 
 
 def test_render_and_write_publishes_identical_bytes(
@@ -203,7 +266,7 @@ def test_render_and_write_publishes_identical_bytes(
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
     paths = _with_locks(tmp_path)
-    rep = collect_environment(paths, probe=_probe)
+    rep = collect_environment(paths)
     md = render_markdown(rep)
     assert "# Environment report" in md
     assert "environment_lock_hash" in md

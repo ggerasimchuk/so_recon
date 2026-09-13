@@ -1,8 +1,17 @@
 """Environment report: versions and lock hashes (SPEC 19.12; STAGES E00 output).
 
-The report is deterministic: it carries no timestamps, run ids or git state, so a repeated
-gate run leaves no git diff (invariant I5). Those facts live in EnvironmentStamp, which is
-written into the run directory and never committed.
+The committed report is deterministic ACROSS MACHINES, not merely across runs. It carries
+no timestamps, run ids or git state, and no machine fingerprint either: `os`, `arch`,
+`uv_version` and `julia_executable_version` describe the host that happened to run the
+command, not the environment the project is pinned to, and leaving them in the committed
+file made `make gate` report a false drift the first time a collaborator ran it on another
+OS (invariant I5, amendment 10 — «чтобы повторный gate не загрязнял git»).
+
+What stays committed is exactly what the locks fix: `python_version` (pinned by
+`.python-version`, so a difference there IS real drift the gate should fail on), the
+uv/Julia lock hashes, the Julia versions read out of `Manifest.toml`, and the combined
+`environment_lock_hash`. The host facts are not lost — they are recorded per run in
+EnvironmentStamp, written into the run directory and never committed.
 """
 
 from __future__ import annotations
@@ -24,7 +33,7 @@ from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import environment_lock_hash
 from so_recon.simulator.julia_bridge import JuliaNotFoundError, find_julia
 
-ENVIRONMENT_SCHEMA_VERSION = "2"
+ENVIRONMENT_SCHEMA_VERSION = "3"
 TRACKED_JULIA_PACKAGES = ("JutulDarcy", "Jutul", "JSON")
 JULIA_VERSION_FILE = ".julia-version"
 
@@ -101,14 +110,13 @@ def check_locked_versions(
 
 
 class EnvironmentReport(StrictModel):
+    """Committed report. Every field here is fixed by a tracked lock file, so a diff in it
+    is real drift — never a consequence of who ran the command or on what machine."""
+
     schema_version: str = ENVIRONMENT_SCHEMA_VERSION
-    os: str
-    arch: str
     python_version: str
-    uv_version: str | None
     uv_lock_sha256: str | None
     julia_pinned_version: str | None
-    julia_executable_version: str | None
     julia_manifest_version: str | None
     julia_manifest_sha256: str | None
     julia_packages: dict[str, str]
@@ -116,7 +124,12 @@ class EnvironmentReport(StrictModel):
 
 
 class EnvironmentStamp(StrictModel):
-    """Run-scoped facts kept out of the committed report (invariant I5)."""
+    """Run-scoped facts kept out of the committed report (invariant I5).
+
+    This is where the host fingerprint lives: nothing is lost by keeping it out of the
+    committed report, because every run records it here, next to the sha256 of the exact
+    report bytes that run produced.
+    """
 
     schema_version: str
     report_sha256: str
@@ -124,6 +137,10 @@ class EnvironmentStamp(StrictModel):
     created_at: str
     git_commit: str | None
     git_dirty: bool | None
+    os: str
+    arch: str
+    uv_version: str | None
+    julia_executable_version: str | None
 
 
 def _second_token(text: str | None) -> str | None:
@@ -145,20 +162,19 @@ def _julia_exe_version(probe: VersionProbe) -> str | None:
     return parts[2] if len(parts) >= 3 else None
 
 
-def collect_environment(
-    paths: ProjectPaths, *, probe: VersionProbe = subprocess_probe
-) -> EnvironmentReport:
+def collect_environment(paths: ProjectPaths) -> EnvironmentReport:
+    """Read the committed report straight out of the tracked lock files.
+
+    No probe parameter: nothing here shells out any more. Everything that needed a probe
+    (uv and the julia executable) describes the host and now belongs to the stamp.
+    """
     uv_lock = paths.root / "uv.lock"
     manifest = paths.julia / "Manifest.toml"
     locked = read_locked_versions(paths)
     return EnvironmentReport(
-        os=f"{platform.system()} {platform.release()}",
-        arch=platform.machine(),
         python_version=platform.python_version(),
-        uv_version=_second_token(probe(["uv", "--version"])),
         uv_lock_sha256=sha256_file(uv_lock) if uv_lock.is_file() else None,
         julia_pinned_version=locked.julia_pinned,
-        julia_executable_version=_julia_exe_version(probe),
         julia_manifest_version=locked.julia_manifest,
         julia_manifest_sha256=sha256_file(manifest) if manifest.is_file() else None,
         julia_packages=locked.packages,
@@ -169,13 +185,9 @@ def collect_environment(
 def render_markdown(report: EnvironmentReport) -> str:
     rows = [
         ("schema_version", report.schema_version),
-        ("os", report.os),
-        ("arch", report.arch),
         ("python_version", report.python_version),
-        ("uv_version", report.uv_version),
         ("uv_lock_sha256", report.uv_lock_sha256),
         ("julia_pinned_version", report.julia_pinned_version),
-        ("julia_executable_version", report.julia_executable_version),
         ("julia_manifest_version", report.julia_manifest_version),
         ("julia_manifest_sha256", report.julia_manifest_sha256),
         ("environment_lock_hash", report.environment_lock_hash),
@@ -183,8 +195,10 @@ def render_markdown(report: EnvironmentReport) -> str:
     lines = [
         "# Environment report",
         "",
-        "Детерминированный отчёт: без timestamps и git-состояния, чтобы повторный gate",
-        "не создавал diff. Время запуска и git-состояние — в",
+        "Детерминированный отчёт: только то, что зафиксировано lock-файлами — без",
+        "timestamps, git-состояния и отпечатка машины, чтобы повторный gate не создавал",
+        "diff ни при повторе, ни на другой машине. Время запуска, git-состояние, `os`,",
+        "`arch`, `uv_version` и `julia_executable_version` — в",
         "`artifacts/runs/<run_id>/environment_stamp.json`.",
         "",
         "| key | value |",
@@ -252,7 +266,12 @@ def write_environment_stamp(stamp: EnvironmentStamp, path: Path) -> None:
 
 
 def build_environment_stamp(
-    paths: ProjectPaths, *, report_sha256: str, run_id: str, now: datetime
+    paths: ProjectPaths,
+    *,
+    report_sha256: str,
+    run_id: str,
+    now: datetime,
+    probe: VersionProbe = subprocess_probe,
 ) -> EnvironmentStamp:
     return EnvironmentStamp(
         schema_version=ENVIRONMENT_SCHEMA_VERSION,
@@ -261,4 +280,8 @@ def build_environment_stamp(
         created_at=now.isoformat(),
         git_commit=git_commit(paths.root),
         git_dirty=git_is_dirty(paths.root),
+        os=f"{platform.system()} {platform.release()}",
+        arch=platform.machine(),
+        uv_version=_second_token(probe(["uv", "--version"])),
+        julia_executable_version=_julia_exe_version(probe),
     )

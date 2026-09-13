@@ -74,6 +74,35 @@ def test_manifest_splits_physical_lines_from_data_rows(tmp_path: Path) -> None:
     assert by_name["mer"].header_lines == 1
 
 
+@pytest.mark.parametrize(
+    ("content", "header_lines", "physical", "data_rows"),
+    [
+        (b"h1;h2\n1;2\n", 1, 2, 1),  # the ordinary case
+        (b"h1;h2\n", 1, 1, 0),  # header only: exactly zero data rows
+        (b"h1;h2\n1;2\n", 2, 2, 0),  # header_lines == physical
+        (b"h1;h2\n1;2\n", 9, 2, 0),  # header_lines far beyond the file: clamped, not negative
+        (b"", 1, 0, 0),  # empty file
+    ],
+)
+def test_data_rows_is_clamped_at_zero(
+    tmp_path: Path, content: bytes, header_lines: int, physical: int, data_rows: int
+) -> None:
+    """`data_rows = max(physical - header_lines, 0)` (deferred-minor 281).
+
+    A misconfigured header_lines must never yield a negative count, and the clamp must not
+    be mistaken for a real measurement: E01 consumes data_rows directly, so 0 here means
+    "nothing to read", which is what a header-only or over-declared file honestly is.
+    """
+    paths = _paths(tmp_path)
+    (paths.raw / "mer.csv").write_bytes(content)
+    m = build_source_manifest(
+        SourcesConfig(files=[_spec("mer", header_lines=header_lines)]), paths, config_version="t"
+    )
+    entry = m.sources[0]
+    assert entry.physical_line_count == physical
+    assert entry.data_rows == data_rows
+
+
 def test_manifest_has_no_timestamps_or_git_state(tmp_path: Path) -> None:
     """Invariant I5: the committed manifest must be byte-identical across runs."""
     paths = _paths(tmp_path)

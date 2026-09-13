@@ -2,7 +2,11 @@
 
 Every subcommand runs inside execute_run, so any failure — including a configuration
 error or a missing Julia executable — leaves a run.json with status FAIL (invariant I6).
-The single exception is a repository root that cannot be located: there is nowhere to write.
+
+Two cases leave no record, both of them before any run can exist: argparse rejecting the
+command line (`so-recon nope`, `--help`), which exits with SystemExit before main() has a
+root or a config; and a repository root that cannot be located, where there is nowhere to
+write. Everything downstream of those two points is recorded.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from so_recon.environment.report import (
 )
 from so_recon.paths import ProjectPaths, RepoRootNotFoundError, find_repo_root
 from so_recon.registry.hashing import sha256_bytes
-from so_recon.registry.run import RunContext, RunStatus
+from so_recon.registry.run import RUN_RECORD_SCHEMA_VERSION, RunContext, RunStatus
 from so_recon.registry.source_manifest import (
     MANIFEST_SCHEMA_VERSION,
     SourceManifestStamp,
@@ -39,6 +43,18 @@ from so_recon.simulator.julia_bridge import JuliaLauncher, default_launcher
 from so_recon.smoke import run_smoke
 
 LauncherFactory = Callable[[ProjectPaths, JuliaConfig, str | None], JuliaLauncher]
+
+# SPEC 19.12 wants lineage recorded the same way by every command, so each one declares
+# the schemas it actually produces. `manifest` used to leave this empty while `smoke`
+# filled it in, which made run records incomparable across commands.
+MANIFEST_SCHEMA_VERSIONS = {
+    "source_manifest": MANIFEST_SCHEMA_VERSION,
+    "run_record": RUN_RECORD_SCHEMA_VERSION,
+}
+ENV_REPORT_SCHEMA_VERSIONS = {
+    "environment_report": ENVIRONMENT_SCHEMA_VERSION,
+    "run_record": RUN_RECORD_SCHEMA_VERSION,
+}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -119,7 +135,6 @@ def _env_report_body(
             julia_version=report.julia_manifest_version,
             jutul_version=report.julia_packages.get("Jutul"),
             jutuldarcy_version=report.julia_packages.get("JutulDarcy"),
-            schema_versions={"environment_report": ENVIRONMENT_SCHEMA_VERSION},
         )
         ctx.add_output("environment_report", md_ref)
         ctx.add_output("environment_json", json_ref)
@@ -189,8 +204,17 @@ def main(
             )
             return _report(ctx, paths)
 
-        body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
-        ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
+        manifest = args.command == "manifest"
+        body = _manifest_body(cfg, paths) if manifest else _env_report_body(paths)
+        schema_versions = MANIFEST_SCHEMA_VERSIONS if manifest else ENV_REPORT_SCHEMA_VERSIONS
+        ctx = execute_run(
+            command=args.command,
+            argv=full_argv,
+            cfg=cfg,
+            paths=paths,
+            body=body,
+            schema_versions=schema_versions,
+        )
         return _report(ctx, paths)
     except RunRecordUnavailableError as exc:
         print(f"cannot record this run: {exc}", file=sys.stderr)

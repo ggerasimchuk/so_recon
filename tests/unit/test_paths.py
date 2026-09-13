@@ -34,6 +34,22 @@ def test_find_repo_root_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert find_repo_root(Path("/")) == root.resolve()
 
 
+def test_find_repo_root_rejects_a_stale_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale SO_RECON_ROOT must fail loudly, not redirect artifacts into another tree."""
+    stale = tmp_path / "not-the-repo"
+    stale.mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    monkeypatch.setenv("SO_RECON_ROOT", str(stale))
+    with pytest.raises(RepoRootNotFoundError) as exc:
+        find_repo_root(_make_root(real))
+    message = str(exc.value)
+    assert "SO_RECON_ROOT" in message
+    assert str(stale) in message
+
+
 def test_find_repo_root_raises_without_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

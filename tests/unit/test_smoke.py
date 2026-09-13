@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -209,3 +210,28 @@ def test_run_smoke_detects_a_tampered_case_file(
     ctx = run_smoke(cfg=cfg, paths=paths, argv=["smoke"], launcher_factory=lambda: liar)
     assert ctx.record.status == "FAIL"
     assert any("input_sha256" in n for n in ctx.record.notes)
+
+
+def test_freezing_outside_the_repository_is_refused(
+    tmp_project: Path, tmp_path_factory: Any, fake_launcher_factory: Any
+) -> None:
+    """Invariant I4: the third publish site must prove containment like the other two.
+
+    write_bytes_atomic validates nothing, so a configs/ that points outside the root must
+    be refused before any byte is written — the run still ends with a FAIL record (I6).
+    """
+    cfg, paths = _setup(tmp_project)
+    # A sibling of the repository root, not a subdirectory of it: the point is escape.
+    outside = Path(tmp_path_factory.mktemp("elsewhere"))
+    escaped = replace(paths, configs=outside)
+    launcher = fake_launcher_factory(OK)
+    ctx = run_smoke(
+        cfg=cfg,
+        paths=escaped,
+        argv=["smoke"],
+        launcher_factory=lambda: launcher,
+        freeze_expected=True,
+    )
+    assert ctx.record.status == "FAIL"
+    assert any("PathEscapeError" in n for n in ctx.record.notes)
+    assert not (outside / EXPECTED_FILENAME).exists()

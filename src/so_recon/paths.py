@@ -89,7 +89,17 @@ def find_repo_root(start: Path | None = None) -> Path:
     """
     env = os.environ.get(ROOT_ENV_VAR)
     if env:
-        return Path(env).resolve()
+        # Checked with the same marker the ancestor walk uses. Returning it unvalidated
+        # would let a stale export redirect every artifact of the run into an unrelated
+        # tree, silently and with no note anywhere in the record (invariant I4).
+        candidate = Path(env).resolve()
+        if not _is_root(candidate):
+            raise RepoRootNotFoundError(
+                f"{ROOT_ENV_VAR} is set to {env!r}, which resolves to {candidate}, "
+                "but that is not a repository root (no pyproject.toml + src/so_recon); "
+                f"unset {ROOT_ENV_VAR} or point it at the repository"
+            )
+        return candidate
     origins = (start,) if start is not None else (Path.cwd(), Path(__file__))
     for origin in origins:
         found = _walk_up(origin)
