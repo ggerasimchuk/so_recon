@@ -178,7 +178,9 @@ def main(
     try:
         root = args.root.resolve() if args.root else find_repo_root()
     except RepoRootNotFoundError as exc:
-        # The only path with no run record: there is no repository to write into.
+        # One of the two record-less paths (the other is argparse rejecting the command
+        # line above, which exits before main() gets here). This one is record-less
+        # because there is no repository to write the record into.
         print(f"cannot locate repository root: {exc}", file=sys.stderr)
         return 1
 
