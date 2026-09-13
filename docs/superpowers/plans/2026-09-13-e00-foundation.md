@@ -813,7 +813,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   - `find_repo_root(start: Path | None = None) -> Path` — порядок: env `SO_RECON_ROOT` → подъём от `start` (по умолчанию `Path.cwd()`) → подъём от `__file__`. Маркер корня: есть `pyproject.toml` и каталог `src/so_recon`.
   - `@dataclass(frozen=True) class ProjectPaths` с полями `root, raw, interim, processed, artifacts, reports, configs, julia` (все абсолютные `Path`), свойствами `runs = artifacts/"runs"`, `manifests = reports/"manifests"`, `stages = reports/"stages"`; методы `relative(path) -> str`, `resolve(relative: str) -> Path`, `ensure_dirs() -> None`; classmethod `default(root)`.
   - `ProjectPaths.ensure_dirs()` создаёт **только** `interim`, `processed`, `runs`, `manifests`, `stages`. Каталог `raw` не создаётся: источники обязаны существовать заранее, их отсутствие — явная ошибка (SPEC 7.1, инвариант I1).
-- Примечание: `ProjectPaths.from_config` реализуется **здесь** (импорт `PathsConfig` только под `TYPE_CHECKING`, чтобы не создать цикл `paths ↔ config`), а его тест появляется в Task 4 вместе с `PathsConfig`.
+- Примечание: `ProjectPaths.from_config` **здесь не реализуется**. Он принимает `PathsConfig`, которого до Task 4 не существует, а mypy в strict-режиме не может разрешить такую аннотацию даже под `TYPE_CHECKING` — Task 3 обязан оставлять `mypy` зелёным. Метод и его тест добавляются в Task 4 одним коммитом вместе с `PathsConfig`.
 
 **Замечания ревизии 2, реализуемые здесь:** №8 (`..`, Windows absolute/UNC, symlink-escape), №2 (`ensure_dirs` не трогает каталог источников), №11.
 
@@ -999,10 +999,6 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from so_recon.config.schema import PathsConfig
 
 ROOT_ENV_VAR = "SO_RECON_ROOT"
 
@@ -1037,7 +1033,10 @@ def validate_relative_path(value: str) -> str:
     pure = PurePosixPath(value)
     if pure.is_absolute():
         raise ValueError(f"path must be relative to repository root, got {value!r}")
-    if any(part in ("..", ".") for part in pure.parts):
+    # Split the raw string rather than using pure.parts: PurePosixPath silently
+    # collapses single "." segments while parsing, so a check on pure.parts would
+    # never see them and "data/./raw" would wrongly be accepted.
+    if any(segment in ("..", ".") for segment in value.split("/")):
         raise ValueError(f"path must not contain '.' or '..' segments, got {value!r}")
     return value
 
@@ -1068,10 +1067,20 @@ def _walk_up(start: Path) -> Path | None:
 
 
 def find_repo_root(start: Path | None = None) -> Path:
+    """Locate the repository root: env override, then an ancestor walk.
+
+    When `start` is given explicitly it is authoritative: only its own ancestry is
+    searched. When `start` is omitted the lookup walks up from the current working
+    directory and, failing that, from this module's own location. Falling back to the
+    module's own path despite a caller-supplied `start` would make this function find
+    THIS repository from anywhere — which silently defeats containment and makes the
+    "no marker" case untestable.
+    """
     env = os.environ.get(ROOT_ENV_VAR)
     if env:
         return Path(env).resolve()
-    for origin in (start or Path.cwd(), Path(__file__)):
+    origins = (start,) if start is not None else (Path.cwd(), Path(__file__))
+    for origin in origins:
         found = _walk_up(origin)
         if found is not None:
             return found
@@ -1105,20 +1114,6 @@ class ProjectPaths:
             julia=root / "julia",
         )
 
-    @classmethod
-    def from_config(cls, root: Path, cfg: PathsConfig) -> ProjectPaths:
-        root = root.resolve()
-        return cls(
-            root=root,
-            raw=resolve_within_root(root, cfg.raw),
-            interim=resolve_within_root(root, cfg.interim),
-            processed=resolve_within_root(root, cfg.processed),
-            artifacts=resolve_within_root(root, cfg.artifacts),
-            reports=resolve_within_root(root, cfg.reports),
-            configs=resolve_within_root(root, cfg.configs),
-            julia=resolve_within_root(root, cfg.julia),
-        )
-
     @property
     def runs(self) -> Path:
         return self.artifacts / "runs"
@@ -1148,7 +1143,7 @@ class ProjectPaths:
             p.mkdir(parents=True, exist_ok=True)
 ```
 
-> `ProjectPaths.from_config` объявлен уже здесь, но его тест появляется в Task 4 вместе с `PathsConfig`. Импорт `PathsConfig` — только под `TYPE_CHECKING`, чтобы не создавать цикл `paths ↔ config`.
+> В `paths.py` нет импорта из `so_recon.config`: `ProjectPaths.from_config` добавляется в Task 4. Это сохраняет `mypy --strict` зелёным на каждом коммите и заодно исключает цикл `paths ↔ config` (в Task 4 импорт `PathsConfig` идёт только под `TYPE_CHECKING`, потому что `config.schema` импортирует `paths` в рантайме).
 
 - [ ] **Step 4: Прогнать тесты, lint, format, mypy**
 
@@ -1170,6 +1165,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `src/so_recon/config/schema.py`, `src/so_recon/config/load.py`, `configs/project.yml`
+- Modify: `src/so_recon/paths.py` (добавить `ProjectPaths.from_config`)
 - Test: `tests/unit/test_config.py`
 - Delete: `configs/.gitkeep`
 
@@ -1184,6 +1180,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   - `class JuliaConfig(StrictModel)`: `project: str = "julia"`, `smoke_script: str = "julia/smoke/smoke_case.jl"`, `timeout_s: int = 1800` (`ge=1`); строковые пути проходят `validate_relative_path`.
   - `class ProjectConfig(StrictModel)`: `spec_version: Literal["3.0"]`, `config_version: str`, `project_name: str = "SO-RECON"`, `paths: PathsConfig`, `sources: SourcesConfig`, `smoke: SmokeFixtureConfig`, `julia: JuliaConfig`.
 - Produces (`so_recon.config.load`): `class ConfigError(ValueError)`, `load_project_config(path) -> ProjectConfig`, `resolved_config_dict(cfg) -> dict[str, Any]`, `config_hash(cfg) -> str`.
+- Produces (`so_recon.paths`): `ProjectPaths.from_config(root: Path, cfg: PathsConfig) -> ProjectPaths` — переносится сюда из Task 3, потому что раньше `PathsConfig` не существует и `mypy --strict` не может разрешить аннотацию.
 
 **Замечания ревизии 2, реализуемые здесь:** №1 (`plastoper` `decimal: ","`, `header_lines`), №2 (источники на исходном пути), №8 (жёсткая валидация формы пути).
 
@@ -1466,7 +1463,38 @@ def config_hash(cfg: ProjectConfig) -> str:
     return sha256_json(resolved_config_dict(cfg))
 ```
 
-- [ ] **Step 5: Создать `configs/project.yml`**
+- [ ] **Step 5: Добавить `ProjectPaths.from_config` в `paths.py`**
+
+`PathsConfig` теперь существует, поэтому метод можно типизировать. Импорт — только под `TYPE_CHECKING`: `so_recon.config.schema` импортирует `so_recon.paths` в рантайме, и обычный импорт создал бы цикл.
+
+В начало `paths.py`, рядом с остальными импортами:
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from so_recon.config.schema import PathsConfig
+```
+
+И внутрь `ProjectPaths`, сразу после classmethod `default`:
+```python
+    @classmethod
+    def from_config(cls, root: Path, cfg: PathsConfig) -> ProjectPaths:
+        root = root.resolve()
+        return cls(
+            root=root,
+            raw=resolve_within_root(root, cfg.raw),
+            interim=resolve_within_root(root, cfg.interim),
+            processed=resolve_within_root(root, cfg.processed),
+            artifacts=resolve_within_root(root, cfg.artifacts),
+            reports=resolve_within_root(root, cfg.reports),
+            configs=resolve_within_root(root, cfg.configs),
+            julia=resolve_within_root(root, cfg.julia),
+        )
+```
+
+> Каждый путь проходит `resolve_within_root`, поэтому конфигурация не может вывести ни один каталог проекта за пределы repository root — ни через `..`, ни через symlink (инвариант I4).
+
+- [ ] **Step 6: Создать `configs/project.yml`**
 
 Значения `encoding`/`delimiter`/`decimal` взяты из `DATA_AUDIT.md` §3 и **проверены по байтам** исходных файлов (см. таблицу «Проверенные контракты исходных файлов»). Пути указывают на исходное расположение: E00 ничего не перемещает.
 
@@ -1537,17 +1565,17 @@ julia:
 
 Удалить `configs/.gitkeep`.
 
-- [ ] **Step 6: Прогнать тесты, lint, format, mypy**
+- [ ] **Step 7: Прогнать тесты, lint, format, mypy**
 
 ```bash
 uv run pytest tests/unit/test_config.py tests/unit/test_paths.py -q && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
 Ожидается: все тесты проходят, ruff/mypy чисты.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/so_recon/config configs tests/unit/test_config.py && git rm --cached configs/.gitkeep --ignore-unmatch && git commit -m "feat(e00): add typed project configuration schema, loader and configs/project.yml
+git add src/so_recon/config src/so_recon/paths.py configs tests/unit/test_config.py && git rm --cached configs/.gitkeep --ignore-unmatch && git commit -m "feat(e00): add typed project configuration schema, loader and configs/project.yml
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
