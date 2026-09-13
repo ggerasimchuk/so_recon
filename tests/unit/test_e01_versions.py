@@ -18,7 +18,12 @@ import pytest
 
 import so_recon
 from so_recon.cli import main
-from so_recon.config.load import ConfigError, load_project_config, resolved_config_dict
+from so_recon.config.load import (
+    SPEC_4_0_ONLY_FIELDS,
+    ConfigError,
+    load_project_config,
+    resolved_config_dict,
+)
 from so_recon.config.schema import JuliaConfig, PathsConfig
 from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_json
@@ -191,14 +196,24 @@ def test_legacy_3_0_manifest_bytes_have_not_drifted(tmp_project: Path) -> None:
     assert hashlib.sha256(manifest_bytes(manifest)).hexdigest() == LEGACY_FIXTURE_MANIFEST_SHA256
 
 
-def test_4_0_config_adds_no_fields_to_the_resolved_config(tmp_project: Path) -> None:
-    """Until a 4.0-only field exists, the two serialisations differ in one key only."""
+def test_4_0_only_fields_are_absent_from_a_3_0_resolved_config(tmp_project: Path) -> None:
+    """The same file under both specs differs exactly by the version and the 4.0 fields.
+
+    `resources` is the first such field. The 3.0 dump does not carry the key at all, which
+    is what keeps every historical `resolved_config_hash` resolving; the 4.0 dump carries
+    it as null because this fixture declares no profile. A 3.0 config that actually SET one
+    is refused by the schema, so the exclusion below can only ever be dropping a null.
+    """
     path = tmp_project / "configs" / "project.yml"
     legacy = resolved_config_dict(load_project_config(path))
     _retarget(path, "4.0")
     current = resolved_config_dict(load_project_config(path))
     assert (legacy["spec_version"], current["spec_version"]) == ("3.0", "4.0")
-    assert {k: v for k, v in current.items() if k != "spec_version"} == {
+    assert set(SPEC_4_0_ONLY_FIELDS) == {"resources"}
+    assert not SPEC_4_0_ONLY_FIELDS & legacy.keys()
+    assert current["resources"] is None
+    shared = {"spec_version", *SPEC_4_0_ONLY_FIELDS}
+    assert {k: v for k, v in current.items() if k not in shared} == {
         k: v for k, v in legacy.items() if k != "spec_version"
     }
 
@@ -232,8 +247,9 @@ def test_e01_config_is_valid_and_declares_4_0() -> None:
     assert cfg.config_version == "E01.1"
     assert cfg.project_name == "SO-RECON"
     assert cfg.sources.files == []
-    # Only the existing paths/julia defaults: the resource block arrives with Task 3.
+    # The existing paths/julia defaults, plus the 4.0-only resource profile.
     assert cfg.paths == PathsConfig()
     assert cfg.julia == JuliaConfig()
+    assert cfg.resources is not None and cfg.resources.profile == "P0_VERIFY"
     # Smoke stays on the legacy config, which keeps its own version.
     assert load_project_config(REPO_ROOT / "configs" / "project.yml").spec_version == "3.0"

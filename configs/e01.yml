@@ -1,7 +1,7 @@
 # SO-RECON E01 configuration. Validated by so_recon.config.schema.ProjectConfig.
-# It carries the existing paths/julia defaults only: no field of its own exists yet, and
-# the resource profile block arrives with the E01 resource task. Until then this file is
-# the compatibility check that a 4.0 config loads, hashes and stamps as 4.0.
+# Beyond the existing paths/julia defaults it carries the P0_VERIFY resource profile: the
+# measured budget every physical E01 command runs inside. `resources` is a 4.0-only field,
+# so configs/project.yml (3.0) neither declares nor serialises it.
 #
 # E01 is forward-synthetic, so it declares no raw sources. `make smoke` stays on the
 # legacy configs/project.yml, which keeps spec_version 3.0 and its own meaning.
@@ -25,3 +25,26 @@ julia:
   project: julia
   smoke_script: julia/smoke/smoke_case.jl
   timeout_s: 1800
+
+# Memory is GiB = 2^30 bytes: soft 12 GiB, hard 16 GiB, 6 GiB reserved for the OS and
+# other processes, 5 GiB of disk for a small session (COMPUTE §§5, 7). P0_VERIFY spends
+# at most 10 minutes and 64 new forwards (COMPUTE §§2, 10); cold startup is inside that
+# wall budget. The job timeout and the 512 MiB swap-growth limit are conservative E01
+# decisions on top of those session limits. An explicit override selects the approved
+# P1_LOOP preset (1 hour, 2000 forwards) instead; see so_recon.config.resources. The
+# Julia smoke timeout above is a different thing entirely and is unrelated to any of it.
+resources:
+  profile: P0_VERIFY
+  soft_bytes: 12884901888
+  hard_bytes: 17179869184
+  reserve_bytes: 6442450944
+  disk_budget_bytes: 5368709120
+  wall_budget_s: 600
+  job_timeout_s: 300
+  startup_timeout_s: 300
+  max_new_forward: 64
+  julia_workers: 1
+  julia_threads: 4
+  blas_threads: 1
+  poll_interval_s: 0.25
+  max_swap_growth_bytes: 536870912

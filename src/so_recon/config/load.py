@@ -35,8 +35,11 @@ def load_project_config(path: Path) -> ProjectConfig:
 #: exactly the way E00 serialised it — the `resolved_config_hash` of every historical run
 #: record depends on it — so a 4.0-only field is dropped from a 3.0 dump by name. A global
 #: `exclude_defaults` would do this too, but it would also drop the pre-existing defaults
-#: and change every legacy hash. Empty until E01 adds its first optional field.
-SPEC_4_0_ONLY_FIELDS: frozenset[str] = frozenset()
+#: and change every legacy hash.
+#:
+#: This only ever removes a None: `ProjectConfig` refuses a 3.0 config that actually sets
+#: one of these fields, so the exclusion can never hide a value that was in force.
+SPEC_4_0_ONLY_FIELDS: frozenset[str] = frozenset({"resources"})
 
 
 def resolved_config_dict(cfg: ProjectConfig) -> dict[str, Any]:
