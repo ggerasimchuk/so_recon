@@ -1,0 +1,72 @@
+{
+  "config_version": "E00.2",
+  "manifest_version": "2",
+  "sources": [
+    {
+      "data_rows": 4240,
+      "decimal": ".",
+      "delimiter": ",",
+      "encoding": "utf-8",
+      "header_lines": 1,
+      "name": "coords",
+      "path": "data/Ромашка_сырые/coords.csv",
+      "physical_line_count": 4241,
+      "required": true,
+      "sha256": "3298fda637a5f36d2ecbd5ec014e037a95bbd9631973db488c6dcbc1ade78996",
+      "size_bytes": 96424
+    },
+    {
+      "data_rows": 107175,
+      "decimal": ",",
+      "delimiter": ";",
+      "encoding": "cp1251",
+      "header_lines": 1,
+      "name": "gis",
+      "path": "data/Ромашка_сырые/gis.csv",
+      "physical_line_count": 107176,
+      "required": true,
+      "sha256": "a1d00f323d2f75ec4136fe9932a66aa5572b3a7c249132eae5895171a15f3182",
+      "size_bytes": 26257136
+    },
+    {
+      "data_rows": 1388594,
+      "decimal": ",",
+      "delimiter": ";",
+      "encoding": "utf-8-sig",
+      "header_lines": 1,
+      "name": "mer",
+      "path": "data/Ромашка_сырые/mer.csv",
+      "physical_line_count": 1388595,
+      "required": true,
+      "sha256": "37e3c3469f4e960c927a4d3e69afaee9c50eee5ad0d378bbbdfc93fa08b7b7ca",
+      "size_bytes": 191740965
+    },
+    {
+      "data_rows": 33235,
+      "decimal": ",",
+      "delimiter": ";",
+      "encoding": "cp1251",
+      "header_lines": 1,
+      "name": "perf",
+      "path": "data/Ромашка_сырые/perf.csv",
+      "physical_line_count": 33236,
+      "required": true,
+      "sha256": "2b2b8a4a862f05402480f32bba9c34a36eb5996b05dd9ab37bb6f83d7add5f97",
+      "size_bytes": 5151499
+    },
+    {
+      "data_rows": 3572,
+      "decimal": ",",
+      "delimiter": ";",
+      "encoding": "utf-8-sig",
+      "header_lines": 1,
+      "name": "plastoper",
+      "path": "data/Ромашка_сырые/plastoper.csv",
+      "physical_line_count": 3573,
+      "required": true,
+      "sha256": "129c32e7deb51a06ede288be21b1d878a36fb0f7edf9ce52b591b445674f934b",
+      "size_bytes": 167270
+    }
+  ],
+  "spec_version": "3.0"
+}

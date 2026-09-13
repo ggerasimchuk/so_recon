@@ -1,0 +1,13 @@
+{
+  "case_sha256": "2353adf824a266732e129186093fe8d1663842d2d2070f834d1210480587cf8c",
+  "cumulative_oil_m3": 56524.192713688826,
+  "cumulative_water_injected_m3": 60266.28437500002,
+  "fixture_content_hash": "f136df09ee0eacd3517df0c8be09ea398c9da28ba90eeec98b8225b6008b6897",
+  "julia_version": "1.12.7",
+  "jutul_version": "0.4.31",
+  "jutuldarcy_version": "0.3.11",
+  "mean_so_final": 0.4171055074750156,
+  "n_steps": 12,
+  "nx": 20,
+  "schema_version": "2"
+}
