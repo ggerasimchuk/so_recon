@@ -10,6 +10,7 @@ dependencies = [
   "pyyaml>=6.0,<7",
   "numpy>=2.2,<3",
   "pyarrow>=19",
+  "h5py>=3.16.0",
 ]
 
 [project.scripts]
@@ -58,4 +59,9 @@ packages = ["so_recon"]
 
 [[tool.mypy.overrides]]
 module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
+# h5py ships no py.typed marker, so strict mode would otherwise refuse the import.
+[[tool.mypy.overrides]]
+module = ["h5py", "h5py.*"]
 ignore_missing_imports = true
