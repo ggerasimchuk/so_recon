@@ -34,7 +34,7 @@ from so_recon.registry.source_manifest import (
     write_manifest_stamp,
     write_source_manifest,
 )
-from so_recon.runner import execute_run
+from so_recon.runner import RunRecordUnavailableError, execute_run
 from so_recon.simulator.julia_bridge import JuliaLauncher, default_launcher
 from so_recon.smoke import run_smoke
 
@@ -137,14 +137,19 @@ def _report(ctx: RunContext, paths: ProjectPaths) -> int:
 
 
 def _record_startup_failure(root: Path, command: str, argv: Sequence[str], exc: Exception) -> int:
-    """Configuration could not be loaded: still leave a FAIL record (invariant I6)."""
+    """Configuration could not be loaded: still leave a FAIL record (invariant I6).
+
+    The cause is printed BEFORE the record is opened, so the user learns why the run failed
+    even when the artifacts tree is also unusable and `execute_run` raises
+    `RunRecordUnavailableError` on its way out.
+    """
     paths = ProjectPaths.default(root)
+    print(f"config error: {exc}", file=sys.stderr)
 
     def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
         return "FAIL", [f"config error: {exc}"]
 
     ctx = execute_run(command=command, argv=argv, cfg=None, paths=paths, body=body)
-    print(f"config error: {exc}", file=sys.stderr)
     return _report(ctx, paths)
 
 
@@ -162,28 +167,34 @@ def main(
         print(f"cannot locate repository root: {exc}", file=sys.stderr)
         return 1
 
+    # ONE handler for every path that can open a run, the startup-failure path included:
+    # _record_startup_failure calls execute_run too, so guarding only the two dispatch
+    # branches would leave "bad config + unusable artifacts tree" as a raw traceback.
     try:
-        cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
-        paths = ProjectPaths.from_config(root, cfg.paths)
-    # Deliberately broad: any configuration failure must still leave a FAIL record.
-    except Exception as exc:
-        return _record_startup_failure(root, args.command, full_argv, exc)
+        try:
+            cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
+            paths = ProjectPaths.from_config(root, cfg.paths)
+        # Deliberately broad: any configuration failure must still leave a FAIL record.
+        except Exception as exc:
+            return _record_startup_failure(root, args.command, full_argv, exc)
 
-    if args.command == "smoke":
-        factory = launcher_factory or default_launcher
-        ctx = run_smoke(
-            cfg=cfg,
-            paths=paths,
-            argv=full_argv,
-            launcher_factory=lambda: factory(paths, cfg.julia, args.julia),
-            freeze_expected=args.freeze_expected,
-        )
+        if args.command == "smoke":
+            factory = launcher_factory or default_launcher
+            ctx = run_smoke(
+                cfg=cfg,
+                paths=paths,
+                argv=full_argv,
+                launcher_factory=lambda: factory(paths, cfg.julia, args.julia),
+                freeze_expected=args.freeze_expected,
+            )
+            return _report(ctx, paths)
+
+        body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
+        ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
         return _report(ctx, paths)
-
-    paths.ensure_dirs()
-    body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
-    ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
-    return _report(ctx, paths)
+    except RunRecordUnavailableError as exc:
+        print(f"cannot record this run: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

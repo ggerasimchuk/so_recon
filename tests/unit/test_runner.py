@@ -2,10 +2,12 @@ import json
 import logging
 from pathlib import Path
 
+import pytest
+
 from so_recon.config.load import load_project_config
 from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext, RunStatus
-from so_recon.runner import execute_run
+from so_recon.runner import RunRecordUnavailableError, execute_run
 
 
 def _setup(tmp_project: Path) -> tuple[object, ProjectPaths]:
@@ -44,6 +46,20 @@ def test_execute_run_converts_any_exception_into_a_fail_record(tmp_project: Path
     assert record["status"] == "FAIL"
     assert any("unexpected boom" in n for n in record["notes"])
     assert "RuntimeError" in (ctx.run_dir / "run.log").read_text(encoding="utf-8")
+
+
+def test_unusable_runs_directory_is_a_clean_named_failure(tmp_project: Path) -> None:
+    """Invariant I6's boundary: when the artifacts tree itself is unusable no record can
+    exist, but the caller must get a named error rather than a raw traceback."""
+    cfg, paths = _setup(tmp_project)
+    # reports/ as a regular file makes ensure_dirs fail on reports/manifests.
+    (tmp_project / "reports").write_text("not a directory\n")
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        raise AssertionError("body must never run when the run cannot be opened")
+
+    with pytest.raises(RunRecordUnavailableError, match="cannot open a run record"):
+        execute_run(command="manifest", argv=[], cfg=cfg, paths=paths, body=body)
 
 
 def test_execute_run_works_without_config(tmp_project: Path) -> None:

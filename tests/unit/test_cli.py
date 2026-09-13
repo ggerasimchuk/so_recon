@@ -120,6 +120,32 @@ def test_smoke_command_without_julia_returns_1_and_records_fail(
     assert any("julia" in n.lower() for n in record["notes"])
 
 
+def test_cli_exits_cleanly_when_the_runs_directory_is_unusable(
+    tmp_project: Path, capsys: Any
+) -> None:
+    """No traceback may reach the user: the failure is explained and the exit code is 1."""
+    (tmp_project / "reports").write_text("not a directory\n")
+    assert main(["--root", str(tmp_project), "manifest"]) == 1
+    err = capsys.readouterr().err
+    assert "cannot record this run" in err
+    assert "Traceback" not in err
+
+
+def test_cli_explains_a_bad_config_even_when_no_record_can_be_written(
+    tmp_project: Path, capsys: Any
+) -> None:
+    """Both failures at once. The startup-failure path calls execute_run too, so it needs the
+    same guard: the config error must still be explained and no traceback may escape."""
+    (tmp_project / "reports").write_text("not a directory\n")
+    bad = tmp_project / "configs" / "bad.yml"
+    bad.write_text("paths: [this is not a mapping\n", encoding="utf-8")
+    assert main(["--root", str(tmp_project), "--config", str(bad), "manifest"]) == 1
+    err = capsys.readouterr().err
+    assert "config error" in err
+    assert "cannot record this run" in err
+    assert "Traceback" not in err
+
+
 def test_unknown_command_returns_2(tmp_project: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--root", str(tmp_project), "nope"])

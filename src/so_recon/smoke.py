@@ -247,7 +247,6 @@ def run_smoke(
     launcher_factory: LauncherFactory,
     freeze_expected: bool = False,
 ) -> RunContext:
-    paths.ensure_dirs()
     return execute_run(
         command="smoke",
         argv=argv,
