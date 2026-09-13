@@ -77,6 +77,31 @@ def test_run_julia_smoke_raises_on_error_status(tmp_path: Path) -> None:
         )
 
 
+def test_launcher_surfaces_julias_structured_error(tmp_path: Path) -> None:
+    """When Julia fails it writes its message to --out and exits 1 with EMPTY stderr.
+
+    Verified against the real script: stderr is 0 bytes and the cause lives only in the
+    file, so reporting the stderr tail alone would discard the diagnosis entirely.
+    """
+    fake = tmp_path / "fake_julia.sh"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'out=""\n'
+        "while [ $# -gt 0 ]; do\n"
+        '  if [ "$1" = "--out" ]; then out="$2"; fi\n'
+        "  shift\n"
+        "done\n"
+        "cat > \"$out\" <<'JSON'\n"
+        '{"status":"error","message":"KeyError: key \\"rock\\" not found"}\n'
+        "JSON\n"
+        "exit 1\n"
+    )
+    fake.chmod(0o755)
+    launcher = SubprocessJuliaLauncher(fake, tmp_path / "proj", timeout_s=30)
+    with pytest.raises(JuliaRunError, match="rock"):
+        launcher.launch(tmp_path / "s.jl", ["--case", "c.json"], tmp_path / "o.json")
+
+
 def test_find_julia_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "julia"
     exe.write_text("#!/bin/sh\n")

@@ -26,6 +26,24 @@ class JuliaRunError(RuntimeError):
     """Julia failed, timed out, or returned a result that does not match its input."""
 
 
+def _failure_detail(out_path: Path, stderr: str) -> str:
+    """Prefer Julia's own error message over the stderr tail.
+
+    The smoke script catches its own exceptions, writes {"status":"error","message":...}
+    to --out and exits 1, so stderr is typically EMPTY and the real cause lives only in
+    that file. Reporting the stderr tail alone would hand the operator a FAIL record
+    saying nothing at all.
+    """
+    try:
+        payload = json.loads(out_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        payload = None
+    if isinstance(payload, dict) and payload.get("message"):
+        return f"julia reported: {payload['message']}"
+    tail = stderr[-4000:].strip()
+    return f"stderr tail:\n{tail}" if tail else "julia produced no stderr and no error message"
+
+
 def find_julia(explicit: str | None = None) -> Path:
     candidates: list[Path] = []
     if explicit:
@@ -74,7 +92,7 @@ class SubprocessJuliaLauncher:
             raise JuliaRunError(f"julia timed out after {self.timeout_s}s") from exc
         if proc.returncode != 0:
             raise JuliaRunError(
-                f"julia exited with {proc.returncode}; stderr tail:\n{proc.stderr[-4000:]}"
+                f"julia exited with {proc.returncode}; {_failure_detail(out_path, proc.stderr)}"
             )
 
 
