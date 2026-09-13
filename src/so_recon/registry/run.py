@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -103,17 +104,24 @@ class RunContext:
         now = now or datetime.now(UTC)
         cfg_hash = config_hash(cfg) if cfg is not None else UNAVAILABLE
         commit = git_commit(paths.root)
+        dirty = git_is_dirty(paths.root)
+        notes: list[str] = []
+        if commit is None:
+            # A silent null commit is indistinguishable from "no git installed", "not a
+            # repository" and "git failed" — and SPEC 19.12 exists precisely to make a run
+            # traceable. Say so in the record rather than leaving a bare null.
+            notes.append("git commit unavailable: not a git repository, or git could not be run")
+        if dirty:
+            notes.append("working tree was dirty at run start")
         base_id = make_run_id(command, cfg_hash, commit, now)
         run_id, run_dir = _claim_run_dir(paths.runs, base_id)
-        if cfg is not None:
-            write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
         record = RunRecord(
             run_id=run_id,
             command=command,
             argv=list(argv),
             created_at=now.isoformat(),
             git_commit=commit,
-            git_dirty=git_is_dirty(paths.root),
+            git_dirty=dirty,
             spec_version=SPEC_VERSION,
             config_version=cfg.config_version if cfg is not None else UNAVAILABLE,
             resolved_config_hash=cfg_hash,
@@ -124,17 +132,35 @@ class RunContext:
             parent_run_ids=list(parent_run_ids),
             status="RUNNING",
             outputs={},
-            notes=[],
+            notes=notes,
         )
         ctx = cls(run_id=run_id, run_dir=run_dir, record=record)
-        ctx.write()
+        try:
+            ctx.write()
+        except BaseException:
+            # A claimed directory holding no run.json is a run that happened but cannot be
+            # recorded — exactly what invariant I6 forbids. Release the claim instead.
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise
+        # run.json now exists, so a failure below is recorded by the caller's FAIL path
+        # rather than vanishing.
+        if cfg is not None:
+            write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
         return ctx
 
     def write(self) -> None:
         write_json_atomic(self.run_dir / "run.json", self.record.model_dump(mode="json"))
 
     def update(self, **fields: Any) -> None:
-        self.record = self.record.model_copy(update=fields)
+        """Merge fields into the record, re-validating the result.
+
+        model_copy(update=...) skips validation, and pydantic then serialises a bad value in
+        warn mode rather than raising — so a wrong status or a malformed output would be
+        written into run.json silently. Static typing does not close this: values reaching
+        here can arrive through Any-typed boundaries such as parsed JSON or subprocess
+        output. Lineage is the one thing that must not be quietly corrupt.
+        """
+        self.record = RunRecord.model_validate({**self.record.model_dump(), **fields})
         self.write()
 
     def add_output(self, key: str, ref: ArtifactRef) -> None:
