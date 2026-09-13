@@ -1,2 +1,24 @@
+# closed field data and private research notes
 /data/
 /research/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# run artifacts and gate logs (lineage lives in run.json inside; never committed)
+/artifacts/*
+!/artifacts/.gitkeep
+
+# sdd workspace
+/.superpowers/
+
+# os / ide
+.DS_Store
+/.idea/
