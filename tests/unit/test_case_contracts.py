@@ -25,6 +25,7 @@ from so_recon.simulator.case_io import (
     CASE_MANIFEST_FILENAME,
     CaseIntegrityError,
     cartesian_neighbors,
+    case_array_refs,
     compute_model_hash,
     load_case,
     read_array,
@@ -37,7 +38,11 @@ from so_recon.simulator.case_io import (
 )
 from so_recon.simulator.contracts import (
     CELL_AXES,
+    CONTROL_RATE_UNIT,
+    CONTROL_RATE_UNIT_KEY,
     FACE_AXES,
+    MILLIDARCY_M2,
+    SECONDS_PER_DAY,
     TIME_CELL_AXES,
     ArrayRef,
     BoundarySpec,
@@ -55,8 +60,6 @@ from so_recon.simulator.contracts import (
 )
 from tests.forward_case import (
     ASYMMETRIC,
-    DAY_S,
-    MD_M2,
     N_CELLS,
     SHAPE,
     build_case,
@@ -281,7 +284,7 @@ def test_a_complete_case_validates(
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -1.0, 0.0])
 def test_nan_permeability_is_rejected_by_validate_case(tmp_project: Path, bad: float) -> None:
     paths = _paths(tmp_project)
-    perm = np.full((3, N_CELLS), 100.0 * MD_M2)
+    perm = np.full((3, N_CELLS), 100.0 * MILLIDARCY_M2)
     perm[1, 2] = bad
     refs = write_case_arrays(paths, permeability_m2=perm)
     report = validate_case(build_case(refs), paths)
@@ -378,9 +381,9 @@ def test_permeability_must_carry_three_directions(tmp_project: Path) -> None:
 @pytest.mark.parametrize(
     ("edges", "reason"),
     [
-        ((0.0, DAY_S, DAY_S), "strictly increasing"),
-        ((0.0, 2 * DAY_S, DAY_S), "strictly increasing"),
-        ((DAY_S, 2 * DAY_S), "must start at 0"),
+        ((0.0, SECONDS_PER_DAY, SECONDS_PER_DAY), "strictly increasing"),
+        ((0.0, 2 * SECONDS_PER_DAY, SECONDS_PER_DAY), "strictly increasing"),
+        ((SECONDS_PER_DAY, 2 * SECONDS_PER_DAY), "must start at 0"),
         ((0.0,), "at least one report interval"),
     ],
 )
@@ -531,7 +534,7 @@ def test_a_producer_cannot_be_controlled_on_an_oil_rate() -> None:
     with pytest.raises(ValidationError):
         ControlSegment(
             start_s=0.0,
-            end_s=DAY_S,
+            end_s=SECONDS_PER_DAY,
             well_id="PRO1",
             role="producer",
             target="oil_rate",  # type: ignore[arg-type]
@@ -545,7 +548,7 @@ def test_a_producer_cannot_be_controlled_on_a_water_rate() -> None:
     with pytest.raises(ValidationError, match="producer"):
         ControlSegment(
             start_s=0.0,
-            end_s=DAY_S,
+            end_s=SECONDS_PER_DAY,
             well_id="PRO1",
             role="producer",
             target="water_rate",
@@ -559,7 +562,7 @@ def test_an_injector_cannot_be_controlled_on_a_liquid_rate() -> None:
     with pytest.raises(ValidationError, match="injector"):
         ControlSegment(
             start_s=0.0,
-            end_s=DAY_S,
+            end_s=SECONDS_PER_DAY,
             well_id="INJ1",
             role="injector",
             target="liquid_rate",
@@ -573,7 +576,7 @@ def test_a_shut_well_must_carry_the_disabled_target() -> None:
     with pytest.raises(ValidationError, match="shut"):
         ControlSegment(
             start_s=0.0,
-            end_s=DAY_S,
+            end_s=SECONDS_PER_DAY,
             well_id="PRO1",
             role="shut",
             target="bhp",
@@ -583,7 +586,7 @@ def test_a_shut_well_must_carry_the_disabled_target() -> None:
         )
     shut = ControlSegment(
         start_s=0.0,
-        end_s=DAY_S,
+        end_s=SECONDS_PER_DAY,
         well_id="PRO1",
         role="shut",
         target="disabled",
@@ -599,7 +602,7 @@ def test_a_rate_target_needs_a_positive_magnitude(value: float) -> None:
     with pytest.raises(ValidationError, match="value"):
         ControlSegment(
             start_s=0.0,
-            end_s=DAY_S,
+            end_s=SECONDS_PER_DAY,
             well_id="INJ1",
             role="injector",
             target="water_rate",
@@ -612,8 +615,8 @@ def test_a_rate_target_needs_a_positive_magnitude(value: float) -> None:
 def test_a_segment_must_span_a_positive_interval() -> None:
     with pytest.raises(ValidationError, match="end_s"):
         ControlSegment(
-            start_s=DAY_S,
-            end_s=DAY_S,
+            start_s=SECONDS_PER_DAY,
+            end_s=SECONDS_PER_DAY,
             well_id="INJ1",
             role="injector",
             target="water_rate",
@@ -633,6 +636,49 @@ def test_connection_mask_must_match_the_well_cells(
         build_case(refs, controls=mismatched)
 
 
+def test_control_rates_cross_the_exchange_as_human_day_rates(
+    case_on_disk: tuple[ProjectPaths, dict[str, ArrayRef], CaseBundle],
+) -> None:
+    """Pins the unit on both sides of the 86400 that Julia applies (plan 3.1, SPEC 9.1).
+
+    `ControlSegment.value` is m3_sc/day for a rate target, and Julia divides by
+    SECONDS_PER_DAY when it builds the model. If either side ever moves to native
+    m3_sc/s, this test and the declared unit below break together instead of a forward
+    run quietly being wrong by a factor of 86400.
+    """
+    _, _, case = case_on_disk
+    assert CONTROL_RATE_UNIT == "m3_sc/day"
+    assert case.units[CONTROL_RATE_UNIT_KEY] == CONTROL_RATE_UNIT
+
+    injector = next(c for c in case.controls if c.role == "injector")
+    producer = next(c for c in case.controls if c.role == "producer")
+    assert (injector.target, injector.value) == ("water_rate", 50.0)
+    assert (producer.target, producer.value) == ("liquid_rate", 40.0)
+    # The native rates Julia will construct from those values.
+    assert injector.value / SECONDS_PER_DAY == pytest.approx(5.7870370370e-4, rel=1e-9)
+    assert producer.value / SECONDS_PER_DAY == pytest.approx(4.6296296296e-4, rel=1e-9)
+    # A bhp target is Pa, not a rate, so it is not touched by that conversion.
+    assert case.units["pressure"] == "Pa"
+
+
+@pytest.mark.parametrize(
+    "units",
+    [
+        {"pressure": "Pa"},  # the convention is simply not stated
+        {"control_rate": "m3_sc/s"},  # stated, but as the native unit Julia produces
+        {"control_rate": "m3"},  # stated, but not a rate at all
+    ],
+    ids=["absent", "native", "not-a-rate"],
+)
+def test_a_case_must_declare_the_unit_its_control_rates_are_written_in(
+    case_on_disk: tuple[ProjectPaths, dict[str, ArrayRef], CaseBundle],
+    units: dict[str, str],
+) -> None:
+    _, refs, _ = case_on_disk
+    with pytest.raises(ValidationError, match=CONTROL_RATE_UNIT_KEY):
+        build_case(refs, units=units)
+
+
 def test_a_control_segment_must_name_a_declared_well(
     case_on_disk: tuple[ProjectPaths, dict[str, ArrayRef], CaseBundle],
 ) -> None:
@@ -647,7 +693,9 @@ def test_control_segments_of_one_well_may_not_overlap(
 ) -> None:
     _, refs, _ = case_on_disk
     inj, pro = control_segments()
-    overlap = pro.model_copy(update={"start_s": 10.0 * DAY_S, "end_s": 20.0 * DAY_S})
+    overlap = pro.model_copy(
+        update={"start_s": 10.0 * SECONDS_PER_DAY, "end_s": 20.0 * SECONDS_PER_DAY}
+    )
     with pytest.raises(ValidationError, match="overlap"):
         build_case(refs, controls=(inj, pro, overlap))
 
@@ -657,7 +705,7 @@ def test_control_segments_may_not_run_past_the_last_report_edge(
 ) -> None:
     _, refs, _ = case_on_disk
     inj, pro = control_segments()
-    late = pro.model_copy(update={"end_s": 90.0 * DAY_S})
+    late = pro.model_copy(update={"end_s": 90.0 * SECONDS_PER_DAY})
     with pytest.raises(ValidationError, match="report"):
         build_case(refs, controls=(inj, late))
 
@@ -699,7 +747,7 @@ def _restart() -> RestartRef:
         manifest_path="artifacts/runs/r1/restart.json",
         sha256="c" * 64,
         completed_report_step=2,
-        completed_time_s=30.0 * DAY_S,
+        completed_time_s=30.0 * SECONDS_PER_DAY,
         model_hash="d" * 64,
         schedule_prefix_hash="e" * 64,
         environment_lock_hash="f" * 64,
@@ -757,9 +805,12 @@ def test_an_observations_table_needs_both_a_path_and_a_digest() -> None:
 
 
 def test_output_request_times_must_increase() -> None:
-    assert OutputRequest(state_times_s=(0.0, DAY_S), keep_native_restart=False).chunk_months == 1
+    assert (
+        OutputRequest(state_times_s=(0.0, SECONDS_PER_DAY), keep_native_restart=False).chunk_months
+        == 1
+    )
     with pytest.raises(ValidationError, match="increasing"):
-        OutputRequest(state_times_s=(DAY_S, 0.0), keep_native_restart=False)
+        OutputRequest(state_times_s=(SECONDS_PER_DAY, 0.0), keep_native_restart=False)
 
 
 def _job(**overrides: Any) -> JobDescriptor:
@@ -770,7 +821,9 @@ def _job(**overrides: Any) -> JobDescriptor:
         "model_hash": "b" * 64,
         "solver_config_path": "configs/solver.json",
         "solver_config_sha256": "c" * 64,
-        "output_request": OutputRequest(state_times_s=(0.0, DAY_S), keep_native_restart=False),
+        "output_request": OutputRequest(
+            state_times_s=(0.0, SECONDS_PER_DAY), keep_native_restart=False
+        ),
         "seed": 1,
         "result_dir": "artifacts/runs/r1/forward",
         "attempt": 1,
@@ -811,8 +864,8 @@ def _result(**overrides: Any) -> ForwardResult:
         "physics_class": "OW_immiscible",
         "status": "COMPLETE",
         "reason": None,
-        "completed_time_s": 30.0 * DAY_S,
-        "times_s": (0.0, 15.0 * DAY_S, 30.0 * DAY_S),
+        "completed_time_s": 30.0 * SECONDS_PER_DAY,
+        "times_s": (0.0, 15.0 * SECONDS_PER_DAY, 30.0 * SECONDS_PER_DAY),
         "states": {
             "sw": ArrayRef(
                 path="artifacts/runs/r1/forward/states.h5",
@@ -926,21 +979,45 @@ def test_a_failed_array_write_leaves_no_staging_file_behind(tmp_project: Path) -
     assert sorted(p.name for p in target.parent.iterdir()) == ["a.h5"]
 
 
-def test_write_case_publishes_the_manifest_last_and_records_it(tmp_project: Path) -> None:
+def test_write_case_registers_every_array_then_publishes_the_manifest(tmp_project: Path) -> None:
+    """The whole of step 2.5 in one call: arrays into the registry, manifest last."""
     paths = _paths(tmp_project)
     refs = write_case_arrays(paths)
     case = build_case(refs)
     ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
-    array_ref = register_array(refs["porosity"], paths, ctx, key="porosity", now=NOW)
-    assert array_ref.sha256 == refs["porosity"].sha256
-    assert array_ref.media_type == "application/x-hdf5"
 
     manifest = write_case(case, paths, ctx, now=NOW)
     assert manifest.path == f"{paths.relative(ctx.run_dir)}/{CASE_MANIFEST_FILENAME}"
     assert manifest.schema_version == "case-1"
     assert ctx.record.outputs["case"].sha256 == manifest.sha256
-    assert ctx.record.outputs["porosity"].sha256 == refs["porosity"].sha256
+
+    # Every array the case depends on is a recorded output, keyed by its place in the
+    # record -- not merely a digest quoted by a manifest that nothing else knows about.
+    labels = set(case_array_refs(case))
+    assert labels <= set(ctx.record.outputs)
+    for label, ref in case_array_refs(case).items():
+        recorded = ctx.record.outputs[label]
+        assert recorded.sha256 == ref.sha256
+        assert recorded.path == ref.path
+        assert recorded.media_type == "application/x-hdf5"
+        assert recorded.producer_run_id == ctx.run_id
+
+    # The lineage the manifest claims resolves to artifacts the run actually recorded.
+    assert sorted(manifest.parent_artifact_ids) == sorted(
+        {ctx.record.outputs[label].artifact_id for label in labels}
+    )
     assert load_case(paths.root / manifest.path, paths) == case
+
+
+def test_register_array_refuses_a_reference_that_does_not_match_its_file(
+    tmp_project: Path,
+) -> None:
+    paths = _paths(tmp_project)
+    refs = write_case_arrays(paths)
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    lying = refs["porosity"].model_copy(update={"sha256": "9" * 64})
+    with pytest.raises(ValueError, match="hashes to"):
+        register_array(lying, paths, ctx, key="rock.porosity", now=NOW)
 
 
 def test_write_case_refuses_an_invalid_case_and_publishes_nothing(tmp_project: Path) -> None:
@@ -952,7 +1029,8 @@ def test_write_case_refuses_an_invalid_case_and_publishes_nothing(tmp_project: P
     with pytest.raises(ValueError, match="rock.porosity"):
         write_case(case, paths, ctx, now=NOW)
     assert not (ctx.run_dir / CASE_MANIFEST_FILENAME).exists()
-    assert "case" not in ctx.record.outputs
+    # Validation runs before the first registry write, so nothing at all was published.
+    assert ctx.record.outputs == {}
 
 
 def test_republishing_the_same_case_is_idempotent(tmp_project: Path) -> None:
@@ -991,7 +1069,7 @@ def test_model_hash_moves_with_every_input_that_changes_f(tmp_project: Path) -> 
     thicker = build_case(refs, fluids=FluidSpec(viscosity_pa_s=(0.001, 0.004)))
     assert compute_model_hash(thicker) != compute_model_hash(base)
     inj, pro = control_segments()
-    changed = (inj.model_copy(update={"value": 99.0 / DAY_S}), pro)
+    changed = (inj.model_copy(update={"value": 99.0 / SECONDS_PER_DAY}), pro)
     assert compute_model_hash(build_case(refs, controls=changed)) != compute_model_hash(base)
     # The array digests reach the hash through the ArrayRefs the case carries.
     other = write_case_arrays(paths, subdir="alt", porosity=np.full(N_CELLS, 0.3))

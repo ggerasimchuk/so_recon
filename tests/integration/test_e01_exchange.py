@@ -26,7 +26,12 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import RunContext
 from so_recon.simulator.case_io import CASE_MANIFEST_FILENAME, read_array, write_array, write_case
-from so_recon.simulator.contracts import TIME_CELL_AXES, ArrayRef
+from so_recon.simulator.contracts import (
+    CONTROL_RATE_UNIT,
+    SECONDS_PER_DAY,
+    TIME_CELL_AXES,
+    ArrayRef,
+)
 from so_recon.simulator.julia_bridge import (
     JuliaNotFoundError,
     SubprocessJuliaLauncher,
@@ -66,13 +71,26 @@ end
 function check_case(path::AbstractString)
     raw = read(path)                       # exact bytes on disk
     case = JSON.parse(String(copy(raw)))   # copy: String(::Vector{UInt8}) takes ownership
-    for key in ("schema_version", "spec_version", "case_id", "model_hash", "grid", "controls")
+    for key in ("schema_version", "spec_version", "case_id", "model_hash",
+                "grid", "controls", "units")
         haskey(case, key) || error("case manifest is missing $(key)")
     end
     case["schema_version"] == "case-1" ||
         error("unexpected case schema_version $(case["schema_version"])")
     case["spec_version"] == "4.0" || error("unexpected spec_version $(case["spec_version"])")
     length(case["grid"]["shape"]) == 3 || error("grid shape is not three-dimensional")
+    # Control rates arrive as human day rates; this side divides by 86400 when it builds
+    # the model (Task 6). Assert the convention rather than assume it: a case carrying
+    # native m3_sc/s would otherwise run every rate control 86400 times off.
+    haskey(case["units"], "control_rate") || error("case manifest is missing units.control_rate")
+    case["units"]["control_rate"] == "m3_sc/day" ||
+        error("unexpected control rate unit $(case["units"]["control_rate"])")
+    for c in case["controls"]
+        if c["target"] in ("liquid_rate", "water_rate")
+            native = Float64(c["value"]) / 86400.0
+            native > 0.0 || error("non-positive native rate for well $(c["well_id"])")
+        end
+    end
     return case, bytes2hex(sha256(raw))
 end
 
@@ -127,6 +145,11 @@ function main(args::Vector{String})
                 "n_cells" => n_cells,
                 "axis_order" => axis_order,
                 "unit" => unit,
+                "control_rate_unit" => case["units"]["control_rate"],
+                "native_rates_m3_sc_per_s" => [
+                    Float64(c["value"]) / 86400.0 for c in case["controls"]
+                    if c["target"] in ("liquid_rate", "water_rate")
+                ],
                 "julia_version" => string(VERSION),
             ))
         end
@@ -192,6 +215,11 @@ def test_python_arrays_survive_a_real_julia_round_trip(tmp_project: Path) -> Non
     assert summary["model_hash"] == case.model_hash
     assert summary["case_id"] == case.case_id
     assert summary["axis_order"] == ["time", "cell"]
+    # Julia read the declared control-rate unit and the day rates behind it.
+    assert summary["control_rate_unit"] == CONTROL_RATE_UNIT == "m3_sc/day"
+    assert summary["native_rates_m3_sc_per_s"] == pytest.approx(
+        [c.value / SECONDS_PER_DAY for c in case.controls if c.target.endswith("rate")]
+    )
     assert summary["unit"] == "1"
     # The array kept its orientation across the language boundary, not merely its size.
     assert (summary["n_times"], summary["n_cells"]) == (2, 3)
@@ -221,7 +249,31 @@ def test_python_arrays_survive_a_real_julia_round_trip(tmp_project: Path) -> Non
 
 
 @pytest.mark.julia
-def test_julia_refuses_a_case_manifest_of_the_wrong_shape(tmp_project: Path) -> None:
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ({"schema_version": "case-1"}, "missing"),
+        (
+            {
+                "schema_version": "case-1",
+                "spec_version": "4.0",
+                "case_id": "case-x",
+                "model_hash": "a" * 64,
+                "grid": {"shape": [2, 2, 2]},
+                "controls": [],
+                # Native rates, contradicting the conversion this side performs. Python
+                # refuses such a case at construction, so the only way to prove the Julia
+                # check is live is to hand-build the manifest and feed it in.
+                "units": {"control_rate": "m3_sc/s"},
+            },
+            "unexpected control rate unit",
+        ),
+    ],
+    ids=["missing-keys", "native-control-rate"],
+)
+def test_julia_refuses_a_case_manifest_of_the_wrong_shape(
+    tmp_project: Path, payload: dict[str, object], reason: str
+) -> None:
     """The shared JSON shape is checked by the Julia decoder too, not only by Python."""
     if not (ROOT / "julia" / "Manifest.toml").is_file():
         pytest.skip("julia/Manifest.toml missing; run make setup-julia")
@@ -242,20 +294,20 @@ def test_julia_refuses_a_case_manifest_of_the_wrong_shape(tmp_project: Path) -> 
         axis_order=TIME_CELL_AXES,
         paths=paths,
     )
-    truncated = paths.artifacts / "exchange" / "truncated.json"
-    truncated.parent.mkdir(parents=True, exist_ok=True)
-    truncated.write_text(json.dumps({"schema_version": "case-1"}), encoding="utf-8")
+    manifest = paths.artifacts / "exchange" / "handbuilt.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
 
     script = tmp_project / "exchange_probe.jl"
     script.write_text(PROBE_JL, encoding="utf-8")
-    with pytest.raises(RuntimeError, match="missing"):
+    with pytest.raises(RuntimeError, match=reason):
         launcher.launch(
             script,
             [
                 "--in",
                 str(paths.root / states.path),
                 "--case",
-                str(truncated),
+                str(manifest),
                 "--h5out",
                 str(paths.artifacts / "exchange" / "roundtrip.h5"),
             ],

@@ -16,8 +16,12 @@ from so_recon.simulator.case_io import cartesian_neighbors, compute_model_hash, 
 from so_recon.simulator.contracts import (
     CELL_AXES,
     CELL_DIM_AXES,
+    CONTROL_RATE_UNIT,
+    CONTROL_RATE_UNIT_KEY,
     DIM_CELL_AXES,
     FACE_AXES,
+    MILLIDARCY_M2,
+    SECONDS_PER_DAY,
     ArrayRef,
     BoundarySpec,
     CaseBundle,
@@ -32,8 +36,6 @@ from so_recon.simulator.contracts import (
 
 SHAPE = (2, 2, 2)
 N_CELLS = 8
-DAY_S = 86400.0
-MD_M2 = 9.869233e-16
 
 # The anti-transpose fixture: two times, three cells, every value distinct and no symmetry
 # to hide behind, so a transpose or a reshape changes which cell holds which number.
@@ -65,7 +67,7 @@ def write_case_arrays(
         "cell_volume_m3": (np.full(N_CELLS, 50.0 * 50.0 * 10.0), "m3", CELL_AXES),
         "neighbors": (cartesian_neighbors(SHAPE), "1", FACE_AXES),
         "porosity": (np.full(N_CELLS, 0.25), "1", CELL_AXES),
-        "permeability_m2": (np.full((3, N_CELLS), 100.0 * MD_M2), "m2", DIM_CELL_AXES),
+        "permeability_m2": (np.full((3, N_CELLS), 100.0 * MILLIDARCY_M2), "m2", DIM_CELL_AXES),
         "pressure_pa": (np.full(N_CELLS, 2.5e7), "Pa", CELL_AXES),
         "sw": (np.full(N_CELLS, 0.3), "1", CELL_AXES),
     }
@@ -96,21 +98,23 @@ def control_segments() -> tuple[ControlSegment, ...]:
     return (
         ControlSegment(
             start_s=0.0,
-            end_s=30.0 * DAY_S,
+            end_s=30.0 * SECONDS_PER_DAY,
             well_id="INJ1",
             role="injector",
             target="water_rate",
-            value=50.0 / DAY_S,
+            # m3_sc/day: the human-facing unit the exchange carries. Julia divides by
+            # SECONDS_PER_DAY at model construction to reach the native m3_sc/s.
+            value=50.0,
             bhp_limit_pa=4.0e7,
             connection_open=(True, True),
         ),
         ControlSegment(
             start_s=0.0,
-            end_s=30.0 * DAY_S,
+            end_s=30.0 * SECONDS_PER_DAY,
             well_id="PRO1",
             role="producer",
             target="liquid_rate",
-            value=40.0 / DAY_S,
+            value=40.0,  # m3_sc/day, total standard liquid (SPEC 9.1)
             bhp_limit_pa=1.0e7,
             connection_open=(True, True),
         ),
@@ -125,7 +129,7 @@ def build_case(refs: dict[str, ArrayRef], **overrides: Any) -> CaseBundle:
         "sector_id": None,
         "start_date": "2020-01-01",
         "cutoff": "2020-01-31",
-        "report_edges_s": (0.0, 15.0 * DAY_S, 30.0 * DAY_S),
+        "report_edges_s": (0.0, 15.0 * SECONDS_PER_DAY, 30.0 * SECONDS_PER_DAY),
         "grid": grid_spec(refs),
         "rock": RockSpec(porosity=refs["porosity"], permeability_m2=refs["permeability_m2"]),
         "fluids": FluidSpec(),
@@ -143,7 +147,12 @@ def build_case(refs: dict[str, ArrayRef], **overrides: Any) -> CaseBundle:
         "boundary": BoundarySpec(kind="closed", cells=()),
         "observations": ObservationSpec(dynamic_channels=(), pressure_available=False),
         "renderer_version": "e01.0",
-        "units": {"pressure": "Pa", "permeability": "m2", "time": "s"},
+        "units": {
+            "pressure": "Pa",
+            "permeability": "m2",
+            "time": "s",
+            CONTROL_RATE_UNIT_KEY: CONTROL_RATE_UNIT,
+        },
         "seeds": {"fixture": 20260913},
         "source_hashes": {"generator": "a" * 64, "config": "b" * 64},
         "model_hash": PLACEHOLDER_HASH,

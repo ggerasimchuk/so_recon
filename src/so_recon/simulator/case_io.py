@@ -7,12 +7,15 @@ Three jobs, in the order a case meets them:
    is refused here, in Python, before any Julia process is started. `validate_case`
    collects everything it finds into a `ValidationReport` instead of raising on the first
    problem, because an operator fixing a case wants the whole list.
-2. **Publish immutably.** An array is written to a temporary neighbour file by a single
-   writer, flushed, closed, hashed, compared against whatever already occupies the
-   destination, and only then renamed into place. The JSON manifest is published LAST, so
-   losing the process halfway leaves unfinished staging rather than a case that looks
-   complete. Writing different bytes to a path that already holds an artifact is refused
-   by the existing registry — no second registry is created here.
+2. **Publish immutably, in one sequence.** `write_array` writes an array to a temporary
+   neighbour file with a single writer, flushes, closes, hashes, compares against whatever
+   already occupies the destination, and only then renames into place. `write_case` then
+   runs the rest of that sequence end to end: it registers every array of the case through
+   the existing artifact registry and into the run's outputs, and publishes the JSON
+   manifest LAST. Losing the process halfway therefore leaves unfinished staging rather
+   than a case that looks complete, and the manifest's `parent_artifact_ids` always name
+   artifacts the run really recorded. Writing different bytes to a path that already holds
+   an artifact is refused by that registry — no second registry is created here.
 3. **Survive the round trip.** HDF5 states are `(n_times, n_cells)` with `axis_order`
    recorded as a dataset attribute. Julia is column-major and its HDF5 bindings hand back
    reversed dimensions, so the attribute is what lets the two sides agree; `read_array`
@@ -454,24 +457,35 @@ def write_case(
     *,
     now: datetime | None = None,
 ) -> ArtifactRef:
-    """Publish the case manifest, last of all the files a case consists of.
+    """Publish a case: register every array it depends on, then the manifest, last.
 
-    The arrays are already on disk and registered by the time this runs, so a process that
-    dies before this call leaves unfinished staging behind — never a manifest that claims a
-    complete case.
+    This is the whole of the publication sequence, not its final step. The arrays are
+    already staged, hashed and renamed into place by `write_array`; here each one is
+    recorded in the run's lineage through the existing registry, and only then is the JSON
+    manifest written. That ordering is the point: a process lost part-way leaves registered
+    arrays and no manifest, which is unfinished staging rather than a case that claims to be
+    complete — and it means the `parent_artifact_ids` the manifest names always resolve to
+    artifacts the run actually recorded.
+
+    Each array is keyed in `ctx.outputs` by its position in the record, so
+    `rock.permeability_m2` is findable as such rather than as an anonymous digest.
     """
     report = validate_case(case, paths)
     if not report.valid:
         raise ValueError(f"refusing to publish case {case.case_id}: " + "; ".join(report.errors))
-    parents = sorted({ref.sha256 for ref in case_array_refs(case).values()})
+    stamp = now or datetime.now(UTC)
+    registered = [
+        register_array(ref, paths, ctx, key=label, now=stamp)
+        for label, ref in sorted(case_array_refs(case).items())
+    ]
     ref = write_json_artifact(
         ctx.run_dir / CASE_MANIFEST_FILENAME,
         case.model_dump(mode="json"),
         paths,
         schema_version=case.schema_version,
         producer_run_id=ctx.run_id,
-        parent_artifact_ids=parents,
-        now=now or datetime.now(UTC),
+        parent_artifact_ids=sorted({artifact.artifact_id for artifact in registered}),
+        now=stamp,
     )
     ctx.add_output("case", ref)
     return ref

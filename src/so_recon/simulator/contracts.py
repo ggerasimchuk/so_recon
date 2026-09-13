@@ -48,6 +48,14 @@ MAX_ATTEMPTS = 2
 #: something to renormalise away.
 SATURATION_SUM_TOLERANCE = 1e-12
 
+#: Every case must declare, as data, the unit its control rates are written in. The Julia
+#: side divides by SECONDS_PER_DAY at model construction, so a case that silently carried
+#: native m3_sc/s would run every rate control 86400 times off. Requiring the key — and
+#: requiring it to say m3_sc/day — makes that disagreement a validation error rather than a
+#: plausible-looking result.
+CONTROL_RATE_UNIT_KEY = "control_rate"
+CONTROL_RATE_UNIT = "m3_sc/day"
+
 #: Axis names. They are recorded in the HDF5 files and compared on read, so a transposed
 #: array cannot be mistaken for the one that was written.
 CELL_AXES = ("cell",)
@@ -330,7 +338,22 @@ class WellSpec(StrictModel):
 
 
 class ControlSegment(StrictModel):
-    """One well's control over one time interval. Times are seconds from the case start."""
+    """One well's control over one time interval. Times are seconds from the case start.
+
+    `value` is a HUMAN-facing quantity, and which one depends on `target`:
+
+    * `liquid_rate` — total standard liquid rate in **m3_sc/day**
+    * `water_rate` — standard water rate in **m3_sc/day**
+    * `bhp` — bottom-hole pressure in **Pa**
+    * `disabled` — unitless and ignored; it must be 0.0
+
+    Rates cross the JSON boundary in m3_sc/day and Julia divides by `SECONDS_PER_DAY` to
+    reach the native m3_sc/s when it builds the model — in the same place, and for the same
+    reason, that it converts zero-based cell ids to one-based ones (plan 3.1: "человеческие
+    control rates — m3_sc/day, native — m3_sc/s"). Getting this wrong is silent and costs a
+    factor of 86400, so the convention is not left to prose: every `CaseBundle` has to
+    declare it in `units[CONTROL_RATE_UNIT_KEY]`, and that declaration is validated.
+    """
 
     start_s: float = Field(ge=0.0)
     end_s: float
@@ -546,6 +569,21 @@ class CaseBundle(StrictModel):
         unknown = sorted({unit for unit in v.values() if unit not in KNOWN_UNITS})
         if unknown:
             raise ValueError(f"unknown units {unknown}; known units are {sorted(KNOWN_UNITS)}")
+        # The control-rate convention travels with the case, not in anyone's memory: Julia
+        # converts `ControlSegment.value` to native m3_sc/s by dividing by SECONDS_PER_DAY,
+        # and a case that meant m3_sc/s all along would be wrong by that factor in silence.
+        declared = v.get(CONTROL_RATE_UNIT_KEY)
+        if declared is None:
+            raise ValueError(
+                f"units must declare {CONTROL_RATE_UNIT_KEY!r}: a case has to say which unit "
+                f"its ControlSegment rates are written in (expected {CONTROL_RATE_UNIT!r})"
+            )
+        if declared != CONTROL_RATE_UNIT:
+            raise ValueError(
+                f"units[{CONTROL_RATE_UNIT_KEY!r}] must be {CONTROL_RATE_UNIT!r}, got "
+                f"{declared!r}; control rates cross the exchange as human day rates and "
+                "Julia converts to native m3_sc/s when it builds the model"
+            )
         return v
 
     @model_validator(mode="after")
