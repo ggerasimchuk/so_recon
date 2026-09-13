@@ -86,7 +86,10 @@ def test_smoke_command_freeze_then_pass(
     tmp_project: Path, fake_launcher_factory: Any, capsys: Any
 ) -> None:
     launcher = fake_launcher_factory(OK)
-    factory = lambda paths, cfg, julia: launcher  # noqa: E731
+
+    def factory(paths: Any, cfg: Any, julia: Any) -> Any:
+        return launcher
+
     assert (
         main(["--root", str(tmp_project), "smoke", "--freeze-expected"], launcher_factory=factory)
         == 0

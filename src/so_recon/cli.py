@@ -165,7 +165,8 @@ def main(
     try:
         cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
         paths = ProjectPaths.from_config(root, cfg.paths)
-    except Exception as exc:  # noqa: BLE001 - any config failure must still be recorded
+    # Deliberately broad: any configuration failure must still leave a FAIL record.
+    except Exception as exc:
         return _record_startup_failure(root, args.command, full_argv, exc)
 
     if args.command == "smoke":

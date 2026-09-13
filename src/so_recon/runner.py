@@ -39,7 +39,9 @@ def execute_run(
     log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
     try:
         status, notes = body(ctx, log)
-    except Exception as exc:  # noqa: BLE001 - deliberate: every failure becomes a FAIL record
+    # Deliberately broad: invariant I6 says EVERY failure becomes a FAIL record, so nothing
+    # may escape here. (No suppression needed here: BLE001 is not in this project's ruleset.)
+    except Exception as exc:
         log.exception("command %s failed", command)
         ctx.finish("FAIL", notes=[f"exception: {type(exc).__name__}: {exc}"])
     else:
