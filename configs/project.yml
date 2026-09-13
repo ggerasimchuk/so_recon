@@ -1,0 +1,62 @@
+# SO-RECON project configuration. Validated by so_recon.config.schema.ProjectConfig.
+# All paths are relative to the repository root. No personal absolute paths.
+# Raw sources are immutable: E00 opens them read-only and never moves or rewrites them.
+spec_version: "3.0"
+config_version: "E00.2"
+project_name: SO-RECON
+
+paths:
+  raw: data/Ромашка_сырые
+  interim: data/interim
+  processed: data/processed
+  artifacts: artifacts
+  reports: reports
+  configs: configs
+  julia: julia
+
+sources:
+  files:
+    - name: coords
+      path: data/Ромашка_сырые/coords.csv
+      encoding: utf-8
+      delimiter: ","
+      decimal: "."
+      header_lines: 1
+    - name: gis
+      path: data/Ромашка_сырые/gis.csv
+      encoding: cp1251
+      delimiter: ";"
+      decimal: ","
+      header_lines: 1
+    - name: mer
+      path: data/Ромашка_сырые/mer.csv
+      encoding: utf-8-sig
+      delimiter: ";"
+      decimal: ","
+      header_lines: 1
+    - name: perf
+      path: data/Ромашка_сырые/perf.csv
+      encoding: cp1251
+      delimiter: ";"
+      decimal: ","
+      header_lines: 1
+    # plastoper.csv stores values such as "269,7600098" -> decimal separator is a comma.
+    - name: plastoper
+      path: data/Ромашка_сырые/plastoper.csv
+      encoding: utf-8-sig
+      delimiter: ";"
+      decimal: ","
+      header_lines: 1
+
+smoke:
+  seed: 20260913
+  n_wells: 4
+  n_months: 12
+  nx: 20
+  n_steps: 12
+  rel_tol: 1.0e-6
+
+julia:
+  project: julia
+  smoke_script: julia/smoke/smoke_case.jl
+  timeout_s: 1800
