@@ -18,6 +18,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from so_recon import SpecVersion
 from so_recon.config.load import load_project_config
 from so_recon.config.schema import JuliaConfig, ProjectConfig
 from so_recon.environment.report import (
@@ -56,6 +57,14 @@ ENV_REPORT_SCHEMA_VERSIONS = {
     "run_record": RUN_RECORD_SCHEMA_VERSION,
 }
 
+# One published file per spec version. A 4.0 run must not overwrite the 3.0 manifest E00
+# published: the two describe the same sources under different specifications, and the
+# historical one is frozen. The manifest schema itself is unchanged (still version 2).
+PUBLISHED_MANIFEST_NAMES: dict[SpecVersion, str] = {
+    "3.0": "source_manifest.json",
+    "4.0": "source_manifest-4.0.json",
+}
+
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="so-recon", description="SO-RECON project CLI")
@@ -79,12 +88,17 @@ def _manifest_body(
 ) -> Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]:
     def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
         now = datetime.now(UTC)
-        manifest = build_source_manifest(cfg.sources, paths, config_version=cfg.config_version)
+        manifest = build_source_manifest(
+            cfg.sources,
+            paths,
+            config_version=cfg.config_version,
+            spec_version=cfg.spec_version,
+        )
         ref, published = write_source_manifest(
             manifest,
             paths,
             run_dir=ctx.run_dir,
-            published_path=paths.manifests / "source_manifest.json",
+            published_path=paths.manifests / PUBLISHED_MANIFEST_NAMES[cfg.spec_version],
             producer_run_id=ctx.run_id,
             now=now,
         )

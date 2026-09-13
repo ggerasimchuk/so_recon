@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from so_recon import SPEC_VERSION
+from so_recon import SpecVersion
 from so_recon.config.schema import SourcesConfig, StrictModel
 from so_recon.paths import PathEscapeError, ProjectPaths
 from so_recon.registry.artifact import ArtifactRef, write_artifact
@@ -91,8 +91,17 @@ class SourceManifestStamp(StrictModel):
 
 
 def build_source_manifest(
-    sources: SourcesConfig, paths: ProjectPaths, *, config_version: str
+    sources: SourcesConfig,
+    paths: ProjectPaths,
+    *,
+    config_version: str,
+    spec_version: SpecVersion = "3.0",
 ) -> SourceManifest:
+    """Hash the configured sources into a deterministic manifest.
+
+    `spec_version` defaults to 3.0 so that the E00 manifests stay byte-identical; every
+    new caller passes the version from its validated config explicitly.
+    """
     entries: list[SourceEntry] = []
     missing: list[str] = []
     for spec in sources.files:
@@ -134,7 +143,7 @@ def build_source_manifest(
         )
     if missing:
         raise MissingSourceError(missing)
-    return SourceManifest(spec_version=SPEC_VERSION, config_version=config_version, sources=entries)
+    return SourceManifest(spec_version=spec_version, config_version=config_version, sources=entries)
 
 
 def manifest_bytes(manifest: SourceManifest) -> bytes:

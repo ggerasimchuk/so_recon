@@ -1,0 +1,27 @@
+# SO-RECON E01 configuration. Validated by so_recon.config.schema.ProjectConfig.
+# It carries the existing paths/julia defaults only: no field of its own exists yet, and
+# the resource profile block arrives with the E01 resource task. Until then this file is
+# the compatibility check that a 4.0 config loads, hashes and stamps as 4.0.
+#
+# E01 is forward-synthetic, so it declares no raw sources. `make smoke` stays on the
+# legacy configs/project.yml, which keeps spec_version 3.0 and its own meaning.
+spec_version: "4.0"
+config_version: "E01.1"
+project_name: SO-RECON
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  artifacts: artifacts
+  reports: reports
+  configs: configs
+  julia: julia
+
+sources:
+  files: []
+
+julia:
+  project: julia
+  smoke_script: julia/smoke/smoke_case.jl
+  timeout_s: 1800

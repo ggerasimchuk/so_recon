@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from so_recon import SpecVersion
 from so_recon.paths import validate_relative_path
 
 
@@ -79,7 +80,9 @@ class JuliaConfig(StrictModel):
 
 
 class ProjectConfig(StrictModel):
-    spec_version: Literal["3.0"]
+    # A 3.0 config keeps its original meaning: it is read, hashed and stamped as 3.0.
+    # Nothing here upgrades a legacy config, and nothing marks a 4.0 config as 3.0.
+    spec_version: SpecVersion
     config_version: str
     project_name: str = "SO-RECON"
     paths: PathsConfig = PathsConfig()
