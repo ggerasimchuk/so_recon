@@ -18,7 +18,7 @@ from typing import Literal
 
 from so_recon import SPEC_VERSION
 from so_recon.config.schema import SourcesConfig, StrictModel
-from so_recon.paths import ProjectPaths
+from so_recon.paths import PathEscapeError, ProjectPaths
 from so_recon.registry.artifact import ArtifactRef, write_artifact
 from so_recon.registry.atomic import write_bytes_atomic, write_json_atomic
 
@@ -97,6 +97,11 @@ def build_source_manifest(
     missing: list[str] = []
     for spec in sources.files:
         full = paths.resolve(spec.path)  # validates form and containment (invariant I4)
+        data_root = paths.resolve("data")
+        if not full.is_relative_to(data_root) or not full.is_relative_to(paths.raw.resolve()):
+            raise PathEscapeError(
+                f"source {spec.path!r} must stay inside the configured raw directory under data/"
+            )
         if not full.is_file():
             if spec.required:
                 missing.append(spec.path)

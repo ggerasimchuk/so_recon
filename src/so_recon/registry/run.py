@@ -106,6 +106,7 @@ class RunContext:
         """Open a run. cfg may be None so that a configuration failure can still be
         recorded as a FAIL run (invariant I6)."""
         now = now or datetime.now(UTC)
+        paths.validate_run_destination()
         cfg_hash = config_hash(cfg) if cfg is not None else UNAVAILABLE
         commit = git_commit(paths.root)
         dirty = git_is_dirty(paths.root)
@@ -129,7 +130,7 @@ class RunContext:
             spec_version=SPEC_VERSION,
             config_version=cfg.config_version if cfg is not None else UNAVAILABLE,
             resolved_config_hash=cfg_hash,
-            environment_lock_hash=environment_lock_hash(paths),
+            environment_lock_hash=UNAVAILABLE,
             python_version=platform.python_version(),
             schema_versions=dict(schema_versions or {}),
             raw_input_hashes=dict(raw_input_hashes or {}),
@@ -146,10 +147,16 @@ class RunContext:
             # recorded — exactly what invariant I6 forbids. Release the claim instead.
             shutil.rmtree(run_dir, ignore_errors=True)
             raise
-        # run.json now exists, so a failure below is recorded by the caller's FAIL path
-        # rather than vanishing.
-        if cfg is not None:
-            write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
+        # run.json now exists, so failures during initialization can be recorded below.
+        try:
+            ctx.update(environment_lock_hash=environment_lock_hash(paths))
+            if cfg is not None:
+                write_json_atomic(run_dir / "resolved_config.json", resolved_config_dict(cfg))
+        except Exception as exc:
+            # start() has not returned ctx to the runner yet. Close the existing
+            # record here; the caller cannot recover it from a failed assignment.
+            ctx.finish("FAIL", notes=[f"run initialization failed: {type(exc).__name__}: {exc}"])
+            raise
         return ctx
 
     def write(self) -> None:

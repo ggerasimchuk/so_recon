@@ -8,6 +8,7 @@ the smoke end-to-end: Julia returns the SHA-256 of the bytes it actually read.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from so_recon.config.schema import SmokeFixtureConfig
-from so_recon.registry.atomic import write_bytes_atomic, write_json_atomic
+from so_recon.registry.artifact import check_artifact_content
+from so_recon.registry.atomic import write_bytes_atomic
 from so_recon.registry.hashing import canonical_json, sha256_json
 
 FIXTURE_SCHEMA_VERSION = "1"
@@ -105,17 +107,36 @@ def write_smoke_fixture(fixture: SmokeFixture, out_dir: Path) -> dict[str, Path]
     wells_path = out_dir / "wells.parquet"
     wm_path = out_dir / "well_month.parquet"
     meta_path = out_dir / "fixture_meta.json"
-    pq.write_table(fixture.wells, wells_path)
-    pq.write_table(fixture.well_month, wm_path)
-    write_json_atomic(
-        meta_path,
-        {
-            "schema_version": FIXTURE_SCHEMA_VERSION,
-            "seed": fixture.seed,
-            "content_hash": fixture.content_hash,
-            "n_rows": {"wells": fixture.wells.num_rows, "well_month": fixture.well_month.num_rows},
-        },
-    )
+    payloads: dict[Path, bytes] = {}
+    for path, table in ((wells_path, fixture.wells), (wm_path, fixture.well_month)):
+        buffer = pa.BufferOutputStream()
+        pq.write_table(table, buffer)
+        payloads[path] = buffer.getvalue().to_pybytes()
+    payloads[meta_path] = (
+        json.dumps(
+            {
+                "schema_version": FIXTURE_SCHEMA_VERSION,
+                "seed": fixture.seed,
+                "content_hash": fixture.content_hash,
+                "n_rows": {
+                    "wells": fixture.wells.num_rows,
+                    "well_month": fixture.well_month.num_rows,
+                },
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    # Check the whole set before writing, so a conflict in the last file cannot
+    # replace the first two. Identical reuse preserves the original files.
+    for path, data in payloads.items():
+        check_artifact_content(path, data)
+    for path, data in payloads.items():
+        if not path.exists():
+            write_bytes_atomic(path, data)
     return {"wells": wells_path, "well_month": wm_path, "meta": meta_path}
 
 
@@ -157,5 +178,7 @@ def case_bytes(case: dict[str, Any]) -> bytes:
 
 def write_smoke_case(case: dict[str, Any], path: Path) -> bytes:
     payload = case_bytes(case)
-    write_bytes_atomic(path, payload)
+    check_artifact_content(path, payload)
+    if not path.exists():
+        write_bytes_atomic(path, payload)
     return payload

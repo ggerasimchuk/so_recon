@@ -112,3 +112,28 @@ def test_case_rejects_a_fixture_with_no_volumes() -> None:
     )
     with pytest.raises(ValueError):
         build_smoke_case(cfg, type(fx)(wells=fx.wells, well_month=empty, content_hash="h", seed=1))
+
+
+def test_fixture_reuse_cannot_change_registered_content(tmp_path: Path) -> None:
+    from so_recon.registry.artifact import ArtifactImmutabilityError
+
+    first = build_smoke_fixture(SmokeFixtureConfig(seed=1))
+    second = build_smoke_fixture(SmokeFixtureConfig(seed=2))
+    files = write_smoke_fixture(first, tmp_path)
+    before = {key: path.read_bytes() for key, path in files.items()}
+    write_smoke_fixture(first, tmp_path)
+    with pytest.raises(ArtifactImmutabilityError):
+        write_smoke_fixture(second, tmp_path)
+    assert {key: path.read_bytes() for key, path in files.items()} == before
+
+
+def test_case_writer_cannot_overwrite_existing_case(tmp_path: Path) -> None:
+    from so_recon.registry.artifact import ArtifactImmutabilityError
+
+    path = tmp_path / "case.json"
+    write_smoke_case({"seed": 1}, path)
+    before = path.read_bytes()
+    write_smoke_case({"seed": 1}, path)
+    with pytest.raises(ArtifactImmutabilityError):
+        write_smoke_case({"seed": 2}, path)
+    assert path.read_bytes() == before

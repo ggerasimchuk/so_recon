@@ -24,6 +24,12 @@ class ArtifactImmutabilityError(RuntimeError):
     """An existing artifact would have been overwritten with different content."""
 
 
+def check_artifact_content(path: Path, data: bytes) -> None:
+    """Preflight an immutable write, also usable for a set of fixture files."""
+    if path.exists() and sha256_file(path) != sha256_bytes(data):
+        raise ArtifactImmutabilityError(f"refusing to overwrite {path}: different content")
+
+
 class ArtifactRef(StrictModel):
     artifact_id: str
     path: str
@@ -97,13 +103,8 @@ def write_artifact(
 ) -> ArtifactRef:
     repo_relative = paths.relative(path)  # also proves containment inside the repository
     digest = sha256_bytes(data)
-    if path.exists():
-        existing = sha256_file(path)
-        if existing != digest:
-            raise ArtifactImmutabilityError(
-                f"refusing to overwrite {repo_relative}: on disk {existing}, new {digest}"
-            )
-    else:
+    check_artifact_content(path, data)
+    if not path.exists():
         write_bytes_atomic(path, data)
     return _ref(
         repo_relative=repo_relative,

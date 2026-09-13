@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 
 ROOT_ENV_VAR = "SO_RECON_ROOT"
 
-# "C:/x", "C:\x" and "\\server\share" must never be accepted from configuration.
-_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+# Windows drive paths (including "C:x") and UNC are invalid configuration paths.
+_WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:|\\\\)")
 
 
 class RepoRootNotFoundError(RuntimeError):
@@ -28,7 +28,7 @@ class PathEscapeError(ValueError):
 def validate_relative_path(value: str) -> str:
     """Accept only a plain relative POSIX path that stays inside the repository.
 
-    Rejects absolute POSIX paths, Windows drive-absolute and UNC paths, '~' expansion,
+    Rejects absolute POSIX paths, Windows drive and UNC paths, '~' expansion,
     backslash separators, '.' and '..' segments, and NUL bytes (invariant I4).
     """
     if not value or value != value.strip():
@@ -174,5 +174,22 @@ class ProjectPaths:
     def ensure_dirs(self) -> None:
         """Create runtime directories only. The source directory is never created:
         a missing source must surface as an explicit error (SPEC 7.1, invariant I1)."""
-        for p in (self.interim, self.processed, self.runs, self.manifests, self.stages):
+        runtime = (self.interim, self.processed, self.runs, self.manifests, self.stages)
+        # Validate every derived directory before the first mkdir. Checking only the
+        # configured parent misses symlinks such as artifacts/runs -> outside.
+        raw = self.raw.resolve()
+        for p in (*runtime, self.artifacts, self.reports, self.configs):
+            resolved = p.resolve()
+            if resolved.is_relative_to(raw) or raw.is_relative_to(resolved):
+                raise PathEscapeError(f"output directory {p} overlaps raw sources {self.raw}")
+        for p in runtime:
+            self.relative(p)
+        for p in runtime:
             p.mkdir(parents=True, exist_ok=True)
+
+    def validate_run_destination(self) -> None:
+        """Check the record destination before claiming a run, including fallback paths."""
+        self.relative(self.runs)
+        raw = self.raw.resolve()
+        if self.runs.resolve().is_relative_to(raw) or raw.is_relative_to(self.runs.resolve()):
+            raise PathEscapeError(f"run directory {self.runs} overlaps raw sources {self.raw}")

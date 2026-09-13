@@ -25,7 +25,7 @@ class RunRecordUnavailableError(RuntimeError):
 
     This is the boundary of invariant I6. I6 promises a FAIL record for any failure that
     happens once a run exists; it cannot promise one when the artifacts tree itself is
-    unusable (for example `reports/` present as a regular file, a read-only mount, or a
+    unusable (for example `artifacts/` present as a regular file, a read-only mount, or a
     disk that fills between run start and run finish). Raising a named error at both ends
     keeps those cases a clean, explained exit instead of a raw traceback.
     """
@@ -59,9 +59,8 @@ def execute_run(
     parent_run_ids: Sequence[str] = (),
 ) -> RunContext:
     try:
-        # Owned here, not by callers: creating the runtime directories is itself a way the
-        # run can fail before any record exists, and it must not escape as a raw traceback.
-        paths.ensure_dirs()
+        # Claim the validated record destination first. A broken reports/interim directory
+        # does not prevent writing a FAIL record under an otherwise usable artifacts tree.
         ctx = RunContext.start(
             command=command,
             argv=argv,
@@ -75,13 +74,16 @@ def execute_run(
             f"cannot open a run record for {command!r} under {paths.runs}: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
-    log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
+    log = None
     try:
+        log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
+        paths.ensure_dirs()
         status, notes = body(ctx, log)
     # Deliberately broad: invariant I6 says EVERY failure becomes a FAIL record, so nothing
     # may escape here. (No suppression needed here: BLE001 is not in this project's ruleset.)
     except Exception as exc:
-        log.exception("command %s failed", command)
+        if log is not None:
+            log.exception("command %s failed", command)
         _finish(ctx, "FAIL", [f"exception: {type(exc).__name__}: {exc}"], command=command)
     else:
         _finish(ctx, status, notes, command=command)

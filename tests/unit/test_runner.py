@@ -52,8 +52,8 @@ def test_unusable_runs_directory_is_a_clean_named_failure(tmp_project: Path) -> 
     """Invariant I6's boundary: when the artifacts tree itself is unusable no record can
     exist, but the caller must get a named error rather than a raw traceback."""
     cfg, paths = _setup(tmp_project)
-    # reports/ as a regular file makes ensure_dirs fail on reports/manifests.
-    (tmp_project / "reports").write_text("not a directory\n")
+    # The record destination itself is unusable.
+    (tmp_project / "artifacts").write_text("not a directory\n")
 
     def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
         raise AssertionError("body must never run when the run cannot be opened")
