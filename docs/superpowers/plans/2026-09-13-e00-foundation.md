@@ -4704,6 +4704,21 @@ def test_cli_exits_cleanly_when_the_runs_directory_is_unusable(
     assert "Traceback" not in err
 
 
+def test_cli_explains_a_bad_config_even_when_no_record_can_be_written(
+    tmp_project: Path, capsys: Any
+) -> None:
+    """Both failures at once. The startup-failure path calls execute_run too, so it needs the
+    same guard: the config error must still be explained and no traceback may escape."""
+    (tmp_project / "reports").write_text("not a directory\n")
+    bad = tmp_project / "configs" / "bad.yml"
+    bad.write_text("paths: [this is not a mapping\n", encoding="utf-8")
+    assert main(["--root", str(tmp_project), "--config", str(bad), "manifest"]) == 1
+    err = capsys.readouterr().err
+    assert "config error" in err
+    assert "cannot record this run" in err
+    assert "Traceback" not in err
+
+
 def test_unknown_command_returns_2(tmp_project: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--root", str(tmp_project), "nope"])
@@ -5176,14 +5191,19 @@ def _report(ctx: RunContext, paths: ProjectPaths) -> int:
 def _record_startup_failure(
     root: Path, command: str, argv: Sequence[str], exc: Exception
 ) -> int:
-    """Configuration could not be loaded: still leave a FAIL record (invariant I6)."""
+    """Configuration could not be loaded: still leave a FAIL record (invariant I6).
+
+    The cause is printed BEFORE the record is opened, so the user learns why the run failed
+    even when the artifacts tree is also unusable and `execute_run` raises
+    `RunRecordUnavailableError` on its way out.
+    """
     paths = ProjectPaths.default(root)
+    print(f"config error: {exc}", file=sys.stderr)
 
     def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
         return "FAIL", [f"config error: {exc}"]
 
     ctx = execute_run(command=command, argv=argv, cfg=None, paths=paths, body=body)
-    print(f"config error: {exc}", file=sys.stderr)
     return _report(ctx, paths)
 
 
@@ -5199,14 +5219,17 @@ def main(argv: Sequence[str] | None = None, *, launcher_factory: LauncherFactory
         print(f"cannot locate repository root: {exc}", file=sys.stderr)
         return 1
 
+    # ONE handler for every path that can open a run, the startup-failure path included:
+    # _record_startup_failure calls execute_run too, so guarding only the two dispatch
+    # branches would leave "bad config + unusable artifacts tree" as a raw traceback.
     try:
-        cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
-        paths = ProjectPaths.from_config(root, cfg.paths)
-    # Deliberately broad: any configuration failure must still leave a FAIL record.
-    except Exception as exc:
-        return _record_startup_failure(root, args.command, full_argv, exc)
+        try:
+            cfg = load_project_config(args.config or (root / "configs" / "project.yml"))
+            paths = ProjectPaths.from_config(root, cfg.paths)
+        # Deliberately broad: any configuration failure must still leave a FAIL record.
+        except Exception as exc:
+            return _record_startup_failure(root, args.command, full_argv, exc)
 
-    try:
         if args.command == "smoke":
             factory = launcher_factory or default_launcher
             ctx = run_smoke(
@@ -5215,17 +5238,13 @@ def main(argv: Sequence[str] | None = None, *, launcher_factory: LauncherFactory
                 freeze_expected=args.freeze_expected,
             )
             return _report(ctx, paths)
-    except RunRecordUnavailableError as exc:
-        print(f"cannot record this run: {exc}", file=sys.stderr)
-        return 1
 
-    body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
-    try:
+        body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
         ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
+        return _report(ctx, paths)
     except RunRecordUnavailableError as exc:
         print(f"cannot record this run: {exc}", file=sys.stderr)
         return 1
-    return _report(ctx, paths)
 
 
 if __name__ == "__main__":
