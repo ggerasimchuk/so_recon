@@ -39,7 +39,9 @@ def _failure_detail(out_path: Path, stderr: str) -> str:
     except (OSError, ValueError):
         payload = None
     if isinstance(payload, dict) and payload.get("message"):
-        return f"julia reported: {payload['message']}"
+        # Bounded like the stderr tail: the runner persists this string into run.json,
+        # and an unbounded message would put arbitrary content into a lineage record.
+        return f"julia reported: {str(payload['message'])[:4000]}"
     tail = stderr[-4000:].strip()
     return f"stderr tail:\n{tail}" if tail else "julia produced no stderr and no error message"
 
