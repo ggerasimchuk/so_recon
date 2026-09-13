@@ -21,6 +21,6 @@ using SHA
 
 include("model.jl")
 
-export build_ow, load_arrays, run_job
+export build_ow, load_arrays, run_job, InvalidCaseInput
 
 end # module

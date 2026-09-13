@@ -35,6 +35,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from so_recon.config.resources import P0_VERIFY_PROFILE
 from so_recon.environment.resources import ResourceSnapshot, probe_resources
@@ -59,7 +60,13 @@ from so_recon.simulator.julia_bridge import (
     find_julia,
 )
 from so_recon.simulator.worker import PersistentJuliaWorker
-from tests.forward_case import N_CELLS, build_case, write_case_arrays
+from tests.forward_case import (
+    N_CELLS,
+    SHAPE,
+    build_case,
+    cell_centers,
+    write_case_arrays,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_JL = ROOT / "julia" / "verification" / "fixtures.jl"
@@ -71,9 +78,14 @@ RHO_W_SC, RHO_O_SC = 1000.0, 800.0
 C_W, C_O = 4e-10, 1e-9
 MU_W, MU_O = 0.001, 0.003
 
-#: `:closed_cell` is one 10 m cube at porosity 0.2.
+#: `:closed_cell` is one 10 m cube at porosity 0.2, with its top face at the fixture datum.
 CLOSED_CELL_EDGE_M = 10.0
 CLOSED_CELL_POROSITY = 0.2
+DATUM_M = 1000.0
+
+#: `tests.forward_case` lays its 2x2x2 box out with 10 m layers below the same datum, so its
+#: cell centres are at 1005 m and 1015 m (see `forward_case.cell_centers`).
+FIXTURE_DEPTHS_M = [1005.0, 1015.0]
 
 #: The 2x2x2 exchange fixture: 100 x 100 x 20 m of box at the porosity its arrays carry.
 FIXTURE_BULK_VOLUME_M3 = 100.0 * 100.0 * 20.0
@@ -135,6 +147,17 @@ def test_the_native_constructor_matches_numbers_computed_here(tmp_project: Path)
     # Water first, oil second, summing to one: a swapped phase order also sums to one.
     assert closed["saturations"] == [[0.3], [0.7]]
     assert closed["permeability_m2"] == pytest.approx([100.0 * MILLIDARCY_M2] * 3, rel=1e-12)
+    # The model is built at the datum the case declares, not at the mesh's own origin: a
+    # grid origined at zero would put this centre at 5 m instead of 1005 m.
+    assert closed["declared_cell_centers_m"] == [[5.0, 5.0, DATUM_M + 5.0]]
+    assert closed["mesh_cell_centers_m"] == closed["declared_cell_centers_m"]
+
+    # And the other direction: a declared centre the shape and extent cannot produce is
+    # refused by name. Ignoring `cell_centers_m` would make this silently succeed.
+    refusal = report["rejected_geometry_message"]
+    assert "grid.cell_centers_m" in refusal
+    assert "zero-based cell 5" in refusal and "x axis" in refusal
+    assert "17.5 m" in refusal and "15.0 m" in refusal and "2.5 m" in refusal
 
     # --- PVT, against the exponential the plan specifies --------------------------------
     pvt = report["pvt"]
@@ -156,6 +179,10 @@ def test_the_native_constructor_matches_numbers_computed_here(tmp_project: Path)
 
     # --- viscosity on every submodel, and native face gravity ---------------------------
     probe = report["wellbore_probe"]
+    # Two layers at the case's datum, and a well datum that is the top of the box rather
+    # than a number 985 m away from the cells it belongs to.
+    assert probe["cell_center_depth_m"] == [DATUM_M + 5.0, DATUM_M + 15.0]
+    assert probe["well_reference_depth_m"] == DATUM_M
     assert sorted(probe["submodel_viscosities_pa_s"]) == ["INJ1", "PRO1", "Reservoir"]
     assert all(v == [MU_W, MU_O] for v in probe["submodel_viscosities_pa_s"].values())
     # The filter that picks those submodels is a filter: the facility carries no viscosity.
@@ -199,17 +226,32 @@ def _unloaded_machine(session_dir: Path) -> ResourceSnapshot:
     )
 
 
-def _publish_case(paths: ProjectPaths, *, label: str, porosity: float) -> tuple[CaseBundle, Path]:
+def _publish_case(
+    paths: ProjectPaths, *, label: str, porosity: float, **overrides: NDArray[np.float64]
+) -> tuple[CaseBundle, Path]:
     """Write one complete case, with its own arrays, and return it with its manifest path."""
     refs = write_case_arrays(
         paths,
         subdir=f"arrays-{label}",
         porosity=np.full(N_CELLS, porosity, dtype=np.float64),
+        **overrides,
     )
     case = build_case(refs, case_id=f"case-e01-{label}")
     ctx = RunContext.start(command=f"physics-{label}", argv=[], cfg=None, paths=paths)
     write_case(case, paths, ctx)
     return case, ctx.run_dir / CASE_MANIFEST_FILENAME
+
+
+def _displaced_cell_centers() -> NDArray[np.float64]:
+    """The fixture's geometry with one cell moved off the uniform grid it declares.
+
+    Python's own `validate_case` accepts this — it checks that centres are finite and that z
+    is a depth, not that they reproduce `shape` and `extent_m` — so the array reaches Julia
+    intact and the adapter is the side that has to notice.
+    """
+    centers = cell_centers(SHAPE).copy()
+    centers[5, 0] += 7.0
+    return centers
 
 
 @pytest.mark.julia
@@ -220,7 +262,11 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
 
     case_a, path_a = _publish_case(paths, label="a", porosity=POROSITY_A)
     case_b, path_b = _publish_case(paths, label="b", porosity=POROSITY_B)
-    assert case_a.model_hash != case_b.model_hash
+    # Same physics as A, but its declared geometry no longer describes the grid it names.
+    case_c, path_c = _publish_case(
+        paths, label="c", porosity=POROSITY_A, cell_centers_m=_displaced_cell_centers()
+    )
+    assert len({case_a.model_hash, case_b.model_hash, case_c.model_hash}) == 3
 
     solver_path = paths.artifacts / "solver" / "e01_solver.json"
     solver_path.parent.mkdir(parents=True, exist_ok=True)
@@ -276,7 +322,8 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
             worker.submit(descriptor("job-e01-b1", case_b, path_b), ledger),
             worker.submit(descriptor("job-e01-a2", case_a, path_a), ledger),
         ]
-        assert worker.pid == worker.handshake.pid  # one process behind all three jobs
+        displaced = worker.submit(descriptor("job-e01-c1", case_c, path_c), ledger)
+        assert worker.pid == worker.handshake.pid  # one process behind all four jobs
 
     records = [published_record(result) for result in results]
 
@@ -290,6 +337,8 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
         assert record["status"] == result.status
         built = record["model"]
         assert built["n_cells"] == N_CELLS
+        # The case's own datum reached the model: 1005 m and 1015 m, not 5 m and 15 m.
+        assert built["cell_center_depth_m"] == FIXTURE_DEPTHS_M
         assert built["phases"] == ["AqueousPhase", "LiquidPhase"]
         assert built["reference_densities_kg_m3"] == [RHO_W_SC, RHO_O_SC]
         assert built["gravity_m_s2"] == STANDARD_GRAVITY_M_S2
@@ -304,11 +353,20 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
     assert volumes[1] == pytest.approx(FIXTURE_BULK_VOLUME_M3 * POROSITY_B, rel=1e-12)
     assert volumes[2] == volumes[0]
 
-    # Three attempts, all of them paid for and none of them a success.
+    # A declared geometry that does not describe its own grid is refused, by name, before
+    # anything is simulated — and no model record is published for it.
+    assert displaced.status == "INVALID_INPUT"
+    assert displaced.reason is not None
+    assert "grid.cell_centers_m" in displaced.reason
+    assert "zero-based cell 5" in displaced.reason and "x axis" in displaced.reason
+    assert published_record(displaced)["model"] is None
+
+    # Four attempts, all of them paid for and none of them a success.
     assert [entry.job_id for entry in ledger.record.entries] == [
         "job-e01-a1",
         "job-e01-b1",
         "job-e01-a2",
+        "job-e01-c1",
     ]
     assert all(entry.state == "FAILED" for entry in ledger.record.entries)
     assert {entry.status for entry in ledger.record.entries} == {"INVALID_INPUT"}

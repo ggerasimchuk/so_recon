@@ -223,11 +223,19 @@ function execute_job(request::AbstractDict)
             built = outcome.model
             outcome.reason
         catch err
-            # The inputs were what they claimed to be, so this is not an input problem: the
-            # case describes something the native constructor cannot build.
-            status = "PHYSICALLY_INVALID"
-            string("the case could not be built into a JutulDarcy model: ",
-                   sprint(showerror, err))
+            # The adapter's own checks on the case say INVALID_INPUT — a geometry that does
+            # not describe the grid it declares, a fluid this adapter does not build, an
+            # array that is not the bytes it claims. A failure anywhere else means the input
+            # was well formed and the physics still could not be assembled from it.
+            if err isa SOReconAdapter.InvalidCaseInput
+                status = "INVALID_INPUT"
+                string("the case was refused by the model constructor: ",
+                       sprint(showerror, err))
+            else
+                status = "PHYSICALLY_INVALID"
+                string("the case could not be built into a JutulDarcy model: ",
+                       sprint(showerror, err))
+            end
         end
     end
 

@@ -32,6 +32,31 @@ const STANDARD_GRAVITY_M_S2 = 9.80665
 #: Every fixture cell is a 10 m cube, so a pore volume is a number one can check by hand.
 const CELL_EDGE_M = 10.0
 
+#: The depth of the top face of every fixture box. z is depth, positive down, and ABSOLUTE:
+#: a fixture origined at zero would let a grid-origin bug through unseen, because "the model
+#: ignored the declared centres" and "the declared centres were at the origin anyway" would
+#: produce the same numbers. A thousand metres is an ordinary reservoir datum and makes the
+#: two cases distinguishable.
+const DATUM_M = 1000.0
+
+"""
+    cartesian_cell_centers(nx, ny, nz) -> Matrix (n_cells, 3)
+
+The `(cell, dim)` centre array the exchange declares, for a box of 10 m cubes whose top face
+is at `DATUM_M`. Cells are laid out `cell_id = i + nx*(j + ny*k)`, zero-based, exactly as
+`case_io.cartesian_neighbors` does it on the Python side.
+"""
+function cartesian_cell_centers(nx::Int, ny::Int, nz::Int)
+    centers = Matrix{Float64}(undef, nx * ny * nz, 3)
+    for k in 0:(nz - 1), j in 0:(ny - 1), i in 0:(nx - 1)
+        cell = i + nx * (j + ny * k) + 1
+        centers[cell, 1] = CELL_EDGE_M * i + 0.5 * CELL_EDGE_M
+        centers[cell, 2] = CELL_EDGE_M * j + 0.5 * CELL_EDGE_M
+        centers[cell, 3] = DATUM_M + CELL_EDGE_M * k + 0.5 * CELL_EDGE_M
+    end
+    return centers
+end
+
 #: The grid size the family of fixtures defaults to. `:closed_cell` is a single cell and
 #: refuses any other size rather than quietly ignoring the request.
 const DEFAULT_NX = 16
@@ -68,9 +93,11 @@ One small fixture, fully materialized: `(case, arrays)` is exactly what `build_o
 
 Implemented names:
 
-* `:closed_cell` — a single 10 m cube, porosity 0.2, 100 mD isotropic, 1.5e7 Pa, Sw 0.3, no
-  wells, one report interval of a day. Its pore volume is 1000 m³ × 0.2 = 200 m³, which is
-  the number the constructor check below asserts. The fixture is one cell BY DEFINITION, so
+* `:closed_cell` — a single 10 m cube with its top face at `DATUM_M`, porosity 0.2, 100 mD
+  isotropic, 1.5e7 Pa, Sw 0.3, no wells, one report interval of a day. Its pore volume is
+  1000 m³ × 0.2 = 200 m³, which is the number the constructor check below asserts, and its
+  centre is at 1005 m depth, which is where the built model has to put it. The fixture is
+  one cell BY DEFINITION, so
   asking it for a different `nx` or `nz` is an error rather than a request it ignores;
   those arguments shape the grid fixtures (`:bl`, `:hydrostatic`, `:two_layer`,
   `:boundary`, `:five_spot`) that plan Tasks 9–10 add.
@@ -113,6 +140,7 @@ function verification_case(name::Symbol; nx::Int = DEFAULT_NX, nz::Int = DEFAULT
         "gravity_m_s2" => STANDARD_GRAVITY_M_S2,
     )
     arrays = Dict{String,Any}(
+        "cell_centers_m" => cartesian_cell_centers(1, 1, 1),
         "porosity" => fill(0.2, n_cells),
         "permeability_m2" => fill(100.0 * MILLIDARCY_M2, 3, n_cells),
         "pressure_pa" => fill(1.5e7, n_cells),
@@ -129,11 +157,11 @@ end
     selftest_wellbore_case()
 
 A construction probe, not a registered fixture: a closed 4×1×2 box of the same educational
-fluid with one simple and one multisegment well, used only to exercise the plumbing that a
-single cell cannot reach — the per-submodel viscosity parameter and the face gravity of a
-vertical connection. It carries no controls and makes no physical claim, so it is
-deliberately NOT reachable through `verification_case`, whose names later tasks pin to
-reference physics.
+fluid, with its top face at `DATUM_M` and one simple and one multisegment well, used only to
+exercise the plumbing that a single cell cannot reach — the per-submodel viscosity
+parameter, the face gravity of a vertical connection and a well datum that is not the
+perforation depth. It carries no controls and makes no physical claim, so it is deliberately
+NOT reachable through `verification_case`, whose names later tasks pin to reference physics.
 """
 function selftest_wellbore_case()
     nx, nz = 4, 2
@@ -151,11 +179,14 @@ function selftest_wellbore_case()
         "wells" => Any[
             # cell_id = i + nx*(j + ny*k), zero-based in the exchange: 0 and 4 are the two
             # cells of the column at i=0, which is a vertical two-node well.
+            # The datum is the top face of the reservoir box, 5 m above the shallowest
+            # perforation centre — a wellhead reference, not a number that has drifted away
+            # from the cells it belongs to.
             Dict{String,Any}(
                 "well_id" => "INJ1",
                 "cells" => [0, 4],
                 "radius_m" => 0.1,
-                "reference_depth_m" => 0.5 * CELL_EDGE_M,
+                "reference_depth_m" => DATUM_M,
                 "model" => "multisegment",
                 "allow_crossflow" => false,
             ),
@@ -163,7 +194,7 @@ function selftest_wellbore_case()
                 "well_id" => "PRO1",
                 "cells" => [3],
                 "radius_m" => 0.1,
-                "reference_depth_m" => 0.5 * CELL_EDGE_M,
+                "reference_depth_m" => DATUM_M,
                 "model" => "simple",
                 "allow_crossflow" => false,
             ),
@@ -174,6 +205,7 @@ function selftest_wellbore_case()
         "gravity_m_s2" => STANDARD_GRAVITY_M_S2,
     )
     arrays = Dict{String,Any}(
+        "cell_centers_m" => cartesian_cell_centers(nx, 1, nz),
         "porosity" => fill(0.2, n_cells),
         "permeability_m2" => fill(100.0 * MILLIDARCY_M2, 3, n_cells),
         "pressure_pa" => fill(1.5e7, n_cells),
@@ -221,6 +253,11 @@ function selftest(adapter::Module)
         @test domain[:porosity] == arrays["porosity"]
         @test domain[:permeability] == arrays["permeability_m2"]
         @test physical.state0[:Reservoir][:Pressure] == arrays["pressure_pa"]
+        # The model sits at the datum the case declared, not at the mesh's own origin. A
+        # grid origined at zero would put this cell's centre at 5 m instead of 1005 m.
+        centroids = domain[:cell_centroids]
+        @test permutedims(centroids, (2, 1)) ≈ arrays["cell_centers_m"]
+        @test centroids[3, 1] == DATUM_M + 0.5 * CELL_EDGE_M
         # Water first, oil second: a swapped phase order would still sum to one.
         @test physical.state0[:Reservoir][:Saturations][1, 1] == 0.3
         @test physical.state0[:Reservoir][:Saturations][2, 1] == 0.7
@@ -244,7 +281,32 @@ function selftest(adapter::Module)
             "pressure_pa" => collect(physical.state0[:Reservoir][:Pressure]),
             "saturations" => collect(eachrow(physical.state0[:Reservoir][:Saturations])),
             "permeability_m2" => collect(domain[:permeability][:, 1]),
+            "declared_cell_centers_m" => collect(eachrow(arrays["cell_centers_m"])),
+            "mesh_cell_centers_m" => collect(eachcol(centroids)),
         )
+
+        # --- the datum is validated, not assumed ---------------------------------------
+        # A declared centre the shape and extent cannot produce is refused by name, with the
+        # offending cell, axis and distance in the message. Ignoring `cell_centers_m` would
+        # make this pass silently, which is the failure mode the check exists for.
+        #
+        # It has to be a MULTI-cell case: the origin is derived from cell 0, so a grid of one
+        # cell has nothing left to contradict and the check is vacuous there by construction.
+        bad_case, bad_arrays = selftest_wellbore_case()
+        bad_arrays["cell_centers_m"][6, 1] += 2.5  # zero-based cell 5, x axis
+        refusal = try
+            adapter.build_ow(bad_case, bad_arrays)
+            nothing
+        catch err
+            err
+        end
+        @test refusal isa adapter.InvalidCaseInput
+        refusal_message = refusal === nothing ? "" : sprint(showerror, refusal)
+        @test occursin("cell_centers_m", refusal_message)
+        @test occursin("zero-based cell 5", refusal_message)
+        @test occursin("x axis", refusal_message)
+        @test occursin("2.5", refusal_message)
+        measured["rejected_geometry_message"] = refusal_message
 
         # --- 5.5 SI and PVT, against numbers a person can check ------------------------
         p_sc = 101325.0
@@ -300,6 +362,9 @@ function selftest(adapter::Module)
         wdomain = JutulDarcy.reservoir_domain(probe.model)
         neighbors = wdomain[:neighbors]
         z = vec(wdomain[:cell_centroids][3, :])
+        # Absolute depth again, this time over two layers: 1005 m and 1015 m, not 5 and 15.
+        @test permutedims(wdomain[:cell_centroids], (2, 1)) ≈ warrays["cell_centers_m"]
+        @test sort(unique(z)) == [DATUM_M + 0.5 * CELL_EDGE_M, DATUM_M + 1.5 * CELL_EDGE_M]
         native_gdz = compute_face_gdz(neighbors, z)
         gdz = probe.parameters[:Reservoir][:TwoPointGravityDifference]
         @test gdz == native_gdz
@@ -326,6 +391,8 @@ function selftest(adapter::Module)
         @test sum(pv_after) ≈ 8 * 200.0
 
         measured["wellbore_probe"] = Dict{String,Any}(
+            "cell_center_depth_m" => sort(unique(z)),
+            "well_reference_depth_m" => wcase["wells"][1]["reference_depth_m"],
             "submodel_viscosities_pa_s" => viscosities,
             "submodels_without_viscosity" => non_flow,
             "face_gdz" => collect(gdz),

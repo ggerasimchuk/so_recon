@@ -1,12 +1,12 @@
 # E01.0 — the explicit educational oil-water model, built on native JutulDarcy.
 #
-# `build_ow` is the whole physical constructor: a Cartesian mesh, a reservoir domain, the
-# wells the case names, a two-phase immiscible system, and the three property objects that
-# make it the plan's §3.1 educational model rather than JutulDarcy's defaults — constant
-# compressibility densities, Brooks-Corey relative permeabilities, and one viscosity per
-# phase on every submodel that carries fluid. Nothing here implements physics of its own:
-# every object below is a JutulDarcy constructor, because JutulDarcy is the only
-# operational backend (SPEC 8.1).
+# `build_ow` is the whole physical constructor: a Cartesian mesh at the case's own datum, a
+# reservoir domain, the wells the case names, a two-phase immiscible system, and the three
+# property objects that make it the plan's §3.1 educational model rather than JutulDarcy's
+# defaults — constant compressibility densities, Brooks-Corey relative permeabilities, and
+# one viscosity per phase on every submodel that carries fluid. Nothing here implements
+# physics of its own: every object below is a JutulDarcy constructor, because JutulDarcy is
+# the only operational backend (SPEC 8.1).
 #
 # NO STATE OUTLIVES A CALL. Everything is a local, and `build_ow` returns it; there is no
 # module-level model, parameter set or state anywhere in this file. Jobs A, B and A again
@@ -17,9 +17,14 @@
 #
 # * `cell_id = i + nx*(j + ny*k)` is ZERO-BASED in the exchange and one-based in Julia. The
 #   `+ 1` happens here, on the well connection lists, and nowhere else.
-# * z is depth, positive down. Gravity is the native constant and only the native constant;
-#   the face term is JutulDarcy's own `TwoPointGravityDifference`, derived from the domain's
-#   z centroids, so this file never writes a gravity formula of its own.
+# * z is depth, positive down, and ABSOLUTE. `CartesianMesh(dims, extent)` would origin the
+#   grid at zero and put a reservoir declared at 1000 m depth at 5 m, leaving
+#   `grid.cell_centers_m` — an input the model hash covers — unread. The mesh is therefore
+#   origined at the datum that array declares, and every centroid the mesh produces is
+#   compared back against it, so a declared input of F is never silently ignored.
+# * Gravity is the native constant and only the native constant; the face term is
+#   JutulDarcy's own `TwoPointGravityDifference`, derived from the domain's z centroids, so
+#   this file never writes a gravity formula of its own.
 # * Pore volume is constant: `rock_compressibility_pa_inv` must be 0 and the pore volume
 #   stays the default `FluidVolume` PARAMETER, never replaced by a pressure-dependent
 #   secondary variable.
@@ -37,10 +42,35 @@ const OUTPUTS_UNAVAILABLE =
     "outputs unavailable: the model, parameters and initial state were constructed, but " *
     "this build integrates no time axis and therefore has no states to report"
 
+"""
+    InvalidCaseInput(message)
+
+The case itself is the problem: an array that is not the bytes it claims, a geometry that
+does not describe the grid it declares, a fluid this adapter does not build, or a gravity it
+does not promise.
+
+The worker reports this as `INVALID_INPUT`. Anything else that fails inside a JutulDarcy
+constructor is reported as `PHYSICALLY_INVALID` instead, because there the input was well
+formed and the physics still could not be assembled from it.
+"""
+struct InvalidCaseInput <: Exception
+    message::String
+end
+
+Base.showerror(io::IO, err::InvalidCaseInput) = print(io, err.message)
+
+invalid(message::AbstractString) = throw(InvalidCaseInput(message))
+
+#: How far a declared cell centre may sit from the centroid the mesh actually produces. A
+#: micrometre is far below anything with geometric meaning and far above float64 round-off,
+#: which at reservoir depths is a few picometres.
+const CELL_CENTER_TOLERANCE_M = 1e-6
+
 #: The arrays `build_ow` reads, where the case manifest keeps each one's `ArrayRef`, and the
 #: axis order the exchange declares for it (plan 3.2). The layout is read from the file, not
 #: assumed: an `(n_times, n_cells)` dataspace arrives in Julia with its dimensions reversed.
 const REQUIRED_ARRAYS = (
+    ("cell_centers_m", ("grid", "cell_centers_m"), ("cell", "dim")),
     ("porosity", ("rock", "porosity"), ("cell",)),
     ("permeability_m2", ("rock", "permeability_m2"), ("dim", "cell")),
     ("pressure_pa", ("initial", "pressure_pa"), ("cell",)),
@@ -60,8 +90,8 @@ Each one is located through the `ArrayRef` the case carries, re-hashed against t
 that reference declares, and converted into the semantic layout by the `axis_order` recorded
 on the dataset — never by assuming how HDF5 dimensions come back. A missing file, a digest
 that does not match, an axis order that is not the declared one, a wrong shape or a
-nonfinite value is an error here: the adapter does not repair an input, and it does not
-build a model out of bytes nobody vouched for.
+nonfinite value is an `InvalidCaseInput`: the adapter does not repair an input, and it does
+not build a model out of bytes nobody vouched for.
 """
 function load_arrays(case::AbstractDict, root::AbstractString)
     arrays = Dict{String,Any}()
@@ -76,13 +106,13 @@ function array_ref(case::AbstractDict, name::AbstractString, location::Tuple)
     node = case
     for key in location
         (node isa AbstractDict && haskey(node, key)) ||
-            error("$(name): the case has no $(join(location, ".")); it cannot build a model")
+            invalid("$(name): the case has no $(join(location, ".")); it cannot build a model")
         node = node[key]
     end
     node isa AbstractDict ||
-        error("$(name): $(join(location, ".")) is not an array reference mapping")
+        invalid("$(name): $(join(location, ".")) is not an array reference mapping")
     for key in ("path", "dataset", "sha256", "shape", "unit", "axis_order")
-        haskey(node, key) || error("$(name): the array reference is missing $(key)")
+        haskey(node, key) || invalid("$(name): the array reference is missing $(key)")
     end
     return node
 end
@@ -95,39 +125,40 @@ function read_verified_array(
 )
     relative = String(ref["path"])
     path = joinpath(root, relative)
-    isfile(path) || error("$(name): the declared array $(relative) does not exist")
+    isfile(path) || invalid("$(name): the declared array $(relative) does not exist")
     digest = bytes2hex(open(sha256, path))
     declared_digest = get(ref, "sha256", nothing)
     if !(declared_digest isa AbstractString) || digest != declared_digest
-        error(
+        invalid(
             "$(name): $(relative) hashes to $(digest), which is not the declared " *
             "$(repr(declared_digest))",
         )
     end
     declared_axes = Tuple(String.(ref["axis_order"]))
     declared_axes == expected_axes ||
-        error("$(name): the case declares axis_order $(declared_axes), expected $(expected_axes)")
+        invalid("$(name): the case declares axis_order $(declared_axes), expected $(expected_axes)")
     dataset = String(ref["dataset"])
     raw, axis_order, unit = h5open(path, "r") do file
-        haskey(file, dataset) ||
-            error("$(name): dataset $(repr(dataset)) is missing from $(relative)")
+        haskey(file, dataset) || invalid("$(name): dataset $(repr(dataset)) is missing from $(relative)")
         stored = file[dataset]
         (read(stored), read_attribute(stored, "axis_order"), read_attribute(stored, "unit"))
     end
-    Tuple(String.(axis_order)) == expected_axes || error(
+    Tuple(String.(axis_order)) == expected_axes || invalid(
         "$(name): $(relative) records axis_order $(Tuple(String.(axis_order))), " *
         "expected $(expected_axes)",
     )
-    String(unit) == String(ref["unit"]) ||
-        error("$(name): $(relative) records unit $(repr(String(unit))), expected $(repr(String(ref["unit"])))")
+    String(unit) == String(ref["unit"]) || invalid(
+        "$(name): $(relative) records unit $(repr(String(unit))), expected " *
+        "$(repr(String(ref["unit"])))",
+    )
     # The file holds the dataspace in the declared axis order; Julia is column-major and
     # hands the dimensions back reversed, so the conversion is explicit rather than implied.
     values = ndims(raw) > 1 ? permutedims(raw, ndims(raw):-1:1) : raw
     declared_shape = Tuple(Int.(ref["shape"]))
     size(values) == declared_shape ||
-        error("$(name): $(relative) holds $(size(values)), the case declares $(declared_shape)")
+        invalid("$(name): $(relative) holds $(size(values)), the case declares $(declared_shape)")
     converted = Float64.(values)
-    all(isfinite, converted) || error("$(name): $(relative) holds nonfinite values")
+    all(isfinite, converted) || invalid("$(name): $(relative) holds nonfinite values")
     return converted
 end
 
@@ -140,13 +171,17 @@ end
 
 Build the educational oil-water model of plan §3.1 from a verified case and its arrays.
 
-`arrays` holds the normalised fields `porosity`, `permeability_m2`, `pressure_pa` and `sw`
-— either from `load_arrays`, or materialized directly by a verification fixture. The
-returned model, parameters and state are freshly allocated and owned by the caller.
+`arrays` holds the normalised fields `cell_centers_m`, `porosity`, `permeability_m2`,
+`pressure_pa` and `sw` — either from `load_arrays`, or materialized directly by a
+verification fixture. The returned model, parameters and state are freshly allocated and
+owned by the caller.
+
+A case whose geometry, fluid, gravity or rock compressibility this adapter cannot honour is
+refused with `InvalidCaseInput`, never quietly adapted.
 """
 function build_ow(case::AbstractDict, arrays::AbstractDict)
     fluid = case["fluids"]
-    String(get(fluid, "kind", "")) == "OW" || error(
+    String(get(fluid, "kind", "")) == "OW" || invalid(
         "build_ow: this adapter builds the educational oil-water system; the case declares " *
         "fluids.kind $(repr(get(fluid, "kind", nothing)))",
     )
@@ -156,14 +191,14 @@ function build_ow(case::AbstractDict, arrays::AbstractDict)
     # TwoPointGravityDifference parameter, never a different global constant and never here.
     @assert Jutul.gravity_constant == STANDARD_GRAVITY_M_S2
     declared_gravity = Float64(case["gravity_m_s2"])
-    declared_gravity == Jutul.gravity_constant || error(
+    declared_gravity == Jutul.gravity_constant || invalid(
         "build_ow: the case declares gravity_m_s2=$(declared_gravity); the oil-water " *
         "dispatcher accepts only the native $(Jutul.gravity_constant) m/s^2",
     )
 
     rock = get(case, "rock", Dict{String,Any}())
     rock_compressibility = Float64(get(rock, "rock_compressibility_pa_inv", 0.0))
-    rock_compressibility == 0.0 || error(
+    rock_compressibility == 0.0 || invalid(
         "build_ow: pore volume is constant in E01; rock_compressibility_pa_inv must be " *
         "exactly 0, got $(rock_compressibility)",
     )
@@ -173,16 +208,23 @@ function build_ow(case::AbstractDict, arrays::AbstractDict)
     # Three dimensions, always: a two-dimensional mesh has no z, so JutulDarcy would hand
     # back a face gravity of zeros and the model would silently lose its buoyancy.
     (length(dims) == 3 && length(extent) == 3) ||
-        error("build_ow: the grid must be three-dimensional, got shape $(dims) and extent $(extent)")
+        invalid("build_ow: the grid must be three-dimensional, got shape $(dims) and extent $(extent)")
+    (all(>(0), dims) && all(>(0.0), extent)) || invalid(
+        "build_ow: the grid must have a positive size in every direction, got shape $(dims) " *
+        "and extent_m $(extent)",
+    )
     n_cells = prod(dims)
     check_array_shapes(arrays, n_cells)
 
-    mesh = CartesianMesh(dims, extent)
+    centers = arrays["cell_centers_m"]
+    mesh = CartesianMesh(dims, extent; origin = cartesian_origin(dims, extent, centers))
     domain = reservoir_domain(
         mesh;
         permeability = arrays["permeability_m2"],
         porosity = arrays["porosity"],
     )
+    check_cell_centers(domain, centers)
+
     wells = [
         setup_well(
             domain,
@@ -220,7 +262,7 @@ function build_ow(case::AbstractDict, arrays::AbstractDict)
     # the 1e-3 default would move oil at the water's mobility, which no case asked for.
     mu = Float64.(fluid["viscosity_pa_s"])
     length(mu) == PHASE_COUNT ||
-        error("build_ow: viscosity_pa_s must give one value per phase, got $(mu)")
+        invalid("build_ow: viscosity_pa_s must give one value per phase, got $(mu)")
     for (name, submodel) in pairs(model.models)
         if name == :Reservoir || JutulDarcy.model_or_domain_is_well(submodel)
             parameters[name][:PhaseViscosities] .= reshape(mu, PHASE_COUNT, 1)
@@ -240,14 +282,60 @@ end
 
 function check_array_shapes(arrays::AbstractDict, n_cells::Int)
     for name in ("porosity", "pressure_pa", "sw")
-        haskey(arrays, name) || error("build_ow: the arrays do not carry $(name)")
+        haskey(arrays, name) || invalid("build_ow: the arrays do not carry $(name)")
         length(arrays[name]) == n_cells ||
-            error("build_ow: $(name) has $(length(arrays[name])) values for $(n_cells) cells")
+            invalid("build_ow: $(name) has $(length(arrays[name])) values for $(n_cells) cells")
     end
-    haskey(arrays, "permeability_m2") || error("build_ow: the arrays do not carry permeability_m2")
-    size(arrays["permeability_m2"]) == (3, n_cells) || error(
-        "build_ow: permeability_m2 has shape $(size(arrays["permeability_m2"])), " *
-        "expected (3, $(n_cells))",
+    for (name, shape) in (("permeability_m2", (3, n_cells)), ("cell_centers_m", (n_cells, 3)))
+        haskey(arrays, name) || invalid("build_ow: the arrays do not carry $(name)")
+        size(arrays[name]) == shape ||
+            invalid("build_ow: $(name) has shape $(size(arrays[name])), expected $(shape)")
+    end
+    return nothing
+end
+
+"""
+    cartesian_origin(dims, extent, centers) -> NTuple{3, Float64}
+
+Where the grid's first corner has to be for cell 0 to sit where the case says it does.
+
+`cell_id = i + nx*(j + ny*k)` makes zero-based cell 0 the row 1 of `cell_centers_m`, and a
+uniform Cartesian cell puts its centre half a cell from that corner in each direction.
+"""
+function cartesian_origin(dims::Tuple, extent::Tuple, centers::AbstractMatrix)
+    return Tuple(Float64[centers[1, d] - 0.5 * extent[d] / dims[d] for d in 1:3])
+end
+
+"""
+Prove the mesh reproduces every centre the case declared, and refuse it if it does not.
+
+This is deliberately a comparison against `domain[:cell_centroids]` — what JutulDarcy will
+actually use for face gravity, well placement and equilibration — rather than the same
+formula evaluated twice. It therefore also checks the CELL ORDERING: a case written with
+`cell_id = i + nx*(j + ny*k)` against a mesh that numbered its cells some other way
+disagrees here, loudly and at construction, instead of three tasks later in a saturation
+field nobody can explain.
+"""
+function check_cell_centers(domain, declared::AbstractMatrix)
+    centroids = domain[:cell_centroids]
+    n_cells = size(centroids, 2)
+    size(declared, 1) == n_cells || invalid(
+        "build_ow: grid.cell_centers_m describes $(size(declared, 1)) cells, the mesh has " *
+        "$(n_cells)",
+    )
+    worst, cell, axis = 0.0, 0, 0
+    for c in 1:n_cells, d in 1:3
+        delta = abs(centroids[d, c] - declared[c, d])
+        if delta > worst
+            worst, cell, axis = delta, c, d
+        end
+    end
+    worst <= CELL_CENTER_TOLERANCE_M || invalid(
+        "build_ow: grid.cell_centers_m is not the uniform Cartesian grid that shape and " *
+        "extent_m imply. The worst disagreement is at zero-based cell $(cell - 1) on the " *
+        "$(("x", "y", "z")[axis]) axis: the case declares $(declared[cell, axis]) m, the mesh " *
+        "places that centroid at $(centroids[axis, cell]) m, a difference of $(worst) m " *
+        "against a tolerance of $(CELL_CENTER_TOLERANCE_M) m",
     )
     return nothing
 end
@@ -255,9 +343,9 @@ end
 """Convert one well's zero-based connection list into Julia's one-based cell indices."""
 function well_cells(well::AbstractDict, n_cells::Int)
     cells = Int.(well["cells"])
-    isempty(cells) && error("build_ow: well $(well["well_id"]) has no connection cells")
+    isempty(cells) && invalid("build_ow: well $(well["well_id"]) has no connection cells")
     for c in cells
-        (0 <= c < n_cells) || error(
+        (0 <= c < n_cells) || invalid(
             "build_ow: well $(well["well_id"]) names cell $(c), outside the zero-based " *
             "range [0, $(n_cells))",
         )
@@ -271,7 +359,8 @@ Refuse a model whose pore volume could move with pressure.
 `pore_volume` reads `FluidVolume`, which JutulDarcy sets up as a PARAMETER. Replacing it
 with a pressure-dependent secondary variable is exactly how a rock compressibility would
 enter, and plan §3.1 fixes it at zero — so the invariant is asserted where the model is
-built rather than discovered later in a mass balance.
+built rather than discovered later in a mass balance. This one is NOT an `InvalidCaseInput`:
+no case can ask for it, so reaching it would mean this adapter built the wrong model.
 """
 function assert_constant_pore_volume(model)
     rmodel = model.models[:Reservoir]
@@ -332,8 +421,11 @@ function describe_model(physical)
             viscosities[string(name)] = Float64[viscosity[i, 1] for i in 1:PHASE_COUNT]
         end
     end
+    depths = vec(JutulDarcy.reservoir_domain(model)[:cell_centroids][3, :])
     return Dict{String,Any}(
         "n_cells" => number_of_cells(rmodel.domain),
+        # Absolute, from the case's own datum: the depths the model was really built at.
+        "cell_center_depth_m" => [minimum(depths), maximum(depths)],
         "phases" => [string(typeof(p)) for p in JutulDarcy.get_phases(rmodel.system)],
         "reference_densities_kg_m3" =>
             Float64[d for d in JutulDarcy.reference_densities(rmodel.system)],

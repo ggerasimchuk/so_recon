@@ -46,6 +46,13 @@ ASYMMETRIC = np.array([[1.0, 2.0, 4.0], [8.0, 16.0, 32.0]], dtype=np.float64)
 PLACEHOLDER_HASH = "e" * 64
 
 
+#: Depth of the top face of the fixture box. The grid is 20 m of reservoir in two 10 m
+#: layers below it, so the cell centres are at 1005 m and 1015 m, and the wells' 1000 m
+#: `reference_depth_m` is that top face — a datum 5 m above the shallowest perforation,
+#: which is what the Julia adapter origins the mesh at.
+DATUM_M = 1000.0
+
+
 def cell_centers(shape: tuple[int, int, int]) -> NDArray[np.float64]:
     nx, ny, nz = shape
     out = np.zeros((nx * ny * nz, 3), dtype=np.float64)
@@ -54,7 +61,7 @@ def cell_centers(shape: tuple[int, int, int]) -> NDArray[np.float64]:
             for i in range(nx):
                 cell = i + nx * (j + ny * k)
                 # z is depth, positive down: deeper layers get larger z.
-                out[cell] = (50.0 * i + 25.0, 50.0 * j + 25.0, 1000.0 + 10.0 * k + 5.0)
+                out[cell] = (50.0 * i + 25.0, 50.0 * j + 25.0, DATUM_M + 10.0 * k + 5.0)
     return out
 
 
@@ -134,8 +141,12 @@ def build_case(refs: dict[str, ArrayRef], **overrides: Any) -> CaseBundle:
         "rock": RockSpec(porosity=refs["porosity"], permeability_m2=refs["permeability_m2"]),
         "fluids": FluidSpec(),
         "wells": (
-            WellSpec(well_id="INJ1", cells=(0, 4), reference_depth_m=1000.0, allow_crossflow=False),
-            WellSpec(well_id="PRO1", cells=(3, 7), reference_depth_m=1000.0, allow_crossflow=False),
+            WellSpec(
+                well_id="INJ1", cells=(0, 4), reference_depth_m=DATUM_M, allow_crossflow=False
+            ),
+            WellSpec(
+                well_id="PRO1", cells=(3, 7), reference_depth_m=DATUM_M, allow_crossflow=False
+            ),
         ),
         "controls": control_segments(),
         "initial": InitialStateSpec(
