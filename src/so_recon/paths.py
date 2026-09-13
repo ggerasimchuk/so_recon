@@ -6,10 +6,6 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from so_recon.config.schema import PathsConfig
 
 ROOT_ENV_VAR = "SO_RECON_ROOT"
 
@@ -125,19 +121,10 @@ class ProjectPaths:
             julia=root / "julia",
         )
 
-    @classmethod
-    def from_config(cls, root: Path, cfg: PathsConfig) -> ProjectPaths:
-        root = root.resolve()
-        return cls(
-            root=root,
-            raw=resolve_within_root(root, cfg.raw),
-            interim=resolve_within_root(root, cfg.interim),
-            processed=resolve_within_root(root, cfg.processed),
-            artifacts=resolve_within_root(root, cfg.artifacts),
-            reports=resolve_within_root(root, cfg.reports),
-            configs=resolve_within_root(root, cfg.configs),
-            julia=resolve_within_root(root, cfg.julia),
-        )
+    # ProjectPaths.from_config is added in Task 4, together with the PathsConfig schema
+    # it depends on. so_recon.config.schema imports this module (paths) at runtime, so
+    # Task 4 will import PathsConfig only under TYPE_CHECKING to avoid a paths <-> config
+    # import cycle.
 
     @property
     def runs(self) -> Path:
