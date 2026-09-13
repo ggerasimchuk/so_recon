@@ -664,6 +664,7 @@ def test_cleanup_removes_the_temp_file_when_the_replace_fails(
     def boom(src: object, dst: object) -> None:
         raise OSError("replace failed")
 
+    # Path.replace delegates to os.replace, resolving the attribute at call time.
     monkeypatch.setattr(atomic_module.os, "replace", boom)
     with pytest.raises(OSError, match="replace failed"):
         write_bytes_atomic(target, b"replacement")
@@ -757,7 +758,10 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        # Path.replace, not os.replace: the ruff PTH ruleset this project selects forbids
+        # os.replace (PTH105), and Path.replace delegates to it anyway, looking the attribute
+        # up on the os module at call time — so monkeypatching os.replace still intercepts it.
+        tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
