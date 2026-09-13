@@ -4342,10 +4342,12 @@ import json
 import logging
 from pathlib import Path
 
+import pytest
+
 from so_recon.config.load import load_project_config
 from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext, RunStatus
-from so_recon.runner import execute_run
+from so_recon.runner import RunRecordUnavailableError, execute_run
 
 
 def _setup(tmp_project: Path) -> tuple[object, ProjectPaths]:
@@ -4381,6 +4383,20 @@ def test_execute_run_converts_any_exception_into_a_fail_record(tmp_project: Path
     assert record["status"] == "FAIL"
     assert any("unexpected boom" in n for n in record["notes"])
     assert "RuntimeError" in (ctx.run_dir / "run.log").read_text(encoding="utf-8")
+
+
+def test_unusable_runs_directory_is_a_clean_named_failure(tmp_project: Path) -> None:
+    """Invariant I6's boundary: when the artifacts tree itself is unusable no record can
+    exist, but the caller must get a named error rather than a raw traceback."""
+    cfg, paths = _setup(tmp_project)
+    # reports/ as a regular file makes ensure_dirs fail on reports/manifests.
+    (tmp_project / "reports").write_text("not a directory\n")
+
+    def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
+        raise AssertionError("body must never run when the run cannot be opened")
+
+    with pytest.raises(RunRecordUnavailableError, match="cannot open a run record"):
+        execute_run(command="manifest", argv=[], cfg=cfg, paths=paths, body=body)
 
 
 def test_execute_run_works_without_config(tmp_project: Path) -> None:
@@ -4677,6 +4693,17 @@ def test_smoke_command_without_julia_returns_1_and_records_fail(
     assert any("julia" in n.lower() for n in record["notes"])
 
 
+def test_cli_exits_cleanly_when_the_runs_directory_is_unusable(
+    tmp_project: Path, capsys: Any
+) -> None:
+    """No traceback may reach the user: the failure is explained and the exit code is 1."""
+    (tmp_project / "reports").write_text("not a directory\n")
+    assert main(["--root", str(tmp_project), "manifest"]) == 1
+    err = capsys.readouterr().err
+    assert "cannot record this run" in err
+    assert "Traceback" not in err
+
+
 def test_unknown_command_returns_2(tmp_project: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--root", str(tmp_project), "nope"])
@@ -4713,6 +4740,17 @@ from so_recon.registry.run import RunContext, RunStatus
 CommandBody = Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]
 
 
+class RunRecordUnavailableError(RuntimeError):
+    """The run could not be opened at all, so no FAIL record can be written.
+
+    This is the boundary of invariant I6. I6 promises a FAIL record for any failure that
+    happens once a run exists; it cannot promise one when the artifacts tree itself is
+    unusable (for example `reports/` present as a regular file, or a read-only mount).
+    Raising a named error here keeps that case a clean, explained exit instead of a raw
+    traceback.
+    """
+
+
 def execute_run(
     *,
     command: str,
@@ -4723,14 +4761,23 @@ def execute_run(
     schema_versions: dict[str, str] | None = None,
     parent_run_ids: Sequence[str] = (),
 ) -> RunContext:
-    ctx = RunContext.start(
-        command=command,
-        argv=argv,
-        cfg=cfg,
-        paths=paths,
-        schema_versions=schema_versions,
-        parent_run_ids=parent_run_ids,
-    )
+    try:
+        # Owned here, not by callers: creating the runtime directories is itself a way the
+        # run can fail before any record exists, and it must not escape as a raw traceback.
+        paths.ensure_dirs()
+        ctx = RunContext.start(
+            command=command,
+            argv=argv,
+            cfg=cfg,
+            paths=paths,
+            schema_versions=schema_versions,
+            parent_run_ids=parent_run_ids,
+        )
+    except Exception as exc:
+        raise RunRecordUnavailableError(
+            f"cannot open a run record for {command!r} under {paths.runs}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     log = configure_logging(ctx.run_id, ctx.run_dir / "run.log")
     try:
         status, notes = body(ctx, log)
@@ -4979,7 +5026,6 @@ def run_smoke(
     launcher_factory: LauncherFactory,
     freeze_expected: bool = False,
 ) -> RunContext:
-    paths.ensure_dirs()
     return execute_run(
         command="smoke",
         argv=argv,
@@ -5034,7 +5080,7 @@ from so_recon.registry.source_manifest import (
     write_manifest_stamp,
     write_source_manifest,
 )
-from so_recon.runner import execute_run
+from so_recon.runner import RunRecordUnavailableError, execute_run
 from so_recon.simulator.julia_bridge import JuliaLauncher, default_launcher
 from so_recon.smoke import run_smoke
 
@@ -5160,18 +5206,25 @@ def main(argv: Sequence[str] | None = None, *, launcher_factory: LauncherFactory
     except Exception as exc:
         return _record_startup_failure(root, args.command, full_argv, exc)
 
-    if args.command == "smoke":
-        factory = launcher_factory or default_launcher
-        ctx = run_smoke(
-            cfg=cfg, paths=paths, argv=full_argv,
-            launcher_factory=lambda: factory(paths, cfg.julia, args.julia),
-            freeze_expected=args.freeze_expected,
-        )
-        return _report(ctx, paths)
+    try:
+        if args.command == "smoke":
+            factory = launcher_factory or default_launcher
+            ctx = run_smoke(
+                cfg=cfg, paths=paths, argv=full_argv,
+                launcher_factory=lambda: factory(paths, cfg.julia, args.julia),
+                freeze_expected=args.freeze_expected,
+            )
+            return _report(ctx, paths)
+    except RunRecordUnavailableError as exc:
+        print(f"cannot record this run: {exc}", file=sys.stderr)
+        return 1
 
-    paths.ensure_dirs()
     body = _manifest_body(cfg, paths) if args.command == "manifest" else _env_report_body(paths)
-    ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
+    try:
+        ctx = execute_run(command=args.command, argv=full_argv, cfg=cfg, paths=paths, body=body)
+    except RunRecordUnavailableError as exc:
+        print(f"cannot record this run: {exc}", file=sys.stderr)
+        return 1
     return _report(ctx, paths)
 
 
@@ -5186,7 +5239,7 @@ if __name__ == "__main__":
 ```bash
 uv run pytest -q -m "not julia" && uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
-Ожидается: все тесты проходят, ruff и mypy без ошибок. При замечаниях `ruff format` — выполнить `uv run ruff format .` и перепроверить.
+Ожидается: все тесты проходят (на два больше, чем до добавления границы I6), ruff и mypy без ошибок. При замечаниях `ruff format` — выполнить `uv run ruff format .` и перепроверить.
 
 - [ ] **Step 10: Commit**
 
