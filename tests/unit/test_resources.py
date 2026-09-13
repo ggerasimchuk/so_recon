@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import psutil
 import pytest
 from pydantic import ValidationError
 
@@ -31,6 +34,7 @@ from so_recon.config.resources import (
     P1_LOOP_PROFILE,
     MissingResourceProfileError,
     ResourceProfile,
+    UnapprovedResourceProfileError,
     require_resource_profile,
     resource_profile,
 )
@@ -41,6 +45,7 @@ from so_recon.environment.resources import (
     classify_pressure,
     probe_hardware,
     probe_resources,
+    process_tree_usage,
     read_memory_pressure,
 )
 from so_recon.simulator.budget import (
@@ -88,6 +93,7 @@ def snapshot(**over: Any) -> ResourceSnapshot:
         "available_bytes": 16 * GIB,
         "process_rss_bytes": 1 * GIB,
         "process_cpu_s": 1.0,
+        "process_measurement_method": "psutil process tree from pid 1: 1 processes read",
         "swap_used_bytes": 0,
         "pressure": pressure(),
         "disk_free_bytes": 100 * GIB,
@@ -367,6 +373,28 @@ def test_a_physical_command_refuses_to_run_without_a_profile() -> None:
     with pytest.raises(MissingResourceProfileError, match="forward"):
         require_resource_profile(None, command="forward")
     assert require_resource_profile(P0_VERIFY_PROFILE, command="forward") is P0_VERIFY_PROFILE
+    assert require_resource_profile(P1_LOOP_PROFILE, command="forward") is P1_LOOP_PROFILE
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        # Neither has a measured backstop the way the memory caps do: `total - reserve`
+        # clamps those whatever the config claims, but a session length and a forward
+        # count are spent exactly as written.
+        ("wall_budget_s", 86400),
+        ("max_new_forward", 100000),
+        ("disk_budget_bytes", 500 * GIB),
+    ],
+)
+def test_a_relabelled_profile_is_refused_by_a_physical_command(field: str, value: int) -> None:
+    """A block may not claim an approved profile's name while carrying other numbers."""
+    tampered = ResourceProfile(**{**P0_VERIFY_PROFILE.model_dump(), field: value})
+    assert tampered.profile == "P0_VERIFY"  # internally consistent, so it validates
+    with pytest.raises(UnapprovedResourceProfileError) as excinfo:
+        require_resource_profile(tampered, command="forward")
+    assert field in str(excinfo.value)
+    assert str(value) in str(excinfo.value)
 
 
 # ------------------------------------------------------------------------- the probe
@@ -378,8 +406,11 @@ def test_probe_reads_the_live_machine(tmp_path: Path) -> None:
     second = probe_resources(None, tmp_path)
     assert first.total_bytes > 0
     assert 0 <= first.available_bytes <= first.total_bytes
-    assert first.process_rss_bytes > 0
-    assert first.process_cpu_s >= 0.0
+    # This process is readable by definition, so the tree really is measured here — the
+    # nullable field carries a number, and the method says how many processes it covered.
+    assert first.process_rss_bytes is not None and first.process_rss_bytes > 0
+    assert first.process_cpu_s is not None and first.process_cpu_s >= 0.0
+    assert "processes read" in first.process_measurement_method
     assert first.disk_free_bytes > 0
     assert second.monotonic_s >= first.monotonic_s
     assert first.pressure.status in {"normal", "warn", "critical", "unknown"}
@@ -413,6 +444,111 @@ def test_an_unknown_pressure_level_is_never_substituted(
     measured = classify_pressure(raw, method="sysctlbyname:test")
     assert (measured.status, measured.raw) == (status, kept)
     assert "sysctlbyname:test" in measured.method
+
+
+def _raising(error: Exception) -> Callable[[int], list[Any]]:
+    """A tree reader that fails the way psutil fails when a tree cannot be listed."""
+
+    def read(pid: int) -> list[Any]:
+        raise error
+
+    return read
+
+
+class FakeProcess:
+    """A process that answers, or raises the psutil error it was built with.
+
+    Stands in for `psutil.Process` at the one place the probe touches the OS. The branch
+    under test is this module's own handling of psutil's error types, which cannot be
+    reached otherwise: a test run cannot arrange to be denied access to a process it owns.
+    """
+
+    def __init__(self, pid: int, rss: int = 0, cpu_s: float = 0.0, error: Exception | None = None):
+        self.pid = pid
+        self._rss = rss
+        self._cpu_s = cpu_s
+        self._error = error
+
+    def oneshot(self) -> AbstractContextManager[None]:
+        return nullcontext()
+
+    def _check(self) -> None:
+        if self._error is not None:
+            raise self._error
+
+    def memory_info(self) -> Any:
+        self._check()
+        return SimpleNamespace(rss=self._rss)
+
+    def cpu_times(self) -> Any:
+        self._check()
+        return SimpleNamespace(user=self._cpu_s, system=0.0)
+
+
+def test_a_readable_process_tree_is_summed_over_every_process() -> None:
+    usage = process_tree_usage(
+        11, tree=lambda pid: [FakeProcess(pid, rss=3 * GIB, cpu_s=2.0), FakeProcess(12, 1 * GIB)]
+    )
+    assert (usage.rss_bytes, usage.cpu_s, usage.sampled) == (4 * GIB, 2.0, 2)
+    assert "2 processes read" in usage.method
+
+
+def test_a_tree_whose_root_has_exited_measures_zero() -> None:
+    """The documented race: something that has exited really is using nothing."""
+    usage = process_tree_usage(11, tree=_raising(psutil.NoSuchProcess(11)))
+    assert (usage.rss_bytes, usage.cpu_s) == (0, 0.0)
+    assert "has exited" in usage.method
+
+
+def test_a_child_that_exits_mid_scan_is_skipped_not_treated_as_unknown() -> None:
+    usage = process_tree_usage(
+        11,
+        tree=lambda pid: [
+            FakeProcess(pid, rss=2 * GIB),
+            FakeProcess(12, error=psutil.NoSuchProcess(12)),
+        ],
+    )
+    assert (usage.rss_bytes, usage.sampled) == (2 * GIB, 1)
+
+
+@pytest.mark.parametrize("error", [psutil.AccessDenied(11), psutil.ZombieProcess(11)])
+def test_an_unreadable_root_is_unknown_and_never_zero(error: Exception) -> None:
+    usage = process_tree_usage(11, tree=_raising(error))
+    assert usage.rss_bytes is None
+    assert usage.cpu_s is None
+    assert type(error).__name__ in usage.method
+
+
+def test_an_unreadable_child_makes_the_whole_tree_unknown() -> None:
+    """A partial sum would undercount, which is the unsafe direction for a memory guard."""
+    usage = process_tree_usage(
+        11,
+        tree=lambda pid: [
+            FakeProcess(pid, rss=2 * GIB),
+            FakeProcess(12, error=psutil.AccessDenied(12)),
+        ],
+    )
+    assert usage.rss_bytes is None
+    assert "AccessDenied" in usage.method
+    assert "pid 12" in usage.method
+
+
+def test_an_unmeasurable_process_tree_refuses_to_start_work(tmp_path: Path) -> None:
+    """The guard that cannot see the run must not be told the run occupies nothing."""
+    blind = snapshot(
+        process_rss_bytes=None,
+        process_cpu_s=None,
+        process_measurement_method="psutil process tree from pid 11: unreadable (AccessDenied)",
+    )
+    decision = ResourceWatchdog(P0_VERIFY_PROFILE, baseline=blind).observe(blind)
+    assert decision.action == "drain"
+    assert decision.status == "RESOURCE_FAILURE"
+    assert any("could not be measured" in reason for reason in decision.reasons)
+    book = ledger(tmp_path, ScriptedProbe(blind))
+    with pytest.raises(BudgetStop) as excinfo:
+        reserve(book, "j1")
+    assert excinfo.value.status == "RESOURCE_FAILURE"
+    assert "unknown measurement as zero" in excinfo.value.reason
 
 
 def test_hardware_probe_records_the_host_without_installing_pytorch() -> None:
@@ -630,6 +766,40 @@ def test_the_session_disk_budget_counts_what_the_session_already_wrote(tmp_path:
         reserve(book, "j1", estimated_bytes=32 * MIB, model_hash=OTHER_MODEL_HASH)
     assert excinfo.value.status == "INCOMPLETE_BUDGET"
     assert "disk budget" in excinfo.value.reason
+
+
+def test_one_attempts_result_cannot_be_filed_against_another_attempt(tmp_path: Path) -> None:
+    """Two attempts on one model share a case hash, so the case check alone is not enough.
+
+    Filing j2's result on j1 would put the wrong cost and checkpoint on j1 and leave j2
+    PENDING for the rest of the session, holding its reserved disk against the budget.
+    """
+    book = ledger(tmp_path)
+    reserve(book, "j1", attempt=1)
+    reserve(book, "j2", attempt=2)
+    with pytest.raises(BudgetStop) as excinfo:
+        book.complete("j1", result("j2"))
+    assert excinfo.value.status == "PROTOCOL_FAILURE"
+    assert "job_id" in excinfo.value.reason
+    assert book.pending_job_ids == ("j1", "j2")
+
+
+def test_a_result_for_a_different_physical_model_is_refused(tmp_path: Path) -> None:
+    book = ledger(tmp_path)
+    reserve(book, "j1")
+    with pytest.raises(BudgetStop) as excinfo:
+        book.complete("j1", result("j1", model_hash=OTHER_MODEL_HASH))
+    assert excinfo.value.status == "PROTOCOL_FAILURE"
+    assert "model_hash" in excinfo.value.reason
+
+
+def test_a_result_for_a_different_case_is_refused(tmp_path: Path) -> None:
+    book = ledger(tmp_path)
+    reserve(book, "j1")
+    with pytest.raises(BudgetStop) as excinfo:
+        book.complete("j1", result("j1", case_sha256=OTHER_CASE_SHA))
+    assert excinfo.value.status == "PROTOCOL_FAILURE"
+    assert "case_sha256" in excinfo.value.reason
 
 
 def test_an_outstanding_reservation_still_counts_against_the_disk_budget(

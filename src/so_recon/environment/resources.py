@@ -9,14 +9,18 @@ no allocation and no sleeping.
 Two honesty rules run through it:
 
 * **A sum of RSS is a conservative indicator, not exact unique resident memory.** Pages
-  shared between the parent and a Julia worker are counted in both, so the figure
+  shared between the parent and a Julia worker are counted in both, so a complete sum
   overstates rather than understates what the run occupies. Overstating is the safe
-  direction for a guard; calling it "the" memory use of the tree would not be true.
+  direction for a guard; calling it "the" memory use of the tree would not be true. The
+  claim holds only while the whole tree was read, which is why a tree that could not be
+  read does not return a partial sum.
 * **An unavailable measurement keeps its own name.** macOS publishes the kernel's memory
   pressure level through a read-only sysctl; other systems do not, and the sysctl can
   fail. That case is `unknown` with the method recorded, never a zero and never `normal`.
   `so_recon.simulator.budget` keeps its available-memory and swap guards working and says
-  in its decision that the pressure signal was missing.
+  in its decision that the pressure signal was missing. A process tree that cannot be read
+  follows the same rule — `None` with the method, never a zero, because a zero RSS would
+  quietly disable both the hard cap and the soft warning while still looking measured.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ import ctypes.util
 import platform
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -38,6 +43,10 @@ from so_recon.simulator.julia_bridge import JuliaNotFoundError, find_julia
 
 PressureStatus = Literal["normal", "warn", "critical", "unknown"]
 ExternalPower = Literal["ac", "battery", "unknown"]
+
+#: The OS boundary of the process-tree measurement, injected so that an unreadable tree
+#: can be described in a test instead of needing one this run is forbidden to read.
+TreeReader = Callable[[int], list[psutil.Process]]
 
 #: macOS publishes the kernel's own memory-pressure level here. Reading a sysctl by name
 #: with a null new-value pointer cannot change anything, which is what makes this probe
@@ -63,14 +72,31 @@ class MemoryPressure(StrictModel):
     method: str = Field(min_length=1)
 
 
+class ProcessTreeUsage(StrictModel):
+    """What this run's process tree occupies, or an explicit statement that it is unknown.
+
+    `rss_bytes`/`cpu_s` are None when the tree could not be read. They are never zero for
+    that reason: a zero here would tell the memory guard that the run occupies nothing.
+    """
+
+    rss_bytes: int | None = Field(ge=0)
+    cpu_s: float | None = Field(ge=0.0)
+    #: How many processes were actually read, so a partial view is visible as one.
+    sampled: int = Field(ge=0)
+    method: str = Field(min_length=1)
+
+
 class ResourceSnapshot(StrictModel):
     """One instant of the machine, as measured. Carries no thresholds and no verdicts."""
 
     total_bytes: int = Field(ge=0)
     available_bytes: int = Field(ge=0)
-    #: Summed RSS over this process and its descendants: conservative, not exact.
-    process_rss_bytes: int = Field(ge=0)
-    process_cpu_s: float = Field(ge=0.0)
+    #: Summed RSS over this process and its descendants: conservative, not exact — and
+    #: None when the tree could not be read at all. `process_measurement_method` says
+    #: which, the same way `pressure.method` does for an unknown pressure level.
+    process_rss_bytes: int | None = Field(ge=0)
+    process_cpu_s: float | None = Field(ge=0.0)
+    process_measurement_method: str = Field(min_length=1)
     swap_used_bytes: int = Field(ge=0)
     pressure: MemoryPressure
     disk_free_bytes: int = Field(ge=0)
@@ -149,29 +175,89 @@ def read_memory_pressure() -> MemoryPressure:
     return classify_pressure(_sysctl_int(MACOS_PRESSURE_SYSCTL), method=method)
 
 
-def process_tree_usage(pid: int) -> tuple[int, float]:
-    """Summed RSS and CPU seconds over `pid` and its descendants.
+def read_process_tree(pid: int) -> list[psutil.Process]:
+    """The process and its descendants. Raises whatever psutil raises."""
+    root = psutil.Process(pid)
+    return [root, *root.children(recursive=True)]
 
-    Summing RSS double-counts shared pages, so the total is an upper bound on what the
-    run occupies rather than its exact unique resident set. A process that exits between
-    being listed and being read is skipped: it is no longer using anything.
+
+def process_tree_usage(pid: int, *, tree: TreeReader = read_process_tree) -> ProcessTreeUsage:
+    """Summed RSS and CPU seconds over `pid` and its descendants, or an explicit unknown.
+
+    Summing RSS double-counts shared pages, so a successful total is an upper bound on
+    what the run occupies rather than its exact unique resident set. That claim only
+    holds while every process in the tree was actually read, which is why this
+    distinguishes two very different failures:
+
+    * `NoSuchProcess` is the documented race — the process exited between being listed
+      and being read, and something that has exited really is using nothing. It is
+      skipped, and the total stays a measurement.
+    * `AccessDenied`, `ZombieProcess` and anything else mean the tree could NOT be read.
+      Returning the partial sum would understate it, and returning zero would tell the
+      memory guard that this run occupies nothing — silently disabling both the hard cap
+      and the soft warning while the snapshot still looked like a successful measurement.
+      So the result is `None` with the method recording what failed, exactly as an
+      unavailable memory-pressure level stays `unknown`.
+
+    `ZombieProcess` is caught FIRST because psutil derives it from `NoSuchProcess`, and
+    the two mean opposite things here: a zombie's pid still exists and its memory simply
+    cannot be read, so catching it as "the process is gone" would put the exact zero this
+    function exists to avoid back into the snapshot.
+
+    `tree` is the injected OS boundary: it is what lets the unreadable-tree branch be
+    tested without needing a process this test run is not allowed to read.
     """
+    method = f"psutil process tree from pid {pid}"
     try:
-        root = psutil.Process(pid)
-        tree = [root, *root.children(recursive=True)]
-    except psutil.Error:
-        return 0, 0.0
+        processes = tree(pid)
+    except psutil.ZombieProcess as exc:
+        return ProcessTreeUsage(
+            rss_bytes=None,
+            cpu_s=None,
+            sampled=0,
+            method=f"{method}: unreadable ({type(exc).__name__})",
+        )
+    except psutil.NoSuchProcess:
+        # The whole tree is gone. Nothing is a real measurement here, not a substitution.
+        return ProcessTreeUsage(
+            rss_bytes=0, cpu_s=0.0, sampled=0, method=f"{method}: root process has exited"
+        )
+    except psutil.Error as exc:
+        return ProcessTreeUsage(
+            rss_bytes=None,
+            cpu_s=None,
+            sampled=0,
+            method=f"{method}: unreadable ({type(exc).__name__})",
+        )
     rss = 0
     cpu_s = 0.0
-    for proc in tree:
+    sampled = 0
+    for proc in processes:
         try:
             with proc.oneshot():
                 rss += proc.memory_info().rss
                 times = proc.cpu_times()
                 cpu_s += times.user + times.system
-        except psutil.Error:
+            sampled += 1
+        except psutil.ZombieProcess as exc:
+            return ProcessTreeUsage(
+                rss_bytes=None,
+                cpu_s=None,
+                sampled=sampled,
+                method=f"{method}: unreadable at pid {proc.pid} ({type(exc).__name__})",
+            )
+        except psutil.NoSuchProcess:
             continue
-    return rss, cpu_s
+        except psutil.Error as exc:
+            return ProcessTreeUsage(
+                rss_bytes=None,
+                cpu_s=None,
+                sampled=sampled,
+                method=f"{method}: unreadable at pid {proc.pid} ({type(exc).__name__})",
+            )
+    return ProcessTreeUsage(
+        rss_bytes=rss, cpu_s=cpu_s, sampled=sampled, method=f"{method}: {sampled} processes read"
+    )
 
 
 def free_disk_bytes(path: Path) -> int:
@@ -195,12 +281,13 @@ def probe_resources(pid: int | None, output_root: Path) -> ResourceSnapshot:
     """Measure the machine and this run's process tree. Reads only; changes nothing."""
     memory = psutil.virtual_memory()
     swap = psutil.swap_memory()
-    rss, cpu_s = process_tree_usage(pid if pid is not None else psutil.Process().pid)
+    usage = process_tree_usage(pid if pid is not None else psutil.Process().pid)
     return ResourceSnapshot(
         total_bytes=memory.total,
         available_bytes=memory.available,
-        process_rss_bytes=rss,
-        process_cpu_s=cpu_s,
+        process_rss_bytes=usage.rss_bytes,
+        process_cpu_s=usage.cpu_s,
+        process_measurement_method=usage.method,
         swap_used_bytes=swap.used,
         pressure=read_memory_pressure(),
         disk_free_bytes=free_disk_bytes(output_root),

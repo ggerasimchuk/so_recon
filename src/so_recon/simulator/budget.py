@@ -122,11 +122,18 @@ class ResourceCaps(StrictModel):
 
 
 def effective_caps(profile: ResourceProfile, snapshot: ResourceSnapshot) -> ResourceCaps:
+    """The caps this snapshot implies.
+
+    An unmeasurable process tree contributes 0 to the reachable-memory term, which is the
+    smallest assumption available and so the one that yields the tightest cap. It is not a
+    claim that the run occupies nothing: `memory_stop` refuses outright on an unknown RSS,
+    so these caps are never used to start work on a tree nobody could read.
+    """
     hard = effective_hard_bytes(
         configured=profile.hard_bytes,
         total=snapshot.total_bytes,
         available=snapshot.available_bytes,
-        project_rss=snapshot.process_rss_bytes,
+        project_rss=0 if snapshot.process_rss_bytes is None else snapshot.process_rss_bytes,
         reserve=profile.reserve_bytes,
     )
     return ResourceCaps(
@@ -144,6 +151,16 @@ def effective_caps(profile: ResourceProfile, snapshot: ResourceSnapshot) -> Reso
 
 def memory_stop(profile: ResourceProfile, snapshot: ResourceSnapshot) -> BudgetStop | None:
     caps = effective_caps(profile, snapshot)
+    if snapshot.process_rss_bytes is None:
+        # The guard cannot watch what it cannot see. Carrying on would leave both the hard
+        # cap and the soft warning permanently unreachable while every snapshot still
+        # looked like a successful measurement.
+        return BudgetStop(
+            "RESOURCE_FAILURE",
+            "this run's own memory use could not be measured "
+            f"({snapshot.process_measurement_method}); refusing rather than treating an "
+            "unknown measurement as zero",
+        )
     if not caps.allows_start:
         return BudgetStop(
             "RESOURCE_FAILURE",
@@ -330,11 +347,16 @@ class ResourceWatchdog:
             )
             if stop is not None
         ]
+        # None when the tree could not be read; every comparison below therefore checks.
+        # Growth cannot be established on an unreadable tree, so such a breach stays a
+        # drain and it is the job timeout that eventually ends it.
+        rss = snapshot.process_rss_bytes
         if breaches:
             reasons = tuple(stop.reason for stop in breaches)
             if (
                 self._breach_rss_bytes is not None
-                and snapshot.process_rss_bytes > self._breach_rss_bytes
+                and rss is not None
+                and rss > self._breach_rss_bytes
             ):
                 # Asked to finish the chunk, and grew anyway: stop asking.
                 self._terminal = self._decide(
@@ -345,12 +367,12 @@ class ResourceWatchdog:
                     reasons=(
                         *reasons,
                         f"the process tree kept growing ({self._breach_rss_bytes} -> "
-                        f"{snapshot.process_rss_bytes} bytes) after being asked to stop",
+                        f"{rss} bytes) after being asked to stop",
                     ),
                 )
                 return self._terminal
             if self._breach_rss_bytes is None:
-                self._breach_rss_bytes = snapshot.process_rss_bytes
+                self._breach_rss_bytes = rss
             return self._decide(
                 "drain",
                 caps=caps,
@@ -374,14 +396,14 @@ class ResourceWatchdog:
                 ),
             )
 
-        if snapshot.process_rss_bytes >= caps.soft_bytes:
+        if rss is not None and rss >= caps.soft_bytes:
             return self._decide(
                 "warn",
                 caps=caps,
                 limitations=limitations,
                 reasons=(
-                    f"process tree holds {snapshot.process_rss_bytes} bytes, at or above "
-                    f"the {caps.soft_bytes} soft threshold",
+                    f"process tree holds {rss} bytes, at or above the {caps.soft_bytes} "
+                    "soft threshold",
                 ),
             )
         return self._decide("continue", caps=caps, limitations=limitations)
@@ -677,6 +699,12 @@ class BudgetLedger:
         A failed attempt becomes FAILED rather than disappearing: it was paid for, it
         counts against the forward budget, and SPEC 18.4 needs the reason on record
         instead of an unexplained absence.
+
+        The result must be the one this reservation is waiting for, in all three of its
+        identities. Two attempts on one physical model share a case hash, so checking only
+        that would let one attempt's result be filed against the other's entry: the wrong
+        cost and checkpoint on one row, and a second row left PENDING forever, holding its
+        reserved disk against the session for the rest of the run.
         """
         index = next(
             (
@@ -693,12 +721,17 @@ class BudgetLedger:
                 "before it is completed",
             )
         entry = self._record.entries[index]
-        if result.case_sha256 != entry.case_sha256:
-            raise BudgetStop(
-                "PROTOCOL_FAILURE",
-                f"job {job_id!r} was reserved for case {entry.case_sha256} but the result "
-                f"reports {result.case_sha256}",
-            )
+        for label, reserved, reported in (
+            ("job_id", entry.job_id, result.job_id),
+            ("model_hash", entry.model_hash, result.model_hash),
+            ("case_sha256", entry.case_sha256, result.case_sha256),
+        ):
+            if reserved != reported:
+                raise BudgetStop(
+                    "PROTOCOL_FAILURE",
+                    f"job {job_id!r} was reserved with {label} {reserved} but the result "
+                    f"reports {reported}",
+                )
         resolved = LedgerEntry.model_validate(
             {
                 **entry.model_dump(),

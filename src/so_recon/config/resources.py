@@ -40,6 +40,10 @@ class MissingResourceProfileError(RuntimeError):
     """A physical command was asked to run without a measured resource budget."""
 
 
+class UnapprovedResourceProfileError(RuntimeError):
+    """A profile block claims an approved profile name but does not carry its numbers."""
+
+
 class ResourceProfile(BaseModel):
     """One approved budget, named by its profile id.
 
@@ -156,18 +160,43 @@ def resource_profile(name: str) -> ResourceProfile:
 
 
 def require_resource_profile(profile: ResourceProfile | None, *, command: str) -> ResourceProfile:
-    """Gate a physical command on having a measured budget.
+    """Gate a physical command on having an approved, measured budget.
 
     A missing profile is legal: a 3.0 configuration has no such field at all, and a 4.0
     manifest or config-only check spends nothing that needs bounding. Anything that
     actually runs physics does, and refuses here rather than discovering the absence
     halfway through a simulation — that is what makes «resource failure не даёт
     физический нулевой likelihood» checkable (SPEC 18.4).
+
+    The numbers are checked here too, not only their internal consistency. The field
+    validators above cannot tell that a block labelled `P0_VERIFY` carries P0_VERIFY's
+    limits, and `wall_budget_s` and `max_new_forward` have no measured backstop the way
+    the memory caps do — `total - reserve` clamps those whatever the config claims, while
+    a session length or a forward count is spent exactly as written. Since COMPUTE §§2
+    and 10 fix those per profile, a block that names an approved profile must be that
+    profile. A different budget needs a new approved preset, not a relabelled one.
     """
     if profile is None:
         raise MissingResourceProfileError(
             f"command {command!r} runs physics and needs a resource profile, but the "
             "configuration declares none; add a `resources:` block (spec_version 4.0) or "
             "select an approved preset explicitly"
+        )
+    approved = RESOURCE_PROFILES.get(profile.profile)
+    if approved is None:
+        raise UnapprovedResourceProfileError(
+            f"command {command!r}: profile {profile.profile!r} is not an approved preset; "
+            f"approved profiles are {sorted(RESOURCE_PROFILES)}"
+        )
+    if profile != approved:
+        differences = {
+            name: (value, getattr(approved, name))
+            for name, value in profile.model_dump().items()
+            if value != getattr(approved, name)
+        }
+        raise UnapprovedResourceProfileError(
+            f"command {command!r}: the resource block names {profile.profile!r} but does "
+            f"not carry its approved limits (COMPUTE §§2, 5, 7, 10). Differences as "
+            f"{{field: (configured, approved)}}: {differences}"
         )
     return profile
