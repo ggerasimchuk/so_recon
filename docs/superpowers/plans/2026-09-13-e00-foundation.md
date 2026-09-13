@@ -231,6 +231,10 @@ markers = [
 line-length = 100
 target-version = "py313"
 src = ["src", "tests"]
+# ruff formats python code fences inside Markdown. docs/ holds the normative spec and this
+# implementation plan: their fenced blocks are quoted text, not project source, and must not
+# be rewritten by `ruff format`. Without this, `make lint` and `make gate` fail on the plan.
+extend-exclude = ["docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "PTH"]
