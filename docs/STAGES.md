@@ -1,715 +1,292 @@
-# STAGES.md — этапность реализации SO-RECON
+# STAGES.md — последовательность реализации SO-RECON
 
-**Версия:** 3.0  
-**Дата:** 13 сентября 2026 г.  
-**Нормативная спецификация:** `SPEC.md`  
-**Назначение:** последовательность разработки, проверки и научной валидации проекта «Локализация остаточных запасов нефти с применением методов машинного обучения».
+**Редакция 4.0 · 13.09.2026 · local-first.** Основа — SPEC.md, ресурсные пределы — COMPUTE_PROFILES.md. Это этапность и критерии приёмки, а не подробный план написания кода. Каждый этап получает отдельный план и отдельную проверку реализации.
 
----
+## 1. Что изменилось в порядке работ
 
-# 1. Как читать этот документ
+Полный малый метод появляется **до сложной полевой модели**. Сначала E00–E03 доказывают, что физический solver, likelihood, learned density, SMC и оценка So действительно работают вместе. Затем E04–E07 проверяют перенос постановки на структуру ваших данных. Только после этого создаются большие корпуса, усиливаются inference/baselines и выполняется закрытое исследование.
 
-`SPEC.md` отвечает на вопрос **«что именно строится и почему»**.  
-`STAGES.md` отвечает на вопрос **«в какой последовательности это реализовывать»**.
+Первая синтетика — **E01**. Первая обратная задача с известной So — **E02**. Первая обученная сеть с физической коррекцией и сравнением истинной/восстановленной So — **E03**. Не нужно ждать E09/E10, чтобы увидеть результат метода.
 
-Это не подробный программный план. Для каждого этапа далее создаётся отдельный implementation plan с конкретными файлами, функциями, тестами и командами. Нельзя просить агента реализовать весь проект одним запросом: сначала завершается и принимается текущий этап, затем пишется план следующего.
+Старые E01–E14 не совпадают с этой последовательностью. **E00 сохраняется в выполненном объёме SPEC 3.0**; статус подтверждается его историческим отчётом, а не переименованием версии. Недостающие runtime/worker/resource возможности добавляются внутри E01. Сопоставление кода и требований — [DECISIONS.md](DECISIONS.md). Новый план E00 и повторное создание основания не требуются.
 
-Статусы этапа:
+## 2. Общая последовательность
 
-- `NOT_RUN` — работа не начиналась;
-- `IN_PROGRESS` — выполняется;
-- `PASS` — все обязательные выходы и проверки завершены;
-- `PASS_WITH_LIMITATIONS` — этап пригоден для ограниченного продолжения, ограничения перечислены явно;
-- `FAIL` — критический gate не пройден, зависимые этапы заблокированы.
-
-Для каждого этапа создаётся отчёт `reports/stages/E##.md`, в котором фиксируются:
-
-- версия `SPEC.md` и конфигурации;
-- входные артефакты и их hashes;
-- выполненные команды;
-- результаты тестов и численных проверок;
-- созданные артефакты;
-- найденные ограничения;
-- статус этапа;
-- что разрешено передать следующему этапу.
-
----
-
-# 2. Проект в пяти крупных фазах
-
-| Фаза | Смысл | Этапы | Что появляется в конце |
+| Этап | Результат | Зависимости | Основной профиль |
 |---|---|---|---|
-| I. Основание и данные | Сделать данные причинно и физически корректными | `E00–E03` | Канонические таблицы, история подключений, пилот и замороженный эксперимент |
-| II. Физическая модель | Построить проверенный forward model и обычную инверсию | `E04–E07` | Геологический ensemble, JutulDarcy-модель, likelihood и сильные baselines |
-| III. Обучаемая инверсия | Создать synthetic truth, обучить ML и выполнить exact correction | `E08–E10` | Graph-temporal FMPE proposal и физически проверенный posterior |
-| IV. Научное доказательство | Проверить метод на закрытой синтетике и на реальной истории | `E11–E12` | Ответ, восстанавливается ли `So`, помогает ли ML и что переносится на поле |
-| V. Инженерный результат | Выпустить карты, сценарии бурения и материалы ВКР/статьи | `E13–E14` | Карты с uncertainty, ranking кандидатов, VoI и воспроизводимый release |
+| **E00** | Существующее окружение, CLI, registry и Julia smoke по 3.0 | Исторический отчёт | Foundation smoke |
+| **E01** | Совместимость foundation с 4.0, ресурсы, Jutul adapter и малая forward-синтетика | E00 | P0_VERIFY → P1_LOOP |
+| **E02** | Likelihood, prior и корректная малая inverse-задача без ML | E01 | P0_VERIFY / P1_LOOP |
+| **E03** | **Первый полный ML+SMC цикл, So truth и решение о продолжении** | E02 | P1_LOOP |
+| **E04** | Проверенные канонические данные пяти CSV | E00 + совместимость E01.0 для запусков 4.0; далее независимо от physics E01–E03 | Data-only |
+| **E05** | История подключений, пригодный пилот, режимы знания и источники | E04 | P2_PILOT design |
+| **E06** | Геологический prior, полевая физика и PhysicsDecision | E01, E05 | P2_PILOT |
+| **E07** | **Полеподобный малый сквозной опыт и новый budget gate** | E03, E06 | P2_PILOT |
+| **E08** | Основной corpus и замороженный research protocol | E07 | P2/P3 |
+| **E09** | Research NSF/encoder, development ablations и calibration | E08 | P3_RESEARCH |
+| **E10** | Усиленная SMC-коррекция, adjoint и сильные baselines | E02, E06, E09 | P2/P3 |
+| **E11** | Закрытое synthetic сравнение So, uncertainty и затрат | E09, E10 | P3 + P4 subset |
+| **E12** | Реальная реконструкция и полевые backtests | E11; с допустимым статусом результата | P3 |
+| **E13** | Карты So/нефти/неопределённости на поддержанном масштабе | E12 | Product-only + selected replays |
+| **E14** | Парные инженерные сценарии и воспроизводимый выпуск | E13 | Selected posterior scenarios |
 
-Самая важная логика:
+Параллельность допустима по независимым программным задачам, не означает одновременное обучение и несколько solver jobs в 24 ГБ. На одной машине resource scheduler имеет приоритет над количеством доступных агентов.
 
-```text
-данные
-  → геология и подключения
-  → проверенный физический симулятор
-  → обычная физическая инверсия
-  → synthetic truth и observability
-  → ML posterior proposal
-  → exact physical correction
-  → закрытая проверка
-  → реальная реконструкция
-  → карты и инженерные сценарии
-```
+## 3. Вехи
 
-Нейросеть начинается только после того, как физическая задача уже формально определена и существует baseline без ML.
+**M0 / E01:** Jutul считает известный малый мир; получена истинная So, но обратная задача ещё не решена.
 
----
+**M1 / E03:** весь метод работает на ноутбучном профиле; имеется отчёт «что восстановилось / что неоднозначно / помогает ли ML / сколько это стоит». Это первый момент принятия решения о целесообразности, не результат статьи.
 
-# 3. Граф зависимостей
+**M2 / E07:** полеподобный пилот с вашей структурой наблюдений проходит малую проверку; получен защищаемый PhysicsDecision либо явно сценарный статус. Теперь можно обосновывать длительные запуски.
 
-```text
-                         ┌──────────────→ E05 JutulDarcy verification ───────┐
-E00 Foundation ─→ E01 Data ─→ E02 History ─→ E03 Experiment lock ─→ E04 Geology
-                                                │                            │
-                                                └────────────────────────────┴─→ E06 Integrated forward
-                                                                                  │
-                                                                                  v
-                                                                            E07 Inverse baselines
-                                                                                  │
-                                                                                  v
-                                                                            E08 Synthetic corpus
-                                                                                  │
-                                                                                  v
-                                                                            E09 ML proposal
-                                                                                  │
-                                                                                  v
-                                                                            E10 Exact posterior
-                                                                                  │
-                                                                                  v
-                                                                            E11 Closed synthetic test
-                                                                                  │
-                                                                                  v
-                                                                            E12 Real-field inference
-                                                                                  │
-                                                                                  v
-                                                                            E13 Maps and support
-                                                                                  │
-                                                                                  v
-                                                                            E14 Decisions and release
-```
+**M3 / E11:** на закрытых мирах известен научный результат сравнения ML с сильными методами; положительный или отрицательный вывод подтверждён данными.
 
-`E05` можно вести параллельно с `E01–E04` на искусственных моделях. Интеграция с реальным сектором начинается только в `E06`.
+**M4 / E14:** результат на реальном объекте имеет допустимую интерпретацию, карты и воспроизводимые материалы статьи/ВКР.
 
----
+# 4. Карточки этапов
 
-# 4. Контрольные вехи
+## E00 — существующее основание проекта
 
-## M1 — данные готовы (`E03`)
+**Объём:** окружение, source manifests, typed config/paths, run/artifact registry, CLI/logging, deterministic fixture и сквозной Julia smoke. Выполнялся по 3.0; [план](superpowers/plans/2026-09-13-e00-foundation.md) и [отчёт](../reports/stages/E00.md) остаются историческими документами.
 
-Известно, какие записи допустимы, какие скважины и слои входят в пилот, какие даты и режимы используются, что скрыто в тесте и какой результат считается успехом.
+**Текущее свидетельство:** отчёт имеет PASS; проверка кода подтверждает наличие foundation-компонентов. Эта редакция не повторяет и не расширяет задним числом приёмку E00. Если его текущий исполнитель завершает исправления, он завершает именно согласованный объём 3.0; следующий план учитывает финальное дерево и тесты.
 
-## M2 — физический контур готов (`E07`)
+**Переиспользование:** `src/so_recon/config`, `paths.py`, `registry`, `runner.py`, `logging_setup.py`, `environment`, `simulator/julia_bridge.py`, `julia/smoke`, lockfiles и существующие tests. Окружение не пересоздаётся ради новой схемы каталогов. Новые зависимости добавляются при появлении потребителя и проверяются с существующим smoke.
 
-JutulDarcy воспроизводимо считает сектор, сохраняет баланс и restart, likelihood определена, а задача уже решается обычными методами без ML.
+**Не требовалось для прежнего E00:** persistent Julia worker, системные RAM/disk guards, полноценные CaseBundle/ThetaRecord/PosteriorBundle, ML, SMC, проверка физики. Их отсутствие не аннулирует foundation. Требования распределены по E01–E03, см. DECISIONS §3.
 
-## M3 — полный метод готов (`E10`)
+## E01 — физический adapter и первые synthetic states
 
-Нейросеть предлагает распределение параметров, exact SMC корректирует его по физической likelihood, все финальные частицы имеют полноценный forward run.
+**Цель:** получить настоящие малые состояния JutulDarcy. SPEC §§8–9, 17–18; профиль P0→P1.
 
-## M4 — научный вывод получен (`E12`)
+**Вход:** существующий E00 и его фактическое состояние, [DECISIONS.md](DECISIONS.md), штатные примеры/документация закреплённого Jutul, явно учебные PVT/ОФП. План не зависит от готового ETL или полевых PVT.
 
-На закрытой синтетике измерено качество восстановления истинной `So`; на реальных данных выполнены backtests и получен допустимый posterior либо доказано ограничение наблюдаемости.
+**Первый блок плана — E01.0, совместимость основания (часть E01, не новый этап):** сохранить прежний smoke; расширить versioned config/lineage с поддержкой новых 4.0 запусков и чтением исторических 3.0; устранить расхождение cfg.spec_version и runtime stamping во всём пути run/source manifests; добавить минимальные CaseBundle/ForwardResult и ресурсный профиль. Persistent worker и guards создаются здесь перед сериями физических jobs. ThetaRecord/DensitySchema вводятся в E02, PosteriorBundle — вместе с SMC; полные будущие схемы не требуются заранее. Детальные задачи и проверки перехода перечислены в DECISIONS §3.
 
-## M5 — выпуск готов (`E14`)
+**Содержание:** persistent Julia worker; OW case; wells/rate/BHP limits; monthly phase integrals; gravity; open/close connections и роль producer/injector; initial state; minimal output и native restart; классификация численных/resource failures; ограниченный retry. Проверки: closed-cell balance, Buckley–Leverett в его области, hydrostatics, two-layer mixing/crossflow, restart equivalence. Создать неоднородный двухслойный P1 generator с sparse static observations и скрытой So. Малый BO capability test фиксируется отдельно и выполняется до PhysicsDecision, не обязан блокировать первый OW цикл.
 
-Сформированы карты на поддержанном масштабе, контрфактические сценарии, материалы статьи/ВКР и воспроизводимый пакет.
+**Артефакты:** verified OW adapter; P0 fixtures; первые P1 worlds с theta/controls/noiseless outputs/true states; physics report; cold/warm runtime и RAM; restart round-trip result.
 
----
+**Приёмка:** старый smoke работает без подгонки frozen ожиданий; legacy/new конфиги и lineage имеют согласованные версии; resource/timeout failure не считается success. В физических проверках mock не заменяет решатель; задана жидкость, а не одновременно нефть и вода; месячные интегралы согласованы с балансом; закрытые соединения ведут себя правильно; новый job не наследует скрытое состояние предыдущего; ресурсы измерены; воспроизведение restart соответствует непрерывной траектории.
 
-# 5. Подробные этапы
+**Не входит:** вся полевая история, ML, MAP/ES-MDA, полный adjoint, OPM installation как обязательный барьер. Тест на простом мире не доказывает полевую точность.
 
-## E00. Основание проекта и воспроизводимое окружение
+## E02 — вероятностная обратная задача и ранняя наблюдаемость
 
-**Цель:** создать техническую основу, на которой все последующие расчёты воспроизводятся и имеют полную lineage.
+**Цель:** проверить, что именно будем обучать и корректировать. SPEC §§5, 7, 10, 13; P0/P1.
 
-**Основная работа:**
+**Вход:** E01, известный conditional prior учебного мира.
 
-- создать структуру Python/Julia-проекта и typed configuration;
-- зафиксировать Python, Julia, JutulDarcy и зависимости lock-файлами;
-- определить каталоги raw/interim/processed/artifacts/reports;
-- реализовать manifest исходных файлов, configs и environment;
-- создать минимальный synthetic fixture и smoke test;
-- определить единый CLI/run ID и правила логирования.
+**Содержание:** DensitySchema и prior/renderer с сохранённым residual; bounded-bin Student-t observation model и **тот же** рекурсивный noise generator; даты/masks/нулевая жидкость; CPU Float64 log-density. Реализовать универсальный SMC bridge с r, которое пока может равняться prior, корректные веса/CESS/resampling, gradient-free MH/pCN, checkpoint beta/ancestry. Проверить analytic Gaussian и bimodal cases, missing-mode defensive mixture и likelihood normalization. На reduced физическом мире 1–4 неизвестных получить независимую reference inversion; на P1 исследовать T1 информативность и T2/T4 неоднозначность.
 
-**Ключевые выходы:**
+**Артефакты:** likelihood/noise module; density tests; SMC engine; prior-only/reference posterior; ambiguity examples; предварительные So metrics; budget full inverse.
 
-- `pyproject.toml` и lock-файл Python;
-- `Project.toml` и `Manifest.toml` Julia;
-- каркас `src/so_recon/`, `julia/`, `tests/`, `configs/`, `reports/`;
-- `source_manifest.json`;
-- `environment_report.md`;
-- `reports/stages/E00.md`.
+**Приёмка:** пройдены normalization/generator/recovery проверки SPEC §23 для новой likelihood, включая 0/1, пропуски и date mixtures; sample/log-density consistent; latent/physical Jacobians не посчитаны дважды; beta достигает 1 либо честный incomplete status; toy reference согласуется; на пустом наблюдении нет искусственного сужения; state сравнивается на одном support; техническая ошибка не выдается за неидентифицируемость.
 
-**Gate:** чистая установка выполняет один детерминированный fixture; версии и hashes сохраняются; код не зависит от личных абсолютных путей.
+**Не входит:** full LIS, большой encoder, давление-псевдофича, fine-grid production inference. Нельзя требовать, чтобы все зоны маленького мира были идентифицируемы.
 
-**Не входит:** чтение всех промысловых данных, построение модели пласта, обучение ML.
+## E03 — первый полный ML + physical correction
 
----
+**Цель:** ответить на вопрос пользователя «делаем ли мы то, что нужно» до крупного расчёта. SPEC §22, §§11–14; P1_LOOP.
 
-## E01. Специализированный ETL и независимый аудит пяти CSV
+**Вход:** E02, малая physics-синтетика и её explicit information model.
 
-**Зависимость:** `E00`.
+**Содержание:** generate стартовые 128 parents с последующим расширением только по learning curve; masks/parent split; маленький graph-temporal encoder и conditional NSF; discrete head для ограниченной гипотезы; NLL training; frozen CPU Float64 proposal; defensive mixture; **тот же** SMC из E02 с r от сети; true So maps, credible widths и одинаковый evaluator. Сравнить static prior, prior-start SMC, raw q и q+SMC; выполнить минимальную summary/temporal-set ablation. T1–T5 добавляются по одному, не все сложности одновременно.
 
-**Цель:** получить канонические таблицы без потери смысла и без молчаливого исправления исходных данных.
+**Артефакты:** обученный малый checkpoint; sample/log_prob/round-trip tests; `EARLY_RESULT.md`; таблица So RMSE, CRPS/width, phase fit, beta/modes/ancestry, cold/online budgets; reproducible command малого полного пути; список unresolved risks.
 
-**Основная работа:**
+**Приёмка / G_LOCAL:** PASS_CODE и диагностированные state/ML outcomes по SPEC §22.4. Пример T1 должен показывать работу обратного восстановления, а T2/T4 — сохранение реальной неоднозначности. Прохождение скрипта и снижение NLL сами по себе не дают PROMISING_STATE. Необходим полный ledger, а не лишь время готовой сети.
 
-- реализовать отдельные parsers для `coords.csv`, `gis.csv`, `mer.csv`, `perf.csv`, `plastoper.csv`;
-- учесть разную ширину строк GIS, кодировки, десятичную запятую, BOM и хвостовые разделители;
-- сохранить исходный ID и нормализованный ID без объединения отдельных стволов;
-- привести единицы и разделить физический ноль, отсутствие определения и ошибку;
-- построить словари колонок, пластов и источников координат;
-- сверить строки, ключи, даты, объёмы, массы и пересечения фондов.
+**Решение:** если код некорректен — исправить; если So не наблюдаема — проверить reference/problem/support; если ML не помогает — один ограниченный development-цикл диагностики и зафиксированный вывод; при перспективности — переход к полеподобному пилоту. Нельзя лечить fail заказом суток аренды.
 
-**Ключевые выходы:**
+**Не входит:** утверждение 10% научного преимущества по восьми мирам, полевые запасы, обязательная GPU или полный black-oil. Эти модули не выбрасываются после опыта: дальше меняются profile/config/design, а не создаётся другой pipeline.
 
-- `data/interim/well_registry.parquet`;
-- `data/interim/geology_intervals.parquet`;
-- `data/interim/well_month.parquet`;
-- `data/interim/completion_events.parquet`;
-- `data/interim/coordinate_registry.parquet`;
-- `data_dictionary.md`, `formation_dictionary.yml`, `identity_crosswalk.parquet`;
-- обновлённый machine-readable data audit;
-- `reports/stages/E01.md`.
+## E04 — специализированный ETL исходных CSV
 
-**Gate:** каждое удаление или преобразование объяснимо; контрольные суммы МЭР совпадают с источником в заданном допуске; известные ловушки чтения покрыты golden tests.
+**Цель:** воспроизвести аудит и получить канонические данные с lineage. SPEC §§2, 6; DATA_AUDIT.md.
 
-**Не входит:** трактовка `So_log` как текущей `So`, разнесение МЭР по пластам, выбор пилотного участка.
+**Вход:** пять CSV и проверенные hashes; E00. Для запуска с новым spec_version требуется общий блок совместимости E01.0; после него E04 может идти независимо от физических задач E01–E03. Разработка парсеров не требует готового ML или полевого simulator.
 
----
+**Содержание:** chunked parsers с CP1251/UTF-8/BOM, десятичными запятыми и разной шириной ГИС; хвост PERF; well IDs с суффиксами; units/conditions registry; layer sets; дублеты; missing/zero/invalid; source row provenance; численные суммы/фонд; неоднозначные So/газ не исправляются догадкой. Canonical Parquet/локальная аналитическая БД для агрегатов, без загрузки всех таблиц как Python object-строк в несколько workers.
 
-## E02. История подключений, управления и наблюдений
+**Артефакты:** canonical tables, dictionaries, unit-status registry, qc ledger, source manifests, ETL evidence и diff с сохранённым аудитом.
 
-**Зависимость:** `E01`.
+**Приёмка:** совпадают либо объяснены исходные row counts/hashes/суммы; нет потери суффиксов; нет тайного column shift; исправления трассируются; неподтверждённые единицы обозначены; отсутствующие координаты не придуманы. Audit из документа — ориентир, фактическая корректная семантика имеет приоритет.
 
-**Цель:** восстановить, что было открыто, закрыто и эксплуатировалось в каждый момент, а также строго разделить controls и observations.
+**Не входит:** фиксированное разнесение фаз по слоям, выбор пилота по качеству history fit, обучение по `Нефтенас.` как target текущей карты.
 
-**Основная работа:**
+## E05 — время, подключения, пилот и источники
 
-- реализовать completion state machine по событиям перфорации, дострела, перестрела, отключения и изоляции;
-- объединять перекрывающиеся интервалы без двойного учёта толщины;
-- восстановить помесячную активность пластовых групп и её uncertainty;
-- отдельно учесть изменения списков пластов после июня 2021 года;
-- построить месячные controls: жидкость, закачка, режим и часы работы;
-- построить observations: oil/water split, watercut, GIS observations и quality masks;
-- создать availability ledger с physical time, available time и ingest time;
-- реализовать leakage tests для временных и new-well режимов.
+**Цель:** зафиксировать реальную постановку до подгонки. SPEC §§4–7, 9–10, 14.6.
 
-**Ключевые выходы:**
+**Вход:** E04, геологические/эксплуатационные признаки, внешние источники пользователя и подтверждённые открытые данные.
 
-- `completion_state_month.parquet`;
-- `control_schedule.parquet`;
-- `observation_registry.parquet`;
-- `availability_ledger.parquet`;
-- `completion_scenarios.parquet`;
-- `history_qc.md`;
-- `reports/stages/E02.md`.
+**Содержание:** completion interval state machine; начальные неизвестные подключения при потоке до первой перфорации; post-2021 uncertainty; внутримесячные роли/uptime; датировка ГИС и availability; core/buffer с всеми связанными слоями/скважинами; local frame и вертикальная конвенция; реальные controls и observation support. Выбрать t_ref по CompletenessReport и правилам SPEC §4.2.1, включая кандидата 2020; зафиксировать choice до history matching. Определить as-of/smoothing/conditional/pre-drill режимы. Создать source registry PVT/ОФП/Sor/давления с статусом и задачами закрытия gaps. Определить excluded zones не по их будущему отклику.
 
-**Gate:** месячные controls воспроизводят исходные объёмы; закрытый интервал не даёт поток; пропуск, нулевой поток и отсутствие коллектора различаются; будущая фазовая информация не попадает в control.
+**Артефакты:** pilot passport, timeline, controls/observations, uncertainty windows, prior-source ledger, cutoff/split protocol, data gaps, initial P2 budget.
 
-**Не входит:** history matching, выбор параметров prior, ML-признаки.
+**Приёмка / G_DATA:** пилот связан физически; нет неучтённого отбора из другого пласта; единицы/геометрия достаточны для выбранного статуса; давление источника имеет дату/глубину/единицы; So_log сохраняет собственную дату; будущие данные не попали в as-of. При отсутствии защищаемых PVT допускается полеподобная synthetic development, но field quantitative release остаётся заблокированным/сценарным.
 
----
+**Не входит:** декларация «2020 точно полный», вымышленное измерение давления, выбор final точки бурения.
 
-## E03. Выбор пилота и фиксация научного эксперимента
+## E06 — геологический prior и PhysicsDecision пилота
 
-**Зависимость:** `E02`.
+**Цель:** получить согласованную реальную forward model малого сектора. SPEC §§7–10; P2_PILOT.
 
-**Цель:** до разработки моделей определить область, даты, разбиения, информационные режимы и критерии успеха.
+**Вход:** E01 adapter, E05 pilot/source/timeline.
 
-**Основная работа:**
+**Содержание:** surfaces/order/thickness/NTG/collector; совместный phi/logK prior; реальные присутствующие единицы Д1; условная геология без двойного conditioning; water region, contact/Pc consistency; initial S0/warm-up; boundaries/WI; latent basis+residual, known density. Подключить месячные управления/события. Провести prior predictive и sensitivity OW↔BO/PVT/Pc/grid/buffer; использовать small BO capability при необходимости. Зафиксировать PhysicsDecision по SPEC §8.1. Собрать P2 forward budget.
 
-- выбрать пилотный сектор по покрытию данных и динамической информативности, а не по будущему качеству модели;
-- определить `core`, `buffer`, внешние скважины и возможный граничный обмен;
-- зафиксировать девять слоёв Д1 и допустимые агрегаты верх/низ/суммарный Д1;
-- выбрать основную дату состояния 31.12.2020 и правила сценария 31.12.2024;
-- зафиксировать temporal backtest, spatial blocks и held-out well families;
-- определить `pre_drill` и `post_drill_pre_flow` режимы новых скважин;
-- создать parent-level split для синтетики;
-- закрыть hashes наборов `inverse_test`, `end_to_end_confirmatory` и field holdout;
-- зафиксировать primary metrics, budgets и gates до model selection.
+**Артефакты:** prior generator/renderer, model_id, P2 CaseBundle, geological holdout report, prior predictive report, PhysicsDecision, runtime/memory/failure logs. Если полевая L существенно отличается от учебной, повторить E02 density/noise/coverage checks перед E07.
 
-**Ключевые выходы:**
+**Приёмка / G_PHYS:** PV не удвоен; поверхности не пересечены; flow attribution внутри well model; S0 не подменён virgin field; существенные boundary/phase unknowns отражены. Выбранный physics class верифицирован; альтернативы не отсеяны только за численную сложность. Реальная динамика имеет защищаемое объяснение в prior либо зарегистрирован mismatch.
 
-- `sector_definition.yml`;
-- `core_buffer_geometry.*`;
-- `split_manifest.json`;
-- `experiment_protocol.md`;
-- `closed_set_manifest.json`;
-- `reports/sector_selection.md`;
-- `reports/stages/E03.md`.
+**Не входит:** безусловное требование BO любой ценой; разрешение OW только потому, что нет давления; увеличение сетки до 80 тыс. по умолчанию.
 
-**Gate:** выбранный сектор имеет достаточный объём наблюдаемой истории; все будущие данные явно разрешены или запрещены; тест нельзя менять без новой версии протокола.
+## E07 — полеподобный сквозной pilot experiment
 
-**Не входит:** подбор лучшей архитектуры по закрытому тесту, финальное место бурения.
+**Цель:** проверить, что успех малого искусственного мира переносится на структуру ваших данных. SPEC §§12, 14, 18, 22; P2.
 
----
+**Вход:** E03 полный малый метод, E06 полевая геометрия/prior/physics.
 
-## E04. Условный геологический ensemble и начальное состояние
+**Содержание:** малый corpus новых conditional worlds с фактическими schedule templates, sparse ГИС, многопластовостью, incomplete events и отсутствующим давлением; обучить/адаптировать q **с проверкой новой латентной семантики**; полный SMC и prior-start baseline; state/support analysis; repeated forward с альтернативными разумными boundaries/ОФП/газом; просчитать всё исследование по фактической стоимости. До доступа к закрытым будущим данным prior не подстраивается по ним.
 
-**Зависимости:** `E01`, `E03`.
+**Артефакты:** `PILOT_RESULT.md`, поля synthetic truth/reconstruction, support/ambiguity, measurement priorities, PhysicsDecision confirmation, updated BudgetReport, решение о разрешённом масштабе P3.
 
-**Цель:** построить не одну гладкую карту, а физически допустимое распределение статических моделей, задающее `PV`, `S_oi` и геологическую неопределённость.
+**Приёмка / второй gate:** полезная наблюдаемость хотя бы на инженерных зонах, отсутствие сильной скрытой miscalibration, объяснённые model discrepancies, реализуемый budget. Лучшая tiny model не считается автоматически подходящей для 75 лет и девяти слоёв. При провале сначала устраняется причина; большой corpus/аренда не назначаются как универсальное решение.
 
-**Основная работа:**
+**Не входит:** окончательная статья, просмотр locked holdout, гарантированная точность карты 2024.
 
-- построить структурные поверхности и вертикальную схему девяти пластов;
-- задать collector probability, effective thickness, porosity и permeability;
-- сохранить статистические связи ФЕС и мелкомасштабную вариабельность;
-- определить ВНК, водяную область, lateral boundaries и альтернативные geometry families;
-- построить bias-aware prior начальной нефтенасыщенности;
-- задать сценарии `Sorw`, PVT и относительных проницаемостей с provenance;
-- сформировать низко- и высокочастотные компоненты статической неопределённости;
-- выполнить spatial cross-validation и prior geometry checks.
+## E08 — основной corpus и закрытый protocol
 
-**Ключевые выходы:**
+**Цель:** создать честную обучающую и проверочную среду. SPEC §12 и §14.
 
-- `geology/grid_definition.*`;
-- `geology/static_ensemble.zarr`;
-- `geology/family_registry.parquet`;
-- `geology/prior_config.yml`;
-- `geology/volume_balance.parquet`;
-- `reports/geology_validation.md`;
-- `reports/stages/E04.md`.
+**Вход:** E07, зафиксированные priors/physics, модель наблюдений, basis, support-selection rule, budget.
 
-**Gate:** поверхности не пересекаются; составные пласты не создают двойной `PV`; ансамбль сохраняет допустимые распределения и покрывает наблюдаемую геологию; uncertainty не заменена одной интерполяцией.
+**Содержание:** independent parent generation; отдельные train/development/locked-ID/locked-stress; joint consistency conditional G/latents; реальные controls только как разрешённые design templates; noise/missingness/events как на поле; отдельный truth storage; sharded generation/checkpoint. Fine-grid/different-relperm/missing-event tests определены до закрытого запуска. Adaptive sampling включается только с известной density и weights; initial baseline corpus prior-sampled.
 
-**Не входит:** подгонка геологии по production history, финальный posterior.
+**Артефакты:** corpus manifest и hashes, dataset loader, generation/budget ledger, locked manifests, `ResearchProtocol` со всеми C_STATE/C_CAL/C_VOLUME/C_LOCALIZATION/C_FIELD/C_COST из SPEC §14.3, точными метриками/порогами/CI/стоимостью, power-and-cost justification. Primary — MAE, RMSE дополнительная; truth anomaly masks и правила выбора зон определены до оценки.
 
----
+**Приёмка:** дочерние views не разделены между folds; true K/So/подключения не попали в context; corpus не состоит из шумовых копий одной real MAP; все failures учтены; число test/SMC calls включено в budget. Long-run профили не активируются без явного выбора пользователя.
 
-## E05. Адаптер JutulDarcy и верификация прямой физики
+**Не входит:** автоматические 8 192 дорогих расчёта, обещание завершить исследование за 24 часа, настройка test family по удачной карте.
 
-**Зависимость:** `E00`; может выполняться параллельно `E01–E04`.
+## E09 — исследовательский encoder и NSF
 
-**Цель:** получить надёжный operational forward simulator до подключения реального сектора.
+**Цель:** получить пригодный для коррекции proposal с известной density. SPEC §11.
 
-**Основная работа:**
+**Вход:** E08; малая реализация E03.
 
-- реализовать интерфейсы `build_case`, `run_case`, restart и adjoint gradient;
-- проверить однофазные и двухфазные малые fixtures;
-- проверить producer/injector controls без раскрытия будущего phase split;
-- проверить completion masks, shut/stop и смену ролей;
-- реализовать месячные интегралы нефти, воды и закачки;
-- проверить component/material balance, grid/time convergence и restart equivalence;
-- проверить adjoint gradients конечными разностями;
-- классифицировать numerical failure и physical infeasibility.
+**Содержание:** training/early stopping по development; graph-temporal versus temporal-set/summary ablations; NLL и при adaptive sampling корректирующие веса; discrete probability calibration; residual prior; permutation/masks/causal-prefix tests; CPU/MPS parity; несколько seeds; density tails/multimodality/OOD diagnostics. Freeze operational Float64 q и context.
 
-**Ключевые выходы:**
+**Артефакты:** checkpoint/config/scalers, training history, density tests, development comparison, selected encoder ADR, OOD/reference diagnostics, full training cost.
 
-- `src/so_recon/simulator/`;
-- `julia/SOReconSimulator/`;
-- набор simulation fixtures;
-- `simulator_manifest.json`;
-- `reports/simulator_verification.md`;
-- `reports/stages/E05.md`.
+**Приёмка:** q.sample и q.log_prob согласованы; q нормально обусловлена G/design; нет double Jacobian; пустой context не приводит к беспричинной уверенности; selection не использует closed test; graph оставлен только при обоснованной пользе. Скорость сырой сети не называется точностью So.
 
-**Gate:** balance, restart, monthly integrals, controls и gradients проходят установленные критерии; частичный output не принимается как успешный расчёт.
+**Не входит:** окончательная карта из raw q, обязательный параллельный FMPE, увеличение depth без диагностики corpus.
 
-**Не входит:** ручная подстройка реального объекта, ML, финальная производительность.
+## E10 — research inference, adjoint и сильные baselines
 
----
+**Цель:** довести ранний inference до уровня научного сравнения. SPEC §§13–14.
 
-## E06. Интегрированная физическая модель пилотного сектора
+**Вход:** E02 SMC/likelihood, E06 физика, E09 q. Разработку gradient adapter можно вести раньше на согласованных interfaces.
 
-**Зависимости:** `E02`, `E04`, `E05`.
+**Содержание:** defensive bridge/CESS/weights; replicated starts, global/discrete/local/pCN moves; cache; finite-budget statuses; полноценная remainder exploration. Chain-rule monthly likelihood adjoint по SPEC §13.3.1, finite-difference checks, MALA с MH. B1 prior-SMC, B2 multi-start MAP, B3 настроенный localized ES-MDA и Gaussian-compatible control; B4 representation baseline. Аналитическая и reduced-physics calibration всей системы; measured forward-equivalent cost.
 
-**Цель:** связать геологию, скважины, историю и JutulDarcy в первый полный forward model реального сектора.
+**Артефакты:** research inference module, gradient report, baseline configs, toy/reference/SBC results, convergence diagnostics, benchmark ledger. Настройка baselines выполняется на development по правилам E08, её стоимость учитывается; окончательные конфиги всех методов замораживаются до E11. Результаты E09 могут потребовать повторной development-настройки/обучения, но не открытия locked test.
 
-**Основная работа:**
+**Приёмка / G_DENSITY:** корректны target/proposal/reference measures; новые q не меняются внутри bridge; градиенты соответствуют месячной нормированной L, не иной MSE; partial beta не posterior; failures не выброшены. При неподдержанном adjoint используется корректный kernel и честно фиксируется ограничение MAP; не писать, что baseline реализован, если он заменён другим.
 
-- преобразовать каждый static realization в Jutul grid/rock model;
-- подключить скважины и completion schedule;
-- задать PVT, ОФП, initial state, aquifer/boundary families и controls;
-- реализовать full-history run и restart на целевых датах;
-- построить prior predictive ensemble;
-- сравнить диапазон рассчитанных watercut/phase volumes с реальной историей;
-- диагностировать structural mismatch по скважинам, периодам и model families;
-- измерить стоимость forward run и пригодность параллелизма/cache.
+**Не входит:** обязательный full HMC/NUTS, непрозрачная cross-language end-to-end autodiff, финальные claims до E11.
 
-**Ключевые выходы:**
+## E11 — закрытая synthetic проверка
 
-- `simulation_case_registry.parquet`;
-- `prior_predictive_ensemble.zarr`;
-- `prior_predictive_metrics.parquet`;
-- `reports/integrated_forward.md`;
-- `reports/prior_predictive.md`;
-- `reports/stages/E06.md`.
+**Цель:** проверить state accuracy и вклад ML, а не просто работоспособность программы. SPEC §14; P3/P4.
 
-**Gate:** сектор устойчиво считается; баланс соблюдён; prior predictive envelope хотя бы частично покрывает ключевые реальные отклики. Если покрытие отсутствует системно, исправляются `E04–E06`, а не увеличивается сеть.
+**Вход:** замороженные E08–E10, независимые locked worlds, resources approved.
 
-**Не входит:** posterior conditioning и утверждение о текущей `So`.
+**Содержание:** paired independent-world comparison B0–B4/M по заявленным бюджетам; primary MAE So и supporting RMSE, CRPS/coverage/width, C_VOLUME, C_LOCALIZATION/false positives/resolution и ранг зон/regret; controls/phase fit отдельно; structural OOD, unknown events, gas-sensitive worlds; grid/time refinement subset; multiple seeds; cold-start/amortized costs; failures и невосстановимые случаи.
 
----
+**Артефакты:** confirmatory results и immutable raw metrics, world-level CI/effect sizes, uncertainty calibration, rank/support results, code/config/data hashes, scientific outcome A/B/C/D.
 
-## E07. Вероятностная обратная задача и same-physics baselines
+**Приёмка:** выполнен зарегистрированный протокол, а не обязательно положительный результат. Для каждого scientific claim отдельно применяются C_* из SPEC §14.3; улучшение средней MAE не заменяет C_LOCALIZATION/C_VOLUME; если критерий не достигнут, вывод ограничивается наблюдаемой пользой или отрицательным результатом. Cells не используются как тысячи независимых test cases. Изменение метода после открытия требует нового confirmatory набора.
 
-**Зависимость:** `E06`.
+**Не входит:** выбор «лучшего seed», сдвиг support/таргета ради 10%, утверждение полевой ошибки So из synthetic RMSE.
 
-**Цель:** полностью определить inverse problem и решить её сильными методами без обучаемого proposal.
+## E12 — реальная реконструкция и backtests
 
-**Основная работа:**
+**Цель:** применить замороженный метод в проверяемом информационном режиме. SPEC §§4.3, 14.6, 19.
 
-- определить низкоразмерную латентную переменную `z`, nuisance `ξ`, transforms и Jacobians;
-- реализовать deterministic decoder физических параметров;
-- задать normalized likelihood для динамики, GIS bias и completion uncertainty;
-- проверить likelihood на synthetic residuals и известных параметрах;
-- реализовать `B0` static prior;
-- реализовать `B1` multi-start adjoint MAP;
-- реализовать `B2` ES-MDA;
-- реализовать `B3` prior-start tempered SMC;
-- сравнить методы на одинаковой физике и одинаковом observation contract.
+**Вход:** E11 с корректным scientific status, реальные CaseBundle и source completeness.
 
-**Ключевые выходы:**
+**Содержание:** strict as-of rolling cutoffs/conditional forecasts, pre-drill/post-drill-pre-flow проверки без собственной будущей геологии, smoothing отдельно; model/prior/controls frozen на каждый опыт; retrospective t_ref и late 2024 при допустимых источниках; completion/PVT/boundary/OOD sensitivity; posterior convergence и предсказательные интервалы.
 
-- `parameter_registry.yml`;
-- `prior_and_transforms`;
-- `observation_model.yml`;
-- `likelihood_diagnostics.parquet`;
-- `baseline_results/{B0,B1,B2,B3}/`;
-- `reports/inverse_baselines.md`;
-- `reports/stages/E07.md`.
+**Артефакты:** PosteriorBundle, field backtest report, map eligibility/status, data/physics assumptions, unresolved measurements.
 
-**Gate:** toy inverse problems восстанавливаются; densities конечны и согласованы; B1–B3 выполняют full forward runs; posterior predictive проверен; существует реальный baseline, относительно которого измеряется вклад ML.
+**Приёмка / G_FIELD:** отсутствует leakage; C_FIELD из SPEC §14.3 оценён с paired uncertainty, а data completeness поддерживает заявленный режим; gas/completion/geometry sensitivity не скрыта. При отсутствии прямой So полевой RMSE не выдуман. Если E11 показал отсутствие ML-преимущества, метод не называется ML-enhanced accuracy только из-за успешной полевой подгонки.
 
-**Не входит:** обучение нейросети, выдача финальной карты.
+**Не входит:** количественная карта вне поддержанного data/physics domain; рекомендация бурить по одной median So.
 
----
+## E13 — пространственные продукты
 
-## E08. Synthetic corpus и исследование наблюдаемости
+**Цель:** корректно превратить частицы в инженерные карты. SPEC §15.
 
-**Зависимость:** `E07`.
+**Вход:** E12, общий report support, posterior weights/states и geometry uncertainty.
 
-**Цель:** создать честную обучающую и проверочную среду, где истинная `So` известна и можно измерить, что вообще восстанавливается из данных данного типа.
+**Содержание:** So mean/quantiles/width, collector presence, remaining oil, oil above Sorw, kr_o diagnostic; conservative geometry intersections; quantile-of-sum; supported/prior-dominated/unresolved masks; representative physical realizations; inventory provenance; GIS export только при подтверждённой CRS.
 
-**Основная работа:**
+**Артефакты:** state/particle arrays, maps and zone tables, support/method cards, uncertainty/sensitivity report, source provenance.
 
-- сэмплировать parent cases из геологических и физических families;
-- запускать JutulDarcy и сохранять истинные states/parameters;
-- генерировать доступные `G, U, Y, events, masks`, соответствующие реальным CSV;
-- моделировать шум, пропуски, epoch bias и completion errors;
-- включить ID, held-out и structural-stress families;
-- разделить train/validation/test только на parent-level;
-- реализовать простую summary-SBI baseline `B4`;
-- построить observability curves, ambiguity pairs и resolution diagnostics;
-- заморозить confirmatory corpus до разработки окончательной ML-модели.
+**Приёмка:** суммарные объёмы совпадают с физическими particle inventories; PV=0 не превращается в So=0; сумма cell quantiles не использована как zone quantile; mean cube не объявлен физической траекторией; неопределённость и дата видны пользователю.
 
-**Ключевые выходы:**
+**Не входит:** ручная дорисовка нефти, новая supervised модель запасов, сертифицированные извлекаемые запасы без решения/экономики.
 
-- `synthetic/corpus.zarr`;
-- `synthetic/parent_manifest.parquet`;
-- `synthetic/split_manifest.json`;
-- защищённые truth artifacts;
-- `baseline_results/B4/`;
-- `reports/observability_development.md`;
-- `reports/stages/E08.md`.
+## E14 — решения и воспроизводимый выпуск
 
-**Gate:** нет parent leakage; входы не богаче реальных данных; truth скрыта от модели; baseline-метрики воспроизводимы; подтверждено, на каком масштабе задача хотя бы потенциально наблюдаема.
+**Цель:** показать практический смысл локализации и собрать статью/ВКР. SPEC §16, §21.
 
-**Не входит:** открытие confirmatory test для выбора архитектуры.
+**Вход:** E13, admissible candidates и policy/constraints.
 
----
+**Содержание:** небольшое число заранее определённых candidates; парные base/intervention расчёты одинаковых posterior worlds; BHP/facility constraints; incremental oil **сектора**, вода и перераспределение отбора; устойчивость ранга; при неопределённости ranked measurement needs. Quantitative nested EVSI — дополнительный опыт по бюджету, не обязательный барьер завершения всего проекта. Итоговая документация, reproducible synthetic command, figures/metrics/provenance и изложение ограничений.
 
-## E09. Graph-temporal FMPE posterior proposal
+**Артефакты:** candidate scenario table, paired outcomes, admissible recommendation или запрос доизучения; method/data/model cards; release manifest; структура статьи/ВКР с реальными результатами.
 
-**Зависимость:** `E08`.
+**Приёмка / G_DECISION:** известны политики, единицы/физика и uncertainty; собственный дебит новой скважины не принят за весь дополнительный эффект; chemical/thermal EOR не симулируются ручным уменьшением Sor; research findings воспроизводимы; приватные CSV не опубликованы. Наличие работающего pipeline не выдаётся за подтверждённый положительный научный результат.
 
-**Цель:** обучить центральную ML-модель, которая по истории новой задачи предлагает многомодальное распределение физических параметров.
+# 5. Правила работы с агентами
 
-**Основная работа:**
+Каждый план использует действующие SPEC/STAGES 4.0 и матрицу SPEC §23. Каждый план содержит: цель; требования SPEC с номерами разделов; входные artifacts; разрешённый profile и budget; изменения интерфейсов; тесты с ожидаемыми наблюдаемыми результатами; provenance; что не входит; факторы блокировки; rollback/checkpoint. Подробный порядок файлов/функций пишет агент-планировщик, а не этот документ.
 
-- реализовать temporal encoder месячных историй и masks;
-- реализовать set pooling и information graph скважин;
-- реализовать conditional Flow Matching Posterior Estimator;
-- обеспечить согласованные `sample` и `log_prob`;
-- обучить на synthetic train и выбирать модель только по validation;
-- выполнить curriculum и targeted simulation при выявленном OOD;
-- проверить toy multimodality, SBC, coverage и posterior predictive;
-- выполнить абляции: без графа, без temporal encoder, summaries-only;
-- сохранить несколько seeds/checkpoints и calibration model.
+После исполнения нужен отчёт с реально выполненными командами, exit status, созданными artifacts, проверками и ограничениями. Формулировка «тесты должны пройти» не является приёмкой. Независимая проверка смотрит математическую постановку и утечки, а не только linter.
 
-**Ключевые выходы:**
+Один этап не меняет prior/likelihood/target ради удобства кода. ADR нужен для научных изменений. Изменение batch/числа workers в границах профиля — ресурсное решение с записью config; изменение сетки/physics/basis — новая model version с повторной validation.
 
-- `models/fmpe/`;
-- `ml_checkpoint_manifest.json`;
-- `normalization_and_schema.json`;
-- `proposal_metrics.parquet`;
-- `reports/ml_training.md`;
-- `reports/ml_ablations.md`;
-- `reports/stages/E09.md`.
+# 6. Переход со старой этапности
 
-**Gate:** proposal не использует hidden truth; sample/log_prob согласованы; coverage приемлема на validation; пустая история не даёт ложной уверенности; graph остаётся только при доказанном вкладе.
+| Прежний блок | Куда попадает в 4.0 |
+|---|---|
+| E00 основание | Сохранённый E00 3.0; недостающая совместимость/resources/worker — E01.0 |
+| E01–E03 ETL / timeline / pilot | E04–E05 |
+| E04 геологический prior | E06 |
+| E05 simulator verification | E01 + полевая проверка E06 |
+| E06 интегрированный сектор | E06–E07 |
+| E07 inverse/baselines | Малый E02; research E10 |
+| E08 corpus | Малый E03/E07; research E08 |
+| E09 ML | Малый E03/E07; research E09 |
+| E10 correction | Малый E02–E03; research E10 |
+| E11–E14 science/field/maps/decisions | E11–E14, с новыми gates |
 
-**Не входит:** использование сырого ML posterior как конечной карты реального объекта.
+Нельзя дать исполнителю старый план E03 и новый STAGES, не объяснив смену значения номера. Во всех новых планах указывается `spec_version=4.0` и полный заголовок этапа.
 
----
+# 7. Следующий запрос агенту
 
-## E10. Exact posterior correction: defensive tempered SMC
+> Прочитай README.md, docs/README.md, docs/SPEC.md, docs/STAGES.md, docs/COMPUTE_PROFILES.md и docs/DECISIONS.md; если в checkout есть AGENTS.md, прочитай его. Сверь фактический код, Git-состояние, старый план и reports/stages/E00.md. Напиши отдельный план **E01 — физический adapter и первые synthetic states** для SO-RECON 4.0. Сохрани готовое основание E00. В начале E01 включи блок совместимости версии/lineage, минимальных контрактов, persistent worker и ресурсных guards по DECISIONS §3; не создавай foundation заново. Используй существующие julia/, src/so_recon/ и artifacts/runs/. Затем запланируй физические проверки P0 и первые P1 worlds. Для каждой задачи укажи требования SPEC, входы, артефакты, тесты/допуски и budget. Не приступай к реализации и не включай обучение/SMC/полевой ETL в E01.
 
-**Зависимости:** `E07`, `E09`.
+Новый план сохраняется в `docs/superpowers/plans/` с датой, номером и полным названием этапа. Аналогично планируются E02 и далее только в их объёме. Непройденные зависимости отражаются как входные gates: будущий план не объявляет отсутствующий artifact существующим.
 
-**Цель:** превратить ML proposal в физически и вероятностно корректный posterior.
+## 7.1. Статусы и приёмка
 
-**Основная работа:**
+E00 сохраняет исторические SPEC/STAGES 3.0. Новые планы и отчёты используют 4.0 и матрицу SPEC §23. По состоянию на согласование документации E01–E14 — NOT_RUN: написанный контракт не является реализованным модулем. Само планирование E01 разрешено; запуск следующего этапа зависит от приёмки предыдущего. Исполнитель существующего E00 может закончить его текущие исправления без перехода к E01.
 
-- смешать ML proposal с prior в defensive proposal;
-- вычислять `log prior`, `log proposal` и exact Jutul likelihood;
-- реализовать adaptive likelihood tempering;
-- реализовать ESS-based resampling и ancestry;
-- реализовать rejuvenation, включая adjoint-assisted MALA для непрерывных параметров;
-- обрабатывать дискретные geology/completion families;
-- сохранять все numerical failures и rejected particles;
-- выполнять exact forward run для каждой финальной частицы;
-- сравнить learned-proposal SMC с prior-start `B3` при одинаковых budgets.
-
-**Ключевые выходы:**
-
-- `src/so_recon/inference/`;
-- `posterior_ensemble` schema;
-- `smc_diagnostics.parquet`;
-- `failure_registry.parquet`;
-- `reports/exact_inference_verification.md`;
-- `reports/stages/E10.md`.
-
-**Gate:** аналитические и toy tests весов пройдены; ESS/max-weight/mode gates соблюдены; все финальные частицы имеют successful exact forward; ML не изменяет target distribution, а только эффективность предложения.
-
-**Не входит:** открытие закрытого confirmatory test ради исправления метода.
-
----
-
-## E11. Закрытая synthetic-валидация всей системы
-
-**Зависимость:** `E10`.
-
-**Цель:** один раз проверить научные гипотезы на случаях с известной истинной `So`.
-
-**Основная работа:**
-
-- открыть замороженные `inverse_test` и `end_to_end_confirmatory`;
-- сравнить `B0–B4` и SO-RECON при одинаковой физике;
-- сравнить fixed wall-clock и fixed simulation budgets;
-- измерить ошибки `So`, `PV·So`, мобильного объёма и зональных рангов;
-- проверить calibration, coverage, ESS, mode retention и OOD;
-- провести structural-stress tests;
-- определить resolution kernel и минимальный допустимый report support;
-- присвоить статусы H1–H3 и выбрать Outcome A/B/C/D для synthetic evidence;
-- после просмотра test не менять метод без создания нового confirmatory family.
-
-**Ключевые выходы:**
-
-- `confirmatory_predictions/`;
-- `confirmatory_metrics.parquet`;
-- `resolution_report.md`;
-- `hypothesis_status.md`;
-- `reports/end_to_end_validation.md`;
-- `reports/stages/E11.md`.
-
-**Gate:** заранее заданные primary criteria рассчитаны полностью; показаны успешные и неуспешные cases; разрешение итоговых карт определяется тестом, а не размером grid.
-
-**Развилка:**
-
-- состояние восстанавливается — переход к полевой реконструкции;
-- динамика прогнозируется, но `So` неоднозначна — перейти к Outcome C и VoI;
-- даже агрегированные зоны неразличимы — перейти к Outcome D, не выпускать ложную карту.
-
----
-
-## E12. Реальная реконструкция и полевые backtests
-
-**Зависимость:** `E11`.
-
-**Цель:** применить замороженный метод к реальному сектору и проверить его там, где существуют наблюдаемые будущие отклики.
-
-**Основная работа:**
-
-- оценить OOD реального контекста относительно synthetic corpus;
-- при допустимом OOD выполнить posterior conditioning до 31.12.2020;
-- провести заранее выбранный temporal backtest;
-- провести spatial/held-out-well tests;
-- провести new-well tests в режимах `pre_drill` и `post_drill_pre_flow`;
-- сравнить posterior predictive watercut/oil fractions с реальностью;
-- выполнить чувствительность к geology, boundary, completion, PVT/relperm и GIS bias;
-- при допустимости построить сценарный posterior на 31.12.2024;
-- определить, какие зоны informed, prior-dominated или unsupported.
-
-**Ключевые выходы:**
-
-- `field_posterior_2020/`;
-- `field_backtest_predictions.parquet`;
-- `new_well_backtests.parquet`;
-- `field_sensitivity_budget.parquet`;
-- `field_posterior_2024_scenarios/` при прохождении условий;
-- `reports/field_validation.md`;
-- `reports/stages/E12.md`.
-
-**Gate:** реальные predictive checks не противоречат истории; OOD и sensitivity отражены; отсутствие независимой истинной `So` не маскируется процентной «точностью поля».
-
-**Не входит:** ручное исправление карт по фактической поздней воде после завершения test.
-
----
-
-## E13. Карты состояния, uncertainty, support и abstention
-
-**Зависимость:** `E12`.
-
-**Цель:** преобразовать posterior particles в инженерно читаемые пространственные продукты без создания дополнительной информации интерполяцией.
-
-**Основная работа:**
-
-- агрегировать physical states на масштабе, подтверждённом `E11`;
-- построить `So q10/q50/q90` и exceedance probabilities;
-- рассчитать текущий нефтенасыщенный объём и объём выше `Sorw` по particles;
-- построить карты sweep, posterior width и variance reduction;
-- классифицировать support A/B/C/D;
-- отметить prior-dominated, boundary-sensitive и completion-sensitive зоны;
-- разложить uncertainty по источникам;
-- реализовать `NO_LOCAL_QUANTITATIVE_ESTIMATE` по правилам `SPEC.md`;
-- проверить quantile-of-sum и spatial aggregation.
-
-**Ключевые выходы:**
-
-- `maps/state_ensemble.zarr`;
-- `maps/maps.nc`;
-- `maps/map_cells.parquet`;
-- `maps/support_class.parquet`;
-- `map_method_card.md`;
-- `uncertainty_budget.md`;
-- `reports/stages/E13.md`.
-
-**Gate:** каждая карта восходит к exact posterior particles; unsupported области не заполнены искусственными значениями; детализация не выше resolution test; единицы и объёмы закрывают баланс.
-
-**Не входит:** объявление объёма выше `Sorw` утверждёнными извлекаемыми запасами.
-
----
-
-## E14. Контрфактические сценарии, VoI и воспроизводимый выпуск
-
-**Зависимость:** `E13`.
-
-**Цель:** проверить практическую полезность локализации и собрать окончательный результат ВКР/статьи.
-
-**Основная работа:**
-
-- отфильтровать геологически и технологически допустимые точки-кандидаты;
-- для каждой posterior particle выполнить paired base/intervention runs;
-- считать дополнительную нефть и воду по всему сектору, а не только дебит новой скважины;
-- проверить влияние на соседние скважины и конкуренцию за дренирование;
-- оценить устойчивость ranking между model families и policies;
-- реализовать abstention при смене знака эффекта или неустойчивом ранге;
-- рассчитать value of information для давления, PLT и текущей `So`;
-- выполнить clean synthetic end-to-end reproducibility run;
-- подготовить figures, tables, model/data cards, thesis chapters и article outline;
-- сформировать private scientific archive и public synthetic reproducibility package.
-
-**Ключевые выходы:**
-
-- `candidate_registry.parquet`;
-- `counterfactual_results.parquet`;
-- `candidate_ranking.parquet`;
-- `data_acquisition_priorities.parquet`;
-- `reports/decision_stability.md`;
-- `reports/final_research_report.md`;
-- release manifest и воспроизводимый synthetic example;
-- материалы статьи и ВКР;
-- `reports/stages/E14.md`.
-
-**Gate:** ranking основан на paired physics runs; incremental production считается по сектору; риски и ограничения видны рядом с эффектом; все основные утверждения связаны с заранее определённым тестом.
-
----
-
-# 6. Главные stop/go gates
-
-## G1 — после E03: существует ли пригодный пилот?
-
-Если нет сектора с достаточной историей, геологией и режимными изменениями, проект не переходит к масштабной реализации. Выбирается другой сектор или научная постановка ограничивается observability/VoI.
-
-## G2 — после E06: работает ли физическая модель до ML?
-
-Если prior predictive не покрывает реальную динамику и обнаружен системный mismatch, исправляются геология, границы, completion model или PVT/ОФП. Нейросеть не используется для маскировки ошибки forward model.
-
-## G3 — после E07: существует ли честная baseline-инверсия?
-
-Если B1–B3 не могут стабильно работать даже на toy и synthetic cases, ML не начинается. Сначала исправляется inverse formulation.
-
-## G4 — после E11: восстанавливается ли скрытая `So` на synthetic truth?
-
-Если нет, нельзя заявлять локализацию на реальном объекте. Допустимы Outcome C или D: predictive model, ambiguity analysis и программа дополнительных исследований.
-
-## G5 — после E12: поддерживается ли реальный результат данными?
-
-Если реальный context OOD, posterior prior-dominated или boundary/completion uncertainty определяет вывод, выпускается агрегированный или abstained result, а не точная карта.
-
----
-
-# 7. Что можно выполнять параллельно
-
-- `E05` можно выполнять параллельно `E01–E04`, используя synthetic fixtures.
-- В `E04` можно параллельно разрабатывать structural geometry и conditional property ensembles, но общий `PV` проверяется совместно.
-- В `E08` generation workers могут работать параллельно после заморозки parent manifests.
-- В `E09` обучение разных seeds и абляций параллельно, но test остаётся закрытым.
-- В `E12` sensitivity families могут рассчитываться параллельно после заморозки field method.
-- В `E14` paired candidate simulations параллелятся по particles и candidates с общими manifests.
-
-Нельзя параллельно выполнять зависимый этап на неподтверждённых интерфейсах, если затем результаты будут использоваться как научные evidence.
-
----
-
-# 8. Как просить Codex писать планы
-
-Для каждого этапа используется отдельный запрос. Базовая форма:
-
-```text
-Прочитай файлы /docs/README_SO_RECON.md, /docs/DATA_AUDIT.md,
-/docs/RESEARCH.md, /docs/SPEC.md и /docs/STAGES.md.
-
-Подготовь подробный implementation plan только для этапа E##.
-Учитывай входные артефакты и gate этапа.
-Не меняй архитектуру и критерии из SPEC.md.
-Не реализуй последующие этапы.
-План должен содержать структуру файлов, интерфейсы, тесты,
-команды проверки, ожидаемые артефакты и отчёт reports/stages/E##.md.
-```
-
-После утверждения плана этап реализуется отдельно. Следующий план пишется только после появления отчёта и статуса текущего этапа.
-
-Рекомендуемая первая последовательность запросов:
-
-```text
-1. Напиши план E00.
-2. Реализуй E00 и проверь gate.
-3. Напиши план E01 на фактическом состоянии репозитория.
-4. Реализуй E01 и проверь gate.
-5. Продолжай по одному этапу.
-```
-
-Не следует сразу просить «реализовать E00–E14»: агент потеряет границы интерфейсов, проверки и научные stop/go решения.
-
----
-
-# 9. Минимальная логика итогового результата
-
-Первое поле текущей `So` появляется только после `E12`, а публикуемая карта — после `E13`.
-
-До этого проект последовательно доказывает:
-
-1. данные прочитаны правильно;
-2. история подключений не содержит временной утечки;
-3. геологический объём физически допустим;
-4. симулятор решает задачу и сохраняет баланс;
-5. inverse problem работает без ML;
-6. скрытая `So` восстанавливается на synthetic truth;
-7. ML действительно улучшает точность или стоимость;
-8. exact correction не допускает неподдержанных ML-состояний;
-9. реальная история согласуется с posterior;
-10. детализация карты соответствует фактической разрешающей способности данных.
-
-Если цепочка обрывается, проект переходит на предусмотренный честный результат Outcome B, C или D, а не продолжает строить визуально убедительную, но недоказанную карту.
+Статусы этапа: NOT_RUN, IN_PROGRESS, PASS, PASS_WITH_LIMITATIONS, FAIL. Отчёт `reports/stages/E##.md` содержит версию требований, входные hashes, commit/dirty state, команды с exit status, тесты/ресурсы, output artifacts, ограничения и точное решение о зависимостях. Для исследовательских этапов technical status и C_* scientific outcomes различаются по SPEC §23.2; отрицательный scientific результат не является поводом подгонять протокол.
