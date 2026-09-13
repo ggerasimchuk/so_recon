@@ -29,5 +29,16 @@ def test_canonical_json_rejects_nan() -> None:
         canonical_json({"x": float("nan")})
 
 
+def test_canonical_json_rejects_infinity() -> None:
+    with pytest.raises(ValueError):
+        canonical_json({"x": float("inf")})
+
+
+def test_sha256_file_handles_empty_file(tmp_path: Path) -> None:
+    p = tmp_path / "empty.bin"
+    p.write_bytes(b"")
+    assert sha256_file(p) == hashlib.sha256(b"").hexdigest()
+
+
 def test_sha256_json_is_stable() -> None:
     assert sha256_json({"k": 1}) == sha256_bytes(b'{"k":1}')

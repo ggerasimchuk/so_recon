@@ -29,7 +29,7 @@ def write_bytes_atomic(path: Path, data: bytes) -> None:
             fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
-        tmp.replace(path)
+        os.replace(tmp, path)  # noqa: PTH105 -- explicit so tests can monkeypatch os.replace
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
