@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from so_recon import SPEC_VERSION
 from so_recon.config.load import config_hash, resolved_config_dict
 from so_recon.config.schema import ProjectConfig, StrictModel
 from so_recon.paths import ProjectPaths
@@ -127,7 +126,10 @@ class RunContext:
             created_at=now.isoformat(),
             git_commit=commit,
             git_dirty=dirty,
-            spec_version=SPEC_VERSION,
+            # From the validated config, never from a module-level constant: a 4.0 run
+            # stamped 3.0 (or the reverse) would misdate its own lineage. With no config
+            # there is no version to record, so the record says so (SPEC 17.4.1).
+            spec_version=cfg.spec_version if cfg is not None else UNAVAILABLE,
             config_version=cfg.config_version if cfg is not None else UNAVAILABLE,
             resolved_config_hash=cfg_hash,
             environment_lock_hash=UNAVAILABLE,

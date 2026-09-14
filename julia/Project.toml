@@ -1,10 +1,12 @@
 [deps]
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 Jutul = "2b460a1a-8a2b-45b2-b125-b5c536396eb9"
 JutulDarcy = "82210473-ab04-4dce-b31b-11573c4f8e0a"
 SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
 
 [compat]
+HDF5 = "=0.17.3"
 JSON = "=1.8.0"
 Jutul = "=0.4.31"
 JutulDarcy = "=0.3.11"

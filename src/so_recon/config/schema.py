@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
+from so_recon import SpecVersion
+from so_recon.config.resources import ResourceProfile
 from so_recon.paths import validate_relative_path
 
 
@@ -79,10 +81,40 @@ class JuliaConfig(StrictModel):
 
 
 class ProjectConfig(StrictModel):
-    spec_version: Literal["3.0"]
+    # A 3.0 config keeps its original meaning: it is read, hashed and stamped as 3.0.
+    # Nothing here upgrades a legacy config, and nothing marks a 4.0 config as 3.0.
+    spec_version: SpecVersion
     config_version: str
     project_name: str = "SO-RECON"
     paths: PathsConfig = PathsConfig()
     sources: SourcesConfig
     smoke: SmokeFixtureConfig = SmokeFixtureConfig()
     julia: JuliaConfig = JuliaConfig()
+    # 4.0 only. Absence is legal — a manifest or config-only check spends nothing that
+    # needs bounding — but a physical E01 command refuses without one; see
+    # `so_recon.config.resources.require_resource_profile`.
+    resources: ResourceProfile | None = None
+
+    @field_validator("resources", mode="before")
+    @classmethod
+    def _resources_are_a_4_0_field(cls, v: object, info: ValidationInfo) -> object:
+        """A 3.0 config may not carry a budget it cannot describe.
+
+        `resolved_config_dict` drops `resources` from a 3.0 dump so that every historical
+        E00 `resolved_config_hash` still resolves. If a 3.0 config were allowed to SET the
+        field, that exclusion would silently drop a value that really was in force, and
+        the hash would stop describing the configuration actually in use. Refusing here
+        means the exclusion only ever removes a None.
+
+        A `before` validator so that this fires ahead of the profile's own field checks:
+        an operator who put a resource block in a 3.0 file is told exactly that, instead
+        of being handed a list of missing profile fields. `spec_version` is declared first
+        in this model, so it is already validated and available in `info.data` here.
+        """
+        if v is not None and info.data.get("spec_version") == "3.0":
+            raise ValueError(
+                "spec_version 3.0 has no 'resources' field: a resource profile is a 4.0 "
+                "addition, and a 3.0 config that set one would be hashed without it. "
+                "Declare spec_version 4.0, or remove the resources block"
+            )
+        return v

@@ -1,4 +1,13 @@
-"""so-recon command line: manifest | env-report | smoke.
+"""so-recon command line: manifest | env-report | smoke | the six E01 commands.
+
+This module parses and dispatches. Every command BODY lives elsewhere — `so_recon.smoke`
+for the legacy smoke case and `so_recon.simulator.commands` for E01's `forward`,
+`forward-resume`, `verify-physics`, `synthetic-p1`, `benchmark-forward` and `e01-report` —
+so that adding a command adds a parser here and nothing else.
+
+`--root` and `--config` are GLOBAL and come before the subcommand. That order is part of
+the interface every existing invocation was written against and the new commands do not
+move it.
 
 Every subcommand runs inside execute_run, so any failure — including a configuration
 error or a missing Julia executable — leaves a run.json with status FAIL (invariant I6).
@@ -18,6 +27,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from so_recon import SpecVersion
 from so_recon.config.load import load_project_config
 from so_recon.config.schema import JuliaConfig, ProjectConfig
 from so_recon.environment.report import (
@@ -39,6 +49,16 @@ from so_recon.registry.source_manifest import (
     write_source_manifest,
 )
 from so_recon.runner import RunRecordUnavailableError, execute_run
+from so_recon.simulator.commands import (
+    SuiteRunner,
+    run_benchmark_forward,
+    run_e01_report,
+    run_e01_suite,
+    run_forward,
+    run_forward_resume,
+    run_synthetic_p1,
+    suite_exit_code,
+)
 from so_recon.simulator.julia_bridge import JuliaLauncher, default_launcher
 from so_recon.smoke import run_smoke
 
@@ -56,6 +76,14 @@ ENV_REPORT_SCHEMA_VERSIONS = {
     "run_record": RUN_RECORD_SCHEMA_VERSION,
 }
 
+# One published file per spec version. A 4.0 run must not overwrite the 3.0 manifest E00
+# published: the two describe the same sources under different specifications, and the
+# historical one is frozen. The manifest schema itself is unchanged (still version 2).
+PUBLISHED_MANIFEST_NAMES: dict[SpecVersion, str] = {
+    "3.0": "source_manifest.json",
+    "4.0": "source_manifest-4.0.json",
+}
+
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="so-recon", description="SO-RECON project CLI")
@@ -71,6 +99,37 @@ def _parser() -> argparse.ArgumentParser:
         help="write configs/smoke_expected.json from this run",
     )
     smoke.add_argument("--julia", default=None, help="path to julia executable")
+
+    # ---- E01 (plan 12.3). The global options above keep their place; each command below
+    # takes only its own arguments, and every PATH is a real path the operator has or a real
+    # path a previous command printed — never the name of an artifact that does not exist yet.
+    forward = sub.add_parser("forward", help="run one published case to a verified result")
+    forward.add_argument("--case", required=True, help="path to a published case manifest")
+    forward.add_argument("--julia", default=None, help="path to julia executable")
+
+    resume = sub.add_parser(
+        "forward-resume", help="continue a case from a published native checkpoint"
+    )
+    resume.add_argument("--case", required=True, help="path to the case being continued")
+    resume.add_argument("--restart", required=True, help="path to the checkpoint manifest")
+    resume.add_argument("--julia", default=None, help="path to julia executable")
+
+    verify = sub.add_parser("verify-physics", help="run registered native physics checks")
+    verify.add_argument("--suite", choices=["p0", "p1", "bo"], required=True)
+    verify.add_argument("--resume-ledger", type=Path)
+    verify.add_argument("--julia", default=None, help="path to julia executable")
+
+    synthetic = sub.add_parser("synthetic-p1", help="render, run and publish P1 parent worlds")
+    synthetic.add_argument("--seeds", type=int, nargs="+", required=True)
+    synthetic.add_argument("--julia", default=None, help="path to julia executable")
+
+    bench = sub.add_parser("benchmark-forward", help="one cold run and N warm repeats")
+    bench.add_argument("--case", required=True, help="path to a published case manifest")
+    bench.add_argument("--warm-runs", type=int, default=5)
+    bench.add_argument("--julia", default=None, help="path to julia executable")
+
+    report = sub.add_parser("e01-report", help="build reports/stages/E01.md from real runs")
+    report.add_argument("--runs", nargs="+", required=True, help="run directories to read")
     return p
 
 
@@ -79,12 +138,17 @@ def _manifest_body(
 ) -> Callable[[RunContext, logging.Logger], tuple[RunStatus, list[str]]]:
     def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
         now = datetime.now(UTC)
-        manifest = build_source_manifest(cfg.sources, paths, config_version=cfg.config_version)
+        manifest = build_source_manifest(
+            cfg.sources,
+            paths,
+            config_version=cfg.config_version,
+            spec_version=cfg.spec_version,
+        )
         ref, published = write_source_manifest(
             manifest,
             paths,
             run_dir=ctx.run_dir,
-            published_path=paths.manifests / "source_manifest.json",
+            published_path=paths.manifests / PUBLISHED_MANIFEST_NAMES[cfg.spec_version],
             producer_run_id=ctx.run_id,
             now=now,
         )
@@ -168,8 +232,69 @@ def _record_startup_failure(root: Path, command: str, argv: Sequence[str], exc: 
     return _report(ctx, paths)
 
 
+def _e01(
+    args: argparse.Namespace,
+    cfg: ProjectConfig,
+    paths: ProjectPaths,
+    full_argv: list[str],
+    suite_runner: SuiteRunner | None,
+) -> int | None:
+    """Dispatch an E01 command, or return None when this is not one.
+
+    Each body returns its own exit code, because for these commands "the run was recorded"
+    and "what was asked for happened" are different facts: a forward that published an
+    INCOMPLETE_BUDGET result recorded itself perfectly and still did not do what was asked
+    (plan 12.1).
+    """
+    if args.command == "verify-physics":
+        ctx = run_e01_suite(
+            cfg,
+            paths,
+            args.suite,
+            resume_ledger=args.resume_ledger,
+            argv=full_argv,
+            julia=args.julia,
+            runner=suite_runner,
+        )
+        _report(ctx, paths)
+        return suite_exit_code(ctx.run_dir)
+    outcome = None
+    if args.command == "forward":
+        outcome = run_forward(cfg, paths, case_path=args.case, argv=full_argv, julia=args.julia)
+    elif args.command == "forward-resume":
+        outcome = run_forward_resume(
+            cfg,
+            paths,
+            case_path=args.case,
+            restart_path=args.restart,
+            argv=full_argv,
+            julia=args.julia,
+        )
+    elif args.command == "synthetic-p1":
+        outcome = run_synthetic_p1(cfg, paths, seeds=args.seeds, argv=full_argv, julia=args.julia)
+    elif args.command == "benchmark-forward":
+        outcome = run_benchmark_forward(
+            cfg,
+            paths,
+            case_path=args.case,
+            warm_runs=args.warm_runs,
+            argv=full_argv,
+            julia=args.julia,
+        )
+    elif args.command == "e01-report":
+        outcome = run_e01_report(cfg, paths, run_dirs=args.runs, argv=full_argv)
+    if outcome is None:
+        return None
+    _report(outcome.ctx, paths)
+    # A FAIL record is never a zero, whatever the body computed for its own reasons.
+    return outcome.exit_code or (0 if outcome.ctx.record.status == "PASS" else 1)
+
+
 def main(
-    argv: Sequence[str] | None = None, *, launcher_factory: LauncherFactory | None = None
+    argv: Sequence[str] | None = None,
+    *,
+    launcher_factory: LauncherFactory | None = None,
+    suite_runner: SuiteRunner | None = None,
 ) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(raw_argv)
@@ -194,6 +319,10 @@ def main(
         # Deliberately broad: any configuration failure must still leave a FAIL record.
         except Exception as exc:
             return _record_startup_failure(root, args.command, full_argv, exc)
+
+        e01 = _e01(args, cfg, paths, full_argv, suite_runner)
+        if e01 is not None:
+            return e01
 
         if args.command == "smoke":
             factory = launcher_factory or default_launcher

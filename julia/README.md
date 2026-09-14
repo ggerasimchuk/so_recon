@@ -90,3 +90,25 @@
    пакета не изменилась** — точные `=`-пины в `[compat]` этого не позволяют. Следствие:
    `julia_manifest_sha256` и `environment_lock_hash` в `reports/environment_report.md`
    пересчитаны; результаты smoke (`cumulative_oil_m3`, `mean_so_final`) не изменились.
+
+
+## E01: verification diagnostics and the persistent worker
+
+Four entry points under `julia/verification/`, each a standalone program the project's own
+launcher runs with a `--out` path, and each bounded by the profile's job timeout:
+
+    julia --project=julia julia/verification/fixtures.jl   --test-model      # constructor
+    julia --project=julia julia/verification/fixtures.jl   --test-controls   # calendar (7 forwards)
+    julia --project=julia julia/verification/analytic.jl   --test-analytic   # 9.5-9.7 (7 forwards)
+    julia --project=julia julia/verification/operations.jl --test-operations # 10.4-10.6 (9 forwards)
+    julia --project=julia julia/verification/refinement.jl --test-refinement # 10.7-10.8 (4 forwards)
+
+`so-recon verify-physics --suite {p0|p1}` runs them, publishes each fixture through the
+production publisher and scores the result against `configs/e01_tolerances.yml`. These
+forwards are accounted by the LAUNCHER and are deliberately not charged to a `BudgetLedger`:
+manufacturing a `JobDescriptor` and a case digest for them would add fiction rather than
+safety. Their time is reported beside the ledger's own totals in `reports/stages/E01.md`.
+
+`julia/worker/main.jl` is the persistent worker. One process per session, at most one alive
+at a time, four Julia threads and one BLAS thread (COMPUTE §5), every job isolated by its
+descriptor. The forwards that go through it ARE charged to a ledger, attempt by attempt.

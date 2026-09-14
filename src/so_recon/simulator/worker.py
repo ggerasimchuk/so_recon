@@ -1,0 +1,1365 @@
+"""One long-lived Julia process, and the isolation of the jobs it runs.
+
+This module is the transport. It owns a process and a line protocol, and nothing else:
+the budget policy lives in `simulator.budget` and is only *acted on* here, the physics
+lives behind `julia/worker/main.jl`, and the records travel as `JobDescriptor` in and
+`ForwardResult` out. Paying Julia's cold start once and then feeding it immutable job
+descriptors is the whole point — a process per forward would spend more time compiling
+than simulating.
+
+Four rules shape the implementation, and each of them is a way a transport like this
+usually goes wrong:
+
+* **No unbounded wait.** Every wait has a deadline on a monotonic clock and is taken in
+  slices no longer than `ResourceProfile.poll_interval_s`, so a stop is noticed within a
+  poll rather than at the end of a blocking read. The cold start is bounded by
+  `ResourceProfile.startup_timeout_s`; a running job is bounded by the watchdog, which
+  reads the monotonic clock carried in each `ResourceSnapshot`. A system clock that jumps
+  therefore cannot extend either budget.
+* **No unbounded read.** A reader thread drains stdout continuously into a bounded queue,
+  so the child can never block writing to a full pipe while this side is busy, and the
+  control loop never calls `readline()` itself. Each line is read with a character limit:
+  a worker that emits no newline at all is a protocol violation, not a reason to grow a
+  buffer until the machine gives up. Native Julia logging never reaches this pipe — it is
+  redirected into per-job stdout/stderr files, and the process-level stderr goes to a log
+  file rather than to a second pipe nobody is draining.
+* **No orphaned process.** The child is started with `start_new_session=True`, which makes
+  it the leader of its own process group, so a termination reaches every descendant it
+  spawned rather than only the one pid this side knows about. Shutdown is an escalation:
+  a `shutdown` request, then SIGTERM to the group, then SIGKILL, each with a five second
+  grace, and a final sweep of the group before the leader is reaped — the leader is still
+  a zombie at that moment, so its pid, and therefore the group id, cannot have been reused
+  by anyone else. Exceptions and Ctrl-C reach that path through `finally`.
+* **No unexplained result.** A job that produced no reply is classified from evidence.
+  A guard breach or a timeout observed by the watchdog is recorded as `RESOURCE_FAILURE`
+  or `TIMEOUT`; a process that merely died, however violently, is `PROTOCOL_FAILURE` with
+  its exit code or signal. A force-kill on its own is not a diagnosis of memory exhaustion
+  (SPEC 18.4: a resource failure must not become a physical zero likelihood by default).
+
+Job identity is checked on both sides. Python stamps what only it knows — the environment
+lock hash and the solver-config digest the descriptor declares — into
+`ForwardResult.solver_metadata`, and `main.jl` re-hashes the bytes of the case, of every
+array the case references and of the solver configuration before it runs anything at all,
+then hands the verified job to the JutulDarcy adapter. What a reply is allowed to claim is
+decided by `ForwardResult` itself: a `COMPLETE` that does not carry the whole requested time
+axis, its states and every output path cannot become a record, and is reported as a protocol
+failure. Nothing here invents the outputs a worker did not send.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import os
+import queue
+import re
+import shutil
+import signal
+import threading
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from subprocess import PIPE, Popen, TimeoutExpired
+from types import TracebackType
+from typing import IO, Any, Literal, get_args
+
+from pydantic import Field, ValidationError
+
+from so_recon.config.resources import ResourceProfile, require_resource_profile
+from so_recon.config.schema import StrictModel
+from so_recon.environment.resources import ResourceSnapshot, probe_resources
+from so_recon.paths import ProjectPaths
+from so_recon.registry.atomic import write_json_atomic
+from so_recon.registry.hashing import sha256_file
+from so_recon.registry.run import environment_lock_hash
+from so_recon.simulator.budget import BudgetLedger, ResourceWatchdog, WatchdogDecision
+from so_recon.simulator.contracts import (
+    CostRecord,
+    ForwardResult,
+    ForwardStatus,
+    JobDescriptor,
+)
+
+log = logging.getLogger(__name__)
+
+#: Bumped whenever the line protocol changes shape. Both sides state it; a mismatch is a
+#: refusal to start rather than a run that half understands its own worker.
+PROTOCOL_VERSION = "worker-2"
+
+#: The statuses a reply may carry. This IS the contract's set (plan 3.3) rather than a
+#: copy of it, so a status no `ForwardResult` could hold cannot cross the transport.
+WORKER_STATUSES: frozenset[str] = frozenset(get_args(ForwardStatus))
+
+#: The reader refuses a line longer than this without a newline. A megabyte is far more
+#: than any legitimate frame and far less than enough to exhaust a machine.
+MAX_PROTOCOL_LINE_CHARS = 1 << 20
+
+#: How many frames are retained while the control loop is busy. On overflow the oldest is
+#: dropped and counted: the reader must never stop draining the pipe to apply back
+#: pressure, because the thing it would be applying back pressure to is the process it is
+#: also responsible for terminating.
+MAX_PENDING_FRAMES = 256
+
+#: Escalation grace periods. `shutdown` first, then the signals.
+SHUTDOWN_GRACE_S = 5.0
+TERMINATE_GRACE_S = 5.0
+
+#: The control-plane request an operator makes to stop after the current unit of work.
+#: It is a file in the session directory and it changes no job input; the worker passes its
+#: path to Julia, which consults it at native chunk boundaries and never writes to it.
+STOP_FILE_NAME = "stop-after-chunk"
+
+#: Where a job's MUTABLE native working directory lives: in the session, never inside a
+#: result. A published checkpoint is a copy of it, staged and renamed into the result
+#: directory; this one is scratch and is removed once the job's record has been read.
+NATIVE_DIRNAME = "native"
+
+#: A job id becomes a file name (the descriptor, the per-job logs), so it is restricted to
+#: characters that cannot escape a directory or surprise a shell.
+_SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+class WorkerProtocolError(RuntimeError):
+    """The worker said something the protocol does not allow, or said nothing at all."""
+
+
+class WorkerStartupError(WorkerProtocolError):
+    """The worker never reached READY within its startup budget."""
+
+
+# --------------------------------------------------------------------- reply kernels
+
+
+def validate_reply(reply: dict[str, object], job_id: str) -> None:
+    """Refuse a reply that is not this job's, or that carries a status no record holds.
+
+    A stale reply is the dangerous case and the reason this is checked at all: a worker
+    that answered the previous job late would otherwise have its answer filed against the
+    current one, and both the cost and the physics would be attributed to the wrong case.
+    """
+    if reply.get("job_id") != job_id:
+        raise ValueError(
+            f"job_id mismatch: the reply carries {reply.get('job_id')!r} but this job is "
+            f"{job_id!r}; a reply is only ever accepted for the job it names"
+        )
+    if reply.get("status") not in WORKER_STATUSES:
+        raise ValueError(
+            f"unknown worker status {reply.get('status')!r}; the contract allows "
+            f"{sorted(WORKER_STATUSES)}"
+        )
+
+
+def _first_validation_error(exc: ValidationError) -> str:
+    """The first rule a rejected record broke, without the whole pydantic report.
+
+    A reason string is persisted into `run.json` and read by a person deciding what went
+    wrong. The full report repeats the model, the input and a documentation URL for every
+    field; the first message names the rule that was actually broken.
+    """
+    errors = exc.errors()
+    if not errors:  # pragma: no cover - pydantic always reports at least one
+        return str(exc)
+    first = errors[0]
+    location = ".".join(str(part) for part in first.get("loc", ())) or "record"
+    return f"{location}: {first.get('msg', 'invalid')}"
+
+
+def _signal_name(number: int) -> str:
+    try:
+        return signal.Signals(number).name
+    except ValueError:
+        return "unknown signal"
+
+
+def classify_termination(
+    *, returncode: int | None, decision: WatchdogDecision | None
+) -> tuple[ForwardStatus, str]:
+    """Say why a job produced no reply, using only evidence that was actually collected.
+
+    A guard breach or an expired job timeout is evidence: the watchdog looked at a measured
+    snapshot and said so, and the decision it returned carries both the status and the
+    reasons. Anything else is a protocol failure that names the exit code or the signal.
+
+    The distinction is deliberate and normative. `exit -9` on its own says the kernel or
+    someone else killed the process; it does not say the process ran out of memory, and
+    recording `RESOURCE_FAILURE` from a signal number alone would invent an OOM diagnosis
+    that no measurement supports (SPEC 18.4).
+    """
+    if decision is not None and decision.status is not None:
+        detail = "; ".join(decision.reasons) or f"watchdog action {decision.action}"
+        if decision.limitations:
+            detail = f"{detail} (not observed: {'; '.join(decision.limitations)})"
+        return decision.status, detail
+    if returncode is None:
+        return (
+            "PROTOCOL_FAILURE",
+            "the worker process is still running but produced no reply for this job",
+        )
+    if returncode < 0:
+        number = -returncode
+        return (
+            "PROTOCOL_FAILURE",
+            f"the worker process was killed by signal {number} ({_signal_name(number)}) "
+            "with no guard or OS evidence of a resource breach; a force-kill on its own "
+            "does not establish that the process ran out of memory",
+        )
+    return (
+        "PROTOCOL_FAILURE",
+        f"the worker process exited with code {returncode} before replying to this job",
+    )
+
+
+# --------------------------------------------------------------------- solver counters
+
+
+@dataclass(frozen=True)
+class _SolverCounters:
+    """What the solver spent ON THIS JOB, and how that was arrived at."""
+
+    accepted_steps: int
+    cut_steps: int
+    nonlinear_iterations: int
+    note: str
+
+
+_NO_COUNTERS = _SolverCounters(
+    accepted_steps=0,
+    cut_steps=0,
+    nonlinear_iterations=0,
+    note="solver counters unavailable: this job reported none, recorded as 0",
+)
+
+_COUNTER_NAMES = ("accepted_steps", "cut_steps", "nonlinear_iterations")
+
+
+def _counter_triple(reported: object) -> dict[str, int] | None:
+    """The three counts, or `None` if any of them is absent or not a count."""
+    if not isinstance(reported, Mapping):
+        return None
+    values: dict[str, int] = {}
+    for name in _COUNTER_NAMES:
+        value = reported.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return None
+        values[name] = value
+    return values
+
+
+def _solver_counters(extraction: object) -> _SolverCounters:
+    """What this job spent, read from the RE-HASHED record rather than off the wire.
+
+    Two things are being avoided here.
+
+    The counters are physics, and physics crosses this transport as bytes somebody hashed.
+    A number taken off the reply frame is a number nobody vouched for, so the source is
+    `record["extraction"]["solver"]` — inside the file whose digest the reply had to match.
+
+    And a RESUMED job's totals are not its own. `restart.jl` re-extracts the chunks the
+    parent simulated from the parent's `.jld2` files so that the published integrals cover
+    the whole horizon, so the merged totals include work this job never did — and the
+    parent's ledger entry already holds it. `resumed_solver` is what the adapter says it
+    re-extracted, and subtracting it is what makes a session's totals the work the session
+    performed. The difference is recorded in `measurement_method` either way, because a
+    count that silently changed meaning is worse than one that is large.
+    """
+    if not isinstance(extraction, Mapping):
+        return _NO_COUNTERS
+    total = _counter_triple(extraction.get("solver"))
+    if total is None:
+        return _NO_COUNTERS
+    resumed = _counter_triple(extraction.get("resumed_solver"))
+    if resumed is None:
+        # The adapter states this for every job, zeros included. Its absence means a worker
+        # this build cannot tell a fresh run from a continuation with, and guessing "zero"
+        # is exactly the double count this exists to prevent.
+        return _SolverCounters(
+            accepted_steps=0,
+            cut_steps=0,
+            nonlinear_iterations=0,
+            note=(
+                "solver counters unusable: the extraction reports totals but not the "
+                "resumed_solver counters that say how much of them this job spent, "
+                "recorded as 0"
+            ),
+        )
+    spent = {name: total[name] - resumed[name] for name in _COUNTER_NAMES}
+    if any(value < 0 for value in spent.values()):
+        return _SolverCounters(
+            accepted_steps=0,
+            cut_steps=0,
+            nonlinear_iterations=0,
+            note=(
+                f"solver counters unusable: the extraction reports totals {total} of which "
+                f"{resumed} were resumed, which is not a cost this job could have paid, "
+                "recorded as 0"
+            ),
+        )
+    if any(resumed[name] for name in _COUNTER_NAMES):
+        note = (
+            "solver counters from the native simulation report, less the "
+            f"{resumed['accepted_steps']} accepted step(s), {resumed['cut_steps']} cut "
+            f"step(s) and {resumed['nonlinear_iterations']} nonlinear iteration(s) this job "
+            "re-extracted from the checkpoint it resumed rather than simulating"
+        )
+    else:
+        note = "solver counters from the native simulation report"
+    return _SolverCounters(**spent, note=note)
+
+
+# ------------------------------------------------------------------ control plane file
+
+
+def request_stop_after_chunk(
+    session_dir: Path, *, reason: str | None = None, after_completed_time_s: float | None = None
+) -> Path:
+    """Ask the session to stop after a completed chunk. Touches no job input.
+
+    Written atomically, because a half-written request is a request nobody can read. It
+    lives beside the session's own bookkeeping and never inside a case, a descriptor or a
+    result directory: an immutable input stays immutable, whatever an operator asks for.
+
+    `after_completed_time_s` is the operator saying WHICH completed chunk to stop after —
+    "finish March and stop" rather than "stop as soon as you can". Without it the request is
+    the unconditional one: the chunk in hand finishes and nothing else starts. Either way the
+    stop is only ever noticed at a chunk boundary, so what is published is whole months.
+    """
+    path = session_dir / STOP_FILE_NAME
+    write_json_atomic(
+        path,
+        {
+            "request": STOP_FILE_NAME,
+            "reason": reason,
+            "after_completed_time_s": after_completed_time_s,
+        },
+    )
+    return path
+
+
+def stop_after_chunk_requested(session_dir: Path) -> bool:
+    return (session_dir / STOP_FILE_NAME).is_file()
+
+
+#: A completed time and a requested stop time may differ by this much and still be the same
+#: instant. Both are built from day counts times 86400; the same number is `1e-6` in
+#: `julia/worker/main.jl:stop_is_due`, which asks this same question at every chunk boundary.
+STOP_TIME_TOLERANCE_S = 1e-6
+
+
+@dataclass(frozen=True)
+class StopRequest:
+    """An operator's "stop after a completed chunk", as read from the session directory."""
+
+    reason: str | None
+    after_completed_time_s: float | None
+
+    def is_due(self, completed_time_s: float) -> bool:
+        """Whether this request applies to a run that has completed up to `completed_time_s`.
+
+        This is the Python half of `julia/worker/main.jl:stop_is_due`, and it answers the
+        same question the same way — which is the point. Julia asks it at every chunk
+        boundary; the driver asks it once at the boundary BEFORE the first chunk, where
+        "completed" is the start of the horizon. An unconditional request is due there, so
+        no new job starts; a request naming a month the run can still reach is not, so the
+        job that reaches it runs and stops where it was asked to.
+        """
+        if self.after_completed_time_s is None:
+            return True
+        return completed_time_s >= self.after_completed_time_s - STOP_TIME_TOLERANCE_S
+
+
+def read_stop_request(session_dir: Path) -> StopRequest | None:
+    """The stop request an operator left in this session, or `None` if there is none.
+
+    A file that cannot be read is the UNCONDITIONAL request, exactly as Julia treats it: a
+    stop nobody can parse is still a stop somebody asked for, and the safe reading of an
+    unreadable request is the one that stops sooner.
+    """
+    path = session_dir / STOP_FILE_NAME
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return StopRequest(reason=None, after_completed_time_s=None)
+    if not isinstance(payload, Mapping):
+        return StopRequest(reason=None, after_completed_time_s=None)
+    raw_reason = payload.get("reason")
+    raw_after = payload.get("after_completed_time_s")
+    after = (
+        float(raw_after)
+        if isinstance(raw_after, int | float) and not isinstance(raw_after, bool)
+        else None
+    )
+    return StopRequest(
+        reason=raw_reason if isinstance(raw_reason, str) and raw_reason else None,
+        after_completed_time_s=after,
+    )
+
+
+# --------------------------------------------------------------- the physics hand-off
+
+
+@dataclass(frozen=True)
+class ForwardHandoff:
+    """What the physics side hands the transport for one job, beyond the descriptor.
+
+    The transport owns a process and a line protocol and knows nothing about cases, axes or
+    balances. Two things nevertheless have to cross it, and both are values rather than
+    knowledge:
+
+    * `schedule_prefix_hashes` — one canonical digest of the schedule prefix per report
+      edge, because a checkpoint has to record WHICH prefix it stops after and only the
+      Python side canonicalises a case. Julia picks the one for the time it reached.
+    * `publish` — how a verified worker record becomes a `ForwardResult`. A COMPLETE reply
+      carries a whole extraction that must be integrated, written and hashed before anything
+      may claim it, and that is `results.publish_forward_result`'s job, not this module's.
+
+    Without a hand-off a worker can still run diagnostics and still classify refusals, but a
+    COMPLETE reply is a protocol failure: a transport must not manufacture a successful
+    physics result out of a status word.
+    """
+
+    #: Everything that determines F except the schedule. A checkpoint records it and a
+    #: continuation must match it: the policy after a checkpoint may change, the reservoir
+    #: it is a policy for may not.
+    static_hash: str = ""
+    schedule_prefix_hashes: tuple[tuple[float, str], ...] = ()
+    publish: Callable[[Mapping[str, Any], CostRecord, Mapping[str, str]], ForwardResult] | None = (
+        None
+    )
+
+
+# -------------------------------------------------------------------- protocol reader
+
+
+@dataclass(frozen=True)
+class ProtocolViolation:
+    """A line that could not be a frame. Carried to the control loop as a value."""
+
+    reason: str
+
+
+Frame = dict[str, Any] | ProtocolViolation
+
+
+class _ProtocolReader:
+    """Drains the worker's stdout in a thread, so the pipe is never left to fill up."""
+
+    def __init__(self, stream: IO[str], *, max_line_chars: int, max_pending: int) -> None:
+        self._stream = stream
+        self._max_line_chars = max_line_chars
+        self._frames: queue.Queue[Frame] = queue.Queue(maxsize=max_pending)
+        self.finished = threading.Event()
+        self.dropped = 0
+        self._thread = threading.Thread(target=self._run, name="julia-protocol-reader", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def get(self, timeout_s: float) -> Frame | None:
+        try:
+            return self._frames.get(timeout=max(timeout_s, 0.0))
+        except queue.Empty:
+            return None
+
+    def join(self, timeout_s: float) -> None:
+        self._thread.join(timeout_s)
+
+    def _offer(self, frame: Frame) -> None:
+        """Never blocks. A full queue loses its oldest frame, and says so."""
+        while True:
+            try:
+                self._frames.put_nowait(frame)
+                return
+            except queue.Full:
+                try:
+                    self._frames.get_nowait()
+                except queue.Empty:  # another consumer emptied it between the two calls
+                    continue
+                self.dropped += 1
+                log.warning(
+                    "worker protocol queue is full; dropped the oldest of %d frames. "
+                    "stdout carries protocol frames only, so this means the worker is "
+                    "writing frames nobody asked for",
+                    self.dropped,
+                )
+
+    def _discard_to_newline(self) -> None:
+        while True:
+            chunk = self._stream.readline(self._max_line_chars + 1)
+            if not chunk or chunk.endswith("\n"):
+                return
+
+    def _run(self) -> None:
+        try:
+            while True:
+                # Bounded: `readline(size)` stops at the limit, so an endless line is
+                # refused instead of being accumulated until the machine gives up.
+                line = self._stream.readline(self._max_line_chars + 1)
+                if not line:
+                    return
+                if len(line) > self._max_line_chars and not line.endswith("\n"):
+                    self._offer(
+                        ProtocolViolation(
+                            f"the worker emitted more than {self._max_line_chars} "
+                            "characters with no newline; the protocol reader is bounded "
+                            "and refuses to keep reading one frame"
+                        )
+                    )
+                    self._discard_to_newline()
+                    continue
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    payload = json.loads(text)
+                except ValueError as exc:
+                    self._offer(
+                        ProtocolViolation(
+                            f"the worker wrote a line to stdout that is not JSON ({exc}); "
+                            f"stdout carries protocol frames only, got {text[:200]!r}"
+                        )
+                    )
+                    continue
+                if not isinstance(payload, dict):
+                    self._offer(
+                        ProtocolViolation(
+                            f"a protocol frame must be a JSON object, got {type(payload).__name__}"
+                        )
+                    )
+                    continue
+                self._offer(payload)
+        except (OSError, ValueError):  # the stream was closed under us during shutdown
+            return
+        finally:
+            self.finished.set()
+
+
+# --------------------------------------------------------------------- typed replies
+
+
+class WorkerHandshake(StrictModel):
+    """The READY frame: who the worker is and what it was started with."""
+
+    protocol: str = Field(min_length=1)
+    pid: int = Field(gt=0)
+    julia_threads: int
+    blas_threads: int
+    versions: dict[str, str]
+
+
+class PingReply(StrictModel):
+    """A diagnostic echo. Never a physics result, and never becomes a `ForwardResult`."""
+
+    job_id: str = Field(min_length=1)
+    status: ForwardStatus
+    protocol: str = Field(min_length=1)
+    pid: int = Field(gt=0)
+    #: name -> SHA-256 of the bytes the worker read at the path under that name.
+    inputs: dict[str, str]
+
+
+# ------------------------------------------------------------------------- the worker
+
+
+class PersistentJuliaWorker:
+    """One Julia process, kept alive across jobs, each job isolated by its descriptor.
+
+    Construction launches the process and waits for READY inside
+    `profile.startup_timeout_s`. It is a context manager because the only safe way to own
+    a process group is to have a `finally` that ends it.
+
+    `probe` and `clock` are injected. They are the two measurement boundaries of the
+    class: the probe is where every resource number and the watchdog's own notion of time
+    come from, and the clock is what the startup and shutdown deadlines are measured on.
+    Injecting them is what lets a hung start, an exhausted job timeout and a memory breach
+    be described in a test rather than waited for, while the policy being exercised stays
+    the real `budget.ResourceWatchdog`.
+    """
+
+    def __init__(
+        self,
+        executable: Path,
+        project: Path,
+        session_dir: Path,
+        profile: ResourceProfile,
+        *,
+        paths: ProjectPaths,
+        probe: Callable[[], ResourceSnapshot] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        command: str = "forward",
+    ) -> None:
+        # This process exists to run physics, so it needs an approved, measured budget
+        # before it spends anything at all (COMPUTE §§2, 5, 7, 10; SPEC 18.4).
+        self._profile = require_resource_profile(profile, command=command)
+        self._paths = paths
+        self._session_dir = session_dir
+        self._clock = clock
+        self._probe: Callable[[], ResourceSnapshot] = (
+            probe if probe is not None else (lambda: probe_resources(None, session_dir))
+        )
+        self._environment_lock_hash = environment_lock_hash(paths)
+        self._closed = False
+        self._broken = False
+
+        script = project / "worker" / "main.jl"
+        if not script.is_file():
+            raise FileNotFoundError(
+                f"the persistent worker entry point {script} does not exist; "
+                "julia/worker/main.jl is what a session runs"
+            )
+        session_dir.mkdir(parents=True, exist_ok=True)
+        self._stderr_log_path = session_dir / "worker.stderr.log"
+        self._stderr_log = self._stderr_log_path.open("ab")
+
+        env = os.environ.copy()
+        # COMPUTE §5: 4 Julia threads, 1 BLAS thread, 1 worker. They come from the
+        # profile, never from whatever the ambient shell happens to export.
+        env["JULIA_NUM_THREADS"] = str(self._profile.julia_threads)
+        env["OPENBLAS_NUM_THREADS"] = str(self._profile.blas_threads)
+        env["OMP_NUM_THREADS"] = str(self._profile.blas_threads)
+        try:
+            self._proc: Popen[str] = Popen(
+                [
+                    str(executable),
+                    f"--project={project}",
+                    "--startup-file=no",
+                    "--color=no",
+                    str(script),
+                ],
+                stdin=PIPE,
+                stdout=PIPE,
+                stderr=self._stderr_log,
+                text=True,
+                env=env,
+                cwd=paths.root,
+                # Its own session, so it leads its own process group and a termination
+                # reaches every descendant rather than only this pid.
+                start_new_session=True,
+            )
+        except BaseException:
+            self._stderr_log.close()
+            raise
+        if self._proc.stdout is None:  # pragma: no cover - Popen was given a PIPE
+            self._proc.kill()
+            self._proc.wait()
+            self._stderr_log.close()
+            raise WorkerProtocolError("the worker was started without a stdout pipe")
+        self._reader = _ProtocolReader(
+            self._proc.stdout,
+            max_line_chars=MAX_PROTOCOL_LINE_CHARS,
+            max_pending=MAX_PENDING_FRAMES,
+        )
+        try:
+            self._reader.start()
+            self._handshake = self._await_ready()
+        except BaseException:
+            # A worker that never became usable still owns a process group.
+            self._broken = True
+            self.close()
+            raise
+
+    # ------------------------------------------------------------------ accessors
+
+    @property
+    def pid(self) -> int:
+        return self._proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self._proc.returncode
+
+    @property
+    def handshake(self) -> WorkerHandshake:
+        return self._handshake
+
+    @property
+    def stop_requested(self) -> bool:
+        """Whether an operator has asked this session to stop after the work in hand."""
+        return stop_after_chunk_requested(self._session_dir)
+
+    @property
+    def paths(self) -> ProjectPaths:
+        return self._paths
+
+    @property
+    def session_dir(self) -> Path:
+        return self._session_dir
+
+    @property
+    def profile(self) -> ResourceProfile:
+        return self._profile
+
+    @property
+    def environment_lock_hash(self) -> str:
+        return self._environment_lock_hash
+
+    def __enter__(self) -> PersistentJuliaWorker:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
+        self.close()
+        return False
+
+    # ------------------------------------------------------------------- protocol
+
+    def _await_ready(self) -> WorkerHandshake:
+        """Wait for READY, bounded by the profile's startup budget on a monotonic clock."""
+        deadline = self._clock() + self._profile.startup_timeout_s
+        while True:
+            remaining = deadline - self._clock()
+            if remaining <= 0.0:
+                raise WorkerStartupError(
+                    f"the worker did not reach READY within "
+                    f"{self._profile.startup_timeout_s}s; see {self._stderr_log_path}"
+                )
+            frame = self._reader.get(min(self._profile.poll_interval_s, remaining))
+            if frame is None:
+                if self._exhausted():
+                    raise WorkerStartupError(
+                        f"the worker exited with {self._proc.returncode} before reaching "
+                        f"READY; see {self._stderr_log_path}"
+                    )
+                continue
+            if isinstance(frame, ProtocolViolation):
+                raise WorkerStartupError(f"the worker's first frame was unusable: {frame.reason}")
+            if frame.get("event") != "ready":
+                raise WorkerStartupError(f"expected a READY frame from the worker, got {frame!r}")
+            handshake = WorkerHandshake.model_validate(
+                {k: v for k, v in frame.items() if k != "event"}
+            )
+            if handshake.protocol != PROTOCOL_VERSION:
+                raise WorkerStartupError(
+                    f"the worker speaks protocol {handshake.protocol!r}, this session "
+                    f"speaks {PROTOCOL_VERSION!r}"
+                )
+            return handshake
+
+    def _exhausted(self) -> bool:
+        """True when the process has exited and every frame it wrote has been consumed."""
+        return self._proc.poll() is not None and self._reader.finished.is_set()
+
+    def _send(self, request: Mapping[str, object]) -> None:
+        if self._proc.stdin is None:  # pragma: no cover - Popen was given a PIPE
+            raise WorkerProtocolError("the worker has no stdin to write to")
+        try:
+            self._proc.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            self._proc.stdin.flush()
+        except (BrokenPipeError, ValueError, OSError) as exc:
+            raise WorkerProtocolError(
+                f"could not send {request.get('op')!r} to the worker: {exc}"
+            ) from exc
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("this worker is closed; start a new one to run more work")
+        if self._broken:
+            raise RuntimeError(
+                "this worker was terminated mid-job and cannot be resynchronised; start a new one"
+            )
+
+    # ----------------------------------------------------------------------- ping
+
+    def ping(self, job_id: str, inputs: Mapping[str, Path]) -> PingReply:
+        """Diagnostic round trip: the worker re-hashes the named files and echoes them.
+
+        Not a job. It runs no physics, reserves nothing and never produces a
+        `ForwardResult`; it exists so that the protocol itself can be exercised against a
+        real Julia process without a solver.
+        """
+        self._require_open()
+        request = {
+            "op": "ping",
+            "job_id": job_id,
+            "protocol": PROTOCOL_VERSION,
+            "root": str(self._paths.root),
+            "inputs": {name: self._paths.relative(path) for name, path in inputs.items()},
+        }
+        self._send(request)
+        deadline = self._clock() + self._profile.job_timeout_s
+        while True:
+            remaining = deadline - self._clock()
+            if remaining <= 0.0:
+                raise WorkerProtocolError(
+                    f"the worker did not answer ping {job_id!r} within "
+                    f"{self._profile.job_timeout_s}s"
+                )
+            frame = self._reader.get(min(self._profile.poll_interval_s, remaining))
+            if frame is None:
+                if self._exhausted():
+                    raise WorkerProtocolError(
+                        f"the worker exited with {self._proc.returncode} without answering "
+                        f"ping {job_id!r}"
+                    )
+                continue
+            if isinstance(frame, ProtocolViolation):
+                raise WorkerProtocolError(frame.reason)
+            validate_reply(frame, job_id)
+            return PingReply.model_validate(frame)
+
+    # --------------------------------------------------------------------- submit
+
+    def submit(
+        self,
+        job: JobDescriptor,
+        ledger: BudgetLedger,
+        *,
+        handoff: ForwardHandoff | None = None,
+        estimated_s: float | None = None,
+        estimated_bytes: int | None = None,
+    ) -> ForwardResult:
+        """Run one job to a classified result, and account for it either way.
+
+        The reservation is taken before the job starts and resolved after it ends,
+        whatever it ended as: SPEC 3.3 counts every attempt against the forward budget,
+        and a failed attempt that vanished from the ledger would buy free work.
+
+        The default estimates are policy, not physics. A job may take at most
+        `job_timeout_s`, and may fairly claim its share of the session's disk budget —
+        `disk_budget_bytes / max_new_forward`. Task 8 knows the case and passes a measured
+        prediction instead.
+        """
+        self._require_open()
+        if not _SAFE_JOB_ID.match(job.job_id):
+            raise ValueError(
+                f"job_id {job.job_id!r} is not usable as a file name; a job id may contain "
+                "only letters, digits, '.', '_' and '-' because it names the descriptor "
+                "and the per-job log files"
+            )
+        ledger.reserve(
+            job.job_id,
+            float(self._profile.job_timeout_s) if estimated_s is None else estimated_s,
+            self._fair_share_bytes() if estimated_bytes is None else estimated_bytes,
+            case_sha256=job.case_sha256,
+            model_hash=job.model_hash,
+            attempt=job.attempt,
+        )
+        # What the session owes the disk, read once now: the watchdog needs it to tell a
+        # disk that is out of allowance from one that is out of room, and with a single
+        # worker nothing else can change it while this job runs.
+        committed_bytes = ledger.committed_output_bytes()
+        try:
+            result = self._run_job(job, committed_bytes, handoff or ForwardHandoff())
+        except BaseException:
+            # An exception or a Ctrl-C leaves the protocol out of step, and the job's
+            # process group still running. End the group; the reservation stays PENDING,
+            # which is exactly what tells a resumed session this work is unfinished.
+            self._terminate_now()
+            raise
+        ledger.complete(job.job_id, result)
+        return result
+
+    def _fair_share_bytes(self) -> int:
+        return max(1, self._profile.disk_budget_bytes // self._profile.max_new_forward)
+
+    def _write_descriptor(self, job: JobDescriptor) -> Path:
+        path = self._session_dir / "jobs" / f"{job.job_id}.json"
+        write_json_atomic(path, job.model_dump(mode="json"))
+        return path
+
+    def _run_job(
+        self, job: JobDescriptor, session_output_bytes: int, handoff: ForwardHandoff
+    ) -> ForwardResult:
+        job_path = self._write_descriptor(job)
+        log_dir = self._session_dir / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = log_dir / f"{job.job_id}.stdout"
+        stderr_path = log_dir / f"{job.job_id}.stderr"
+        native_dir = self._session_dir / NATIVE_DIRNAME / job.job_id
+
+        baseline = self._probe()
+        watchdog = ResourceWatchdog(self._profile, baseline=baseline)
+        meter = _JobMeter(baseline)
+        try:
+            self._send(
+                {
+                    "op": "run",
+                    "job_id": job.job_id,
+                    "job_path": str(job_path),
+                    "root": str(self._paths.root),
+                    "stdout_path": str(stdout_path),
+                    "stderr_path": str(stderr_path),
+                    # The MUTABLE native working directory of this job, and the control-plane
+                    # file Julia consults at chunk boundaries. The stop file is read and
+                    # never written: an operator's request changes no job input.
+                    "native_dir": str(native_dir),
+                    "stop_path": str(self._session_dir / STOP_FILE_NAME),
+                    "environment_lock_hash": self._environment_lock_hash,
+                    "static_hash": handoff.static_hash,
+                    "schedule_prefix_hashes": [
+                        {"completed_time_s": time_s, "schedule_prefix_hash": digest}
+                        for time_s, digest in handoff.schedule_prefix_hashes
+                    ],
+                    "protocol": PROTOCOL_VERSION,
+                }
+            )
+        except WorkerProtocolError as exc:
+            return self._classified(job, "PROTOCOL_FAILURE", str(exc), meter.finish(self._probe()))
+
+        try:
+            frame, decision = self._await_job_frame(watchdog, meter, session_output_bytes)
+            cost_inputs = meter.finish(self._probe())
+            if frame is None:
+                status, reason = classify_termination(
+                    returncode=self._proc.poll(), decision=decision
+                )
+                return self._classified(job, status, reason, cost_inputs)
+            if isinstance(frame, ProtocolViolation):
+                return self._classified(job, "PROTOCOL_FAILURE", frame.reason, cost_inputs)
+            try:
+                validate_reply(frame, job.job_id)
+            except ValueError as exc:
+                return self._classified(job, "PROTOCOL_FAILURE", str(exc), cost_inputs)
+            return self._result_from_reply(job, frame, cost_inputs, handoff)
+        finally:
+            # Scratch. Whatever of it was worth keeping is already a published checkpoint
+            # inside the result directory, copied and renamed there before the record was
+            # written; leaving the working copy behind would charge the session's disk
+            # budget twice for the same states.
+            shutil.rmtree(native_dir, ignore_errors=True)
+
+    def _await_job_frame(
+        self, watchdog: ResourceWatchdog, meter: _JobMeter, session_output_bytes: int
+    ) -> tuple[Frame | None, WatchdogDecision | None]:
+        """Wait in poll-sized slices, watching the machine between them.
+
+        No `readline()` happens here: the reader thread already holds the pipe, and this
+        loop only takes what it produced. The exit conditions are a frame, a dead process
+        with nothing left queued, or a watchdog decision to terminate.
+        """
+        last: WatchdogDecision | None = None
+        while True:
+            frame = self._reader.get(self._profile.poll_interval_s)
+            if frame is not None:
+                return frame, None
+            if self._exhausted():
+                # The MOST RECENT observation is the evidence, not an older breach the
+                # tree has since recovered from: a process that died while measurably
+                # healthy did not die of a resource exhaustion anyone observed.
+                return None, last
+            snapshot = self._probe()
+            meter.observe(snapshot)
+            last = watchdog.observe(
+                snapshot,
+                job_started_monotonic_s=meter.started_monotonic_s,
+                session_output_bytes=session_output_bytes,
+            )
+            if last.terminate_process_group:
+                self._terminate_now()
+                return None, last
+
+    # ----------------------------------------------------------------- result building
+
+    def _classified(
+        self,
+        job: JobDescriptor,
+        status: ForwardStatus,
+        reason: str,
+        cost_inputs: _CostInputs,
+        counters: _SolverCounters = _NO_COUNTERS,
+    ) -> ForwardResult:
+        return self._build_result(
+            job,
+            status=status,
+            reason=reason,
+            physics_class="unknown",
+            cost_inputs=cost_inputs,
+            counters=counters,
+            extra_metadata={},
+        )
+
+    def _read_record(self, path: Path) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _published(
+        self,
+        job: JobDescriptor,
+        record: Mapping[str, Any],
+        cost_inputs: _CostInputs,
+        counters: _SolverCounters,
+        extra_metadata: Mapping[str, str],
+        handoff: ForwardHandoff,
+    ) -> ForwardResult:
+        """Hand a verified record to the physics side, which turns it into a result.
+
+        The transport has proved the bytes: the record is inside this job's own result
+        directory and hashes to what the worker said it does. What those bytes MEAN — a time
+        axis to integrate, volumes to publish, balances to close — is not this module's to
+        decide, and a transport that built a `COMPLETE` out of a status word would be a
+        transport that can manufacture physics.
+        """
+        if handoff.publish is None:
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                "the worker returned a native extraction, but this session gave the transport "
+                "no publisher for it; a forward result is published by the stage that holds "
+                "the case and the request, never by the transport",
+                cost_inputs,
+                counters,
+            )
+        metadata = self._metadata(job, extra_metadata)
+        cost = cost_inputs.to_record(attempt=job.attempt, counters=counters)
+        try:
+            result = handoff.publish(record, cost, metadata)
+        except (ValueError, OSError, ValidationError) as exc:
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the worker's extraction for job {job.job_id!r} could not be published: {exc}",
+                cost_inputs,
+                counters,
+            )
+        if (result.job_id, result.case_sha256, result.model_hash) != (
+            job.job_id,
+            job.case_sha256,
+            job.model_hash,
+        ):
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the published result claims job {result.job_id!r} of model "
+                f"{result.model_hash}, but this job is {job.job_id!r} of {job.model_hash}",
+                cost_inputs,
+                counters,
+            )
+        # The publisher wrote `states.h5` and the output tables into this job's directory
+        # while the cost above was already built, so the directory is measured AGAIN here
+        # and the cost replaced. Measuring only before the publisher runs records every
+        # successful result as costing the disk of its worker record alone —
+        # `BudgetLedger.committed_output_bytes` sums this field and the disk guard compares
+        # the sum against the budget, so an under-count is a session that believes it has
+        # room it does not have.
+        published = cost_inputs.with_output_bytes(
+            _directory_bytes(self._paths.resolve(job.result_dir)),
+            note=(
+                "output_bytes is this job's whole result directory, measured AFTER the "
+                "publisher wrote its outputs into it"
+            ),
+        )
+        return result.model_copy(
+            update={"cost": published.to_record(attempt=job.attempt, counters=counters)}
+        )
+
+    def _result_from_reply(
+        self,
+        job: JobDescriptor,
+        reply: dict[str, Any],
+        cost_inputs: _CostInputs,
+        handoff: ForwardHandoff,
+    ) -> ForwardResult:
+        status: ForwardStatus = reply["status"]
+        raw_reason = reply.get("reason")
+        reason = raw_reason if isinstance(raw_reason, str) and raw_reason else None
+        # Not from `reply`: the counters are read below, out of the record whose digest the
+        # reply had to match. A job that never got as far as publishing one has none.
+        counters = _NO_COUNTERS
+        if status != "COMPLETE" and reason is None:
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the worker reported {status} without a reason; an unsuccessful result "
+                "must say what is missing (plan 3.2)",
+                cost_inputs,
+            )
+        metadata: dict[str, str] = {}
+        result_path = reply.get("result_path")
+        if isinstance(result_path, str) and result_path:
+            try:
+                resolved = self._paths.resolve(result_path)
+                digest = sha256_file(resolved)
+            except (OSError, ValueError) as exc:
+                return self._classified(
+                    job,
+                    "PROTOCOL_FAILURE",
+                    f"the worker reported a result at {result_path!r} that cannot be read "
+                    f"back: {exc}",
+                    cost_inputs,
+                )
+            result_dir = self._paths.resolve(job.result_dir)
+            if not resolved.is_relative_to(result_dir):
+                # A job writes into the directory its own descriptor named, and nowhere
+                # else: a result filed outside it would attribute this job's output to
+                # some other job, or overwrite an artifact that is not a result at all.
+                return self._classified(
+                    job,
+                    "PROTOCOL_FAILURE",
+                    f"the worker reported a result at {result_path!r}, outside this job's "
+                    f"own result directory {job.result_dir!r}",
+                    cost_inputs,
+                )
+            if digest != reply.get("result_sha256"):
+                return self._classified(
+                    job,
+                    "PROTOCOL_FAILURE",
+                    f"the worker reported result_sha256 {reply.get('result_sha256')!r} for "
+                    f"{result_path!r}, whose bytes hash to {digest}",
+                    cost_inputs,
+                )
+            metadata["result_path"] = result_path
+            metadata["result_sha256"] = digest
+            cost_inputs = cost_inputs.with_output_bytes(_directory_bytes(result_dir))
+            record = self._read_record(resolved)
+            if record is None:
+                return self._classified(
+                    job,
+                    "PROTOCOL_FAILURE",
+                    f"the worker's result record at {result_path!r} is not a JSON object",
+                    cost_inputs,
+                    counters,
+                )
+            extraction = record.get("extraction")
+            counters = _solver_counters(extraction)
+            if isinstance(extraction, dict):
+                return self._published(job, record, cost_inputs, counters, metadata, handoff)
+        declared = reply.get("physics_class")
+        try:
+            return self._build_result(
+                job,
+                status=status,
+                reason=reason,
+                physics_class=declared if isinstance(declared, str) and declared else "unknown",
+                cost_inputs=cost_inputs,
+                counters=counters,
+                extra_metadata=metadata,
+            )
+        except ValidationError as exc:
+            # `ForwardResult` is the authority on what each status has to carry — a
+            # COMPLETE result needs the whole requested time axis, its states and every
+            # output path (plan 3.2). A reply that claims a status it did not deliver is a
+            # protocol failure, and it is refused by the record's own rules rather than by
+            # a second copy of them here.
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the worker reported {status}, but that cannot be recorded as a forward "
+                f"result: {_first_validation_error(exc)}",
+                cost_inputs,
+            )
+
+    def _metadata(self, job: JobDescriptor, extra: Mapping[str, str]) -> dict[str, str]:
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            # What the result was produced under, beyond the case itself: the locked
+            # environment and the solver configuration the descriptor pinned (plan 3.1).
+            "environment_lock_hash": self._environment_lock_hash,
+            "solver_config_sha256": job.solver_config_sha256,
+            "solver_config_path": job.solver_config_path,
+            "resource_profile": self._profile.profile,
+            "julia_threads": str(self._profile.julia_threads),
+            "blas_threads": str(self._profile.blas_threads),
+            "worker_pid": str(self._proc.pid),
+            **{f"version.{name}": value for name, value in self._handshake.versions.items()},
+            **extra,
+        }
+
+    def _build_result(
+        self,
+        job: JobDescriptor,
+        *,
+        status: ForwardStatus,
+        reason: str | None,
+        physics_class: str,
+        cost_inputs: _CostInputs,
+        counters: _SolverCounters,
+        extra_metadata: Mapping[str, str],
+    ) -> ForwardResult:
+        return ForwardResult(
+            job_id=job.job_id,
+            case_sha256=job.case_sha256,
+            model_hash=job.model_hash,
+            physics_class=physics_class,
+            status=status,
+            reason=reason,
+            completed_time_s=0.0,
+            times_s=(),
+            states={},
+            solver_metadata=self._metadata(job, extra_metadata),
+            cost=cost_inputs.to_record(attempt=job.attempt, counters=counters),
+            parent_attempt_ids=(() if job.parent_job_id is None else (job.parent_job_id,)),
+        )
+
+    # ---------------------------------------------------------------- process control
+
+    def _signal_group(self, sig: signal.Signals) -> None:
+        """Signal the whole group. The child leads it, so its pid is the group id.
+
+        A group that no longer exists is not an error here: every caller is trying to make
+        sure nothing survives, and "nothing did" is the outcome they wanted.
+        """
+        with contextlib.suppress(OSError):
+            os.killpg(self._proc.pid, sig)
+
+    def _wait_for_exit(self, budget_s: float) -> bool:
+        """Wait in poll-sized slices until the process exits or the budget runs out."""
+        deadline = self._clock() + budget_s
+        while True:
+            remaining = deadline - self._clock()
+            if remaining <= 0.0:
+                return self._proc.poll() is not None
+            try:
+                self._proc.wait(timeout=max(0.0, min(self._profile.poll_interval_s, remaining)))
+                return True
+            except TimeoutExpired:
+                continue
+
+    def _terminate_now(self) -> None:
+        """End the process group without asking. Used when the protocol cannot continue."""
+        self._broken = True
+        self._signal_group(signal.SIGTERM)
+        if not self._wait_for_exit(TERMINATE_GRACE_S):
+            self._signal_group(signal.SIGKILL)
+            self._wait_for_exit(TERMINATE_GRACE_S)
+
+    def close(self) -> None:
+        """Shutdown, escalate, sweep the group, reap. Safe to call more than once."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if not self._broken and self._proc.poll() is None:
+                with contextlib.suppress(WorkerProtocolError):
+                    self._send({"op": "shutdown", "protocol": PROTOCOL_VERSION})
+            self._close_stdin()
+            if not self._wait_for_exit(SHUTDOWN_GRACE_S):
+                self._signal_group(signal.SIGTERM)
+                if not self._wait_for_exit(TERMINATE_GRACE_S):
+                    self._signal_group(signal.SIGKILL)
+                    self._wait_for_exit(TERMINATE_GRACE_S)
+        finally:
+            # Sweep before reaping: the leader is still a zombie here, so its pid — and
+            # therefore the group id — cannot yet have been handed to anyone else. Any
+            # descendant it leaked is still in that group, and this is what ends it.
+            self._signal_group(signal.SIGKILL)
+            # SIGKILL has already been sent, so this wait is a reap, not a hope.
+            with contextlib.suppress(TimeoutExpired):
+                self._proc.wait(timeout=TERMINATE_GRACE_S)
+            self._reader.join(TERMINATE_GRACE_S)
+            self._close_stdin()
+            if self._proc.stdout is not None:
+                self._proc.stdout.close()
+            self._stderr_log.close()
+
+    def _close_stdin(self) -> None:
+        if self._proc.stdin is None or self._proc.stdin.closed:
+            return
+        with contextlib.suppress(BrokenPipeError, OSError):
+            self._proc.stdin.close()
+
+
+# ------------------------------------------------------------------------ cost meter
+
+
+def _directory_bytes(directory: Path) -> int:
+    if not directory.is_dir():
+        return 0
+    return sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())
+
+
+@dataclass(frozen=True)
+class _CostInputs:
+    """What the snapshots around a job said, before it becomes a `CostRecord`."""
+
+    wall_s: float
+    cpu_s: float
+    peak_rss_bytes: int
+    output_bytes: int
+    notes: tuple[str, ...]
+
+    def with_output_bytes(self, value: int, *, note: str | None = None) -> _CostInputs:
+        return _CostInputs(
+            wall_s=self.wall_s,
+            cpu_s=self.cpu_s,
+            peak_rss_bytes=self.peak_rss_bytes,
+            output_bytes=value,
+            notes=self.notes if note is None else (*self.notes, note),
+        )
+
+    def to_record(self, *, attempt: int, counters: _SolverCounters = _NO_COUNTERS) -> CostRecord:
+        return CostRecord(
+            wall_s=self.wall_s,
+            cpu_s=self.cpu_s,
+            peak_rss_bytes=self.peak_rss_bytes,
+            output_bytes=self.output_bytes,
+            # The solver's OWN counters, read out of the re-hashed record rather than off
+            # the reply frame (see `_solver_counters`). A job that never got as far as
+            # publishing one has none, and records three honest zeros rather than a guess —
+            # `measurement_method` says which of the two happened.
+            accepted_steps=counters.accepted_steps,
+            cut_steps=counters.cut_steps,
+            nonlinear_iterations=counters.nonlinear_iterations,
+            retry_count=attempt - 1,
+            measurement_method="; ".join((*self.notes, counters.note)),
+        )
+
+
+class _JobMeter:
+    """Accumulates what the probe saw while one job ran.
+
+    `CostRecord` has no nullable field, so an unreadable process tree cannot be recorded
+    as `None` here. It is recorded as 0 *and named in `measurement_method`*, which is the
+    difference between a measurement and an assumption: nothing downstream can mistake the
+    zero for an observation that the job used no memory.
+    """
+
+    def __init__(self, baseline: ResourceSnapshot) -> None:
+        self._baseline = baseline
+        self.started_monotonic_s = baseline.monotonic_s
+        self._peak_rss: int | None = baseline.process_rss_bytes
+        self._unreadable: str | None = (
+            None if baseline.process_rss_bytes is not None else baseline.process_measurement_method
+        )
+
+    def observe(self, snapshot: ResourceSnapshot) -> None:
+        if snapshot.process_rss_bytes is None:
+            self._unreadable = snapshot.process_measurement_method
+            return
+        self._peak_rss = (
+            snapshot.process_rss_bytes
+            if self._peak_rss is None
+            else max(self._peak_rss, snapshot.process_rss_bytes)
+        )
+
+    def finish(self, final: ResourceSnapshot) -> _CostInputs:
+        self.observe(final)
+        notes = ["wall_s from the monotonic clock carried in the resource snapshots"]
+        if self._baseline.process_cpu_s is None or final.process_cpu_s is None:
+            cpu_s = 0.0
+            notes.append(
+                f"cpu_s could not be measured ({final.process_measurement_method}), recorded as 0"
+            )
+        else:
+            cpu_s = max(0.0, final.process_cpu_s - self._baseline.process_cpu_s)
+            notes.append("cpu_s from the process-tree CPU time difference")
+        if self._peak_rss is None:
+            peak = 0
+            notes.append(
+                f"peak_rss_bytes could not be measured ({self._unreadable}), recorded as 0"
+            )
+        else:
+            peak = self._peak_rss
+            if self._unreadable is not None:
+                notes.append(
+                    f"peak_rss_bytes is a partial maximum: at least one sample was "
+                    f"unreadable ({self._unreadable})"
+                )
+            else:
+                notes.append("peak_rss_bytes is the maximum process-tree RSS sampled")
+        return _CostInputs(
+            wall_s=max(0.0, final.monotonic_s - self._baseline.monotonic_s),
+            cpu_s=cpu_s,
+            peak_rss_bytes=peak,
+            output_bytes=0,
+            notes=tuple(notes),
+        )

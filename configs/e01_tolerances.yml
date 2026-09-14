@@ -1,0 +1,50 @@
+# E01 verification tolerances (plan Task 9.1).
+#
+# The original Task 9.1 criteria remain unchanged. Version 2 explicitly adds the
+# near-zero phase-volume absolute tolerance documented below. A change requires a new config
+# hash, a written explanation and a rerun of the affected matrix — never the masking of a
+# single failure. `so_recon.validation.physics.load_tolerances` therefore demands EXACTLY
+# this key set: a missing key and an unknown key are both refusals, because a default
+# silently substituted for a missing threshold is a gate nobody agreed to.
+#
+# Denominators, once, for every relative number here: a rate or a volume is divided by
+# `max(abs(reference), 1e-6)` in its own SI or surface unit, and a pressure by
+# `max(abs(reference), 1 Pa)`. A zero rate is checked against an ABSOLUTE tolerance, never
+# as a relative error against zero. Version 2 uses the explicit absolute phase-volume
+# limit below its crossover with the unchanged 2% phase-relative limit.
+#
+# `balance_cumulative_relative_max` and `balance_step_median_relative_max` are SPEC 23.1's
+# minimum gate. `balance_cumulative_target` is SPEC 8.3's stricter aim: it is REPORTED as a
+# separate metric and is never the gate, so a result that misses it is still acceptable and
+# saying so requires both numbers to be visible.
+schema_version: e01-tolerances-2
+balance_cumulative_relative_max: 1.0e-3
+balance_step_median_relative_max: 1.0e-5
+balance_cumulative_target: 1.0e-5
+balance_absolute_floor_m3_sc: 1.0e-6
+saturation_sum_abs_max: 1.0e-10
+saturation_bound_slack: 1.0e-8
+closed_connection_mass_kg_s_max: 1.0e-10
+closed_state_saturation_drift_max: 1.0e-8
+closed_pressure_relative_drift_max: 1.0e-7
+hydrostatic_gradient_relative_max: 1.0e-5
+hydrostatic_saturation_drift_max: 1.0e-6
+hydrostatic_pressure_relative_drift_max: 1.0e-6
+restart_saturation_abs_max: 1.0e-6
+restart_pressure_relative_max: 1.0e-6
+restart_volume_relative_max: 1.0e-5
+restart_inventory_relative_max: 1.0e-5
+rate_control_relative_max: 1.0e-4
+bl_pv_l1_max_at_128: 0.08
+bl_refinement_ratio_max: 1.1
+five_spot_symmetry_abs_max: 1.0e-4
+refinement_so_pv_mae_max: 0.02
+refinement_inventory_relative_max: 0.01
+refinement_monthly_volume_relative_max: 0.02
+
+# v2 (2026-09-14): restore the phase-specific relative denominator. At nearly
+# zero phase reference volume use 1e-6 m3_sc (1 ml), the existing volume floor,
+# as an ABSOLUTE error tolerance. Crossover = absolute/relative = 5e-5 m3_sc.
+# Chosen before the tightened-solver rerun; never scaled by total throughput.
+# The raw phase-relative error remains reported even below the crossover.
+refinement_monthly_volume_absolute_max_m3_sc: 1.0e-6

@@ -31,8 +31,22 @@ def load_project_config(path: Path) -> ProjectConfig:
         raise ConfigError(f"invalid config {path}:\n{exc}") from exc
 
 
+#: Configuration fields that exist only from spec 4.0 on. A 3.0 config must serialise
+#: exactly the way E00 serialised it — the `resolved_config_hash` of every historical run
+#: record depends on it — so a 4.0-only field is dropped from a 3.0 dump by name. A global
+#: `exclude_defaults` would do this too, but it would also drop the pre-existing defaults
+#: and change every legacy hash.
+#:
+#: This only ever removes a None: `ProjectConfig` refuses a 3.0 config that actually sets
+#: one of these fields, so the exclusion can never hide a value that was in force.
+SPEC_4_0_ONLY_FIELDS: frozenset[str] = frozenset({"resources"})
+
+
 def resolved_config_dict(cfg: ProjectConfig) -> dict[str, Any]:
-    return cfg.model_dump(mode="json")
+    data: dict[str, Any] = cfg.model_dump(mode="json")
+    if cfg.spec_version == "3.0":
+        return {key: value for key, value in data.items() if key not in SPEC_4_0_ONLY_FIELDS}
+    return data
 
 
 def config_hash(cfg: ProjectConfig) -> str:
