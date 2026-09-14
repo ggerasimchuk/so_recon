@@ -42,6 +42,7 @@ from so_recon.simulator.results import (
     BALANCES_FILENAME,
     CONNECTION_MONTHLY_SCHEMA,
     CONNECTIONS_FILENAME,
+    MONTHLY_SCHEMA,
     STATES_FILENAME,
     balance_table,
 )
@@ -55,12 +56,17 @@ from so_recon.validation.physics import (
     BL_SHOCK_SATURATION,
     DEFAULT_TOLERANCES_RELPATH,
     TOLERANCE_SCHEMA_VERSION,
+    CommonSupport,
     PhysicsCheck,
+    aggregate_so,
     bl_cell_average,
     bl_front_position,
     bl_saturation,
+    cartesian_zone_ids,
+    compare_refinement,
     evaluate_physics,
     load_tolerances,
+    mirror_symmetry_abs,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -248,6 +254,38 @@ def test_the_cell_average_quadrature_is_converged_at_64_subpoints() -> None:
 
 
 # --------------------------------------------------------------------------------------
+# 10.1 the support aggregator
+# --------------------------------------------------------------------------------------
+
+
+def test_support_average_uses_pore_volume() -> None:
+    mean = aggregate_so(np.array([0.2, 0.8]), np.array([1.0, 3.0]), np.array([0, 0]), 1)
+    np.testing.assert_allclose(mean, [0.65])
+
+
+def test_a_zone_that_collected_no_pore_volume_is_nan_and_never_zero() -> None:
+    # Zone 1 has a cell, and that cell has no pore volume; zone 2 has no cell at all. Both are
+    # UNMEASURED, and an unmeasured saturation must not be depicted as a dry one: 0.0 is a
+    # number somebody will plot beside real saturations and average further.
+    mean = aggregate_so(np.array([0.5, 0.9]), np.array([2.0, 0.0]), np.array([0, 1]), 3)
+    assert mean[0] == pytest.approx(0.5)
+    assert math.isnan(mean[1])
+    assert math.isnan(mean[2])
+
+
+def test_zones_are_aggregated_apart_and_weighted_within_themselves() -> None:
+    mean = aggregate_so(
+        np.array([0.2, 0.8, 1.0, 0.0]),
+        np.array([1.0, 3.0, 1.0, 1.0]),
+        np.array([0, 0, 1, 1]),
+        2,
+    )
+    np.testing.assert_allclose(mean, [0.65, 0.5])
+    # And the weighting really is by pore volume: the unweighted mean of zone 0 is 0.5.
+    assert mean[0] != pytest.approx(0.5)
+
+
+# --------------------------------------------------------------------------------------
 # 9.2 the evaluator: synthesised published artifacts
 # --------------------------------------------------------------------------------------
 
@@ -325,7 +363,7 @@ def _write_balances(
     }
     path = paths.artifacts / label / BALANCES_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(balance_table(metrics), path)
+    pq.write_table(balance_table(metrics, {"water": 0.0, "oil": 0.0}), path)
     return path
 
 
@@ -684,8 +722,8 @@ def test_an_artifact_the_evaluator_cannot_read_is_reported_unrun(
 def test_a_fixture_nobody_registered_is_refused_rather_than_scored(
     paths: ProjectPaths, tolerances: dict[str, float]
 ) -> None:
-    with pytest.raises(ValueError, match="five_spot"):
-        evaluate_physics("five_spot", _closed_outputs(paths), tolerances)
+    with pytest.raises(ValueError, match="nine_spot"):
+        evaluate_physics("nine_spot", _closed_outputs(paths), tolerances)
 
 
 def test_an_incomplete_tolerance_mapping_is_refused(
@@ -743,3 +781,351 @@ def test_the_bl_refinement_passes_on_the_analytic_answer_and_fails_on_a_coarse_o
     bad = evaluate_physics("bl", _bl_outputs(paths, label="blc", coarse_answer=True), tolerances)
     assert bad.status == "FAIL"
     assert bad.reason is not None and "bl_refinement_ratio_64_to_128" in bad.reason
+
+
+# --------------------------------------------------------------------------------------
+# 10.7 the five-spot: a symmetry that has to be a symmetry of something
+# --------------------------------------------------------------------------------------
+
+#: The registered five-spot: 16 x 16 cells in one layer over 400 x 400 x 10 m at porosity 0.2.
+FIVE_SPOT_NX = 16
+FIVE_SPOT_EXTENT_M = 400.0
+FIVE_SPOT_THICKNESS_M = 10.0
+FIVE_SPOT_POROSITY = 0.2
+SUPPORT_SIDE = 8
+
+
+def _areal_so(nx: int, *, uniform: bool = False) -> NDArray[np.float64]:
+    """An oil saturation that is symmetric about BOTH grid axes, by construction.
+
+    The field depends only on the distance of a cell centre from the pattern's own centre in
+    each direction, so reflecting `i -> nx-1-i` or `j -> ny-1-j` leaves it unchanged. That is
+    what makes the asymmetry a test introduces the ONLY asymmetry in the file.
+    """
+    if uniform:
+        return np.full(nx * nx, 0.55, dtype=np.float64)
+    axis = np.abs(np.arange(nx, dtype=np.float64) - (nx - 1) / 2.0) / ((nx - 1) / 2.0)
+    field = 0.3 + 0.25 * (axis[None, :] + axis[:, None]) / 2.0
+    return np.asarray(field.ravel(), dtype=np.float64)
+
+
+def _five_spot_outputs(
+    paths: ProjectPaths,
+    *,
+    label: str = "fivespot",
+    asymmetry: float = 0.0,
+    uniform: bool = False,
+) -> dict[str, Path]:
+    """A published five-spot result whose final oil saturation is the field above.
+
+    `asymmetry` is added to ONE cell of the final state, which breaks the reflection about
+    both axes by exactly that much and leaves everything else the evaluator scores alone.
+    """
+    n_cells = FIVE_SPOT_NX * FIVE_SPOT_NX
+    times = np.array([0.0, SECONDS_PER_DAY], dtype=np.float64)
+    so = np.vstack([np.full(n_cells, 0.8), _areal_so(FIVE_SPOT_NX, uniform=uniform)])
+    so[-1, 0] += asymmetry
+    sw = 1.0 - so
+    pressure = np.full((2, n_cells), 1.5e7)
+    cell_pv = (FIVE_SPOT_EXTENT_M / FIVE_SPOT_NX) ** 2 * FIVE_SPOT_THICKNESS_M * FIVE_SPOT_POROSITY
+    return {
+        "states": _write_states(
+            paths,
+            label,
+            times_s=times,
+            pressure_pa=pressure,
+            sw=sw,
+            so=so,
+            pore_volume_m3=np.full((2, n_cells), cell_pv),
+        ),
+        "balances": _write_balances(paths, label),
+        "connections": _write_connections(paths, label),
+    }
+
+
+def test_a_reflection_is_measured_about_each_axis_separately() -> None:
+    field = _areal_so(4)
+    assert mirror_symmetry_abs(field, (4, 4, 1)) == (0.0, 0.0)
+    moved = field.copy()
+    moved[0] += 0.125
+    about_x, about_y = mirror_symmetry_abs(moved, (4, 4, 1))
+    assert about_x == pytest.approx(0.125)
+    assert about_y == pytest.approx(0.125)
+
+
+def test_a_symmetric_five_spot_passes_and_records_both_reflections(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    check = evaluate_physics("five_spot", _five_spot_outputs(paths), tolerances)
+    assert check.status == "PASS", check.reason
+    assert check.metrics["five_spot_symmetry_x_abs"] == 0.0
+    assert check.metrics["five_spot_symmetry_y_abs"] == 0.0
+    # The field it is symmetric about really varies, so the verdict is a statement.
+    assert check.metrics["five_spot_so_range"] > 0.2
+    assert check.unrun_metrics == ()
+
+
+def test_one_cell_that_breaks_the_reflection_turns_the_five_spot_red(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    # Ten times the frozen gate, on one cell of the final state.
+    asymmetry = 10 * tolerances["five_spot_symmetry_abs_max"]
+    check = evaluate_physics(
+        "five_spot", _five_spot_outputs(paths, label="skew", asymmetry=asymmetry), tolerances
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "five_spot_symmetry_abs" in check.reason
+    assert check.metrics["five_spot_symmetry_abs"] == pytest.approx(asymmetry, rel=1e-9)
+    # Nothing else moved: the balance and the saturation gates stay quiet.
+    assert check.metrics["balance_cumulative_relative"] == 0.0
+    assert check.metrics["saturation_sum_abs"] <= tolerances["saturation_sum_abs_max"]
+
+
+def test_a_uniform_field_is_symmetric_and_still_fails_the_five_spot(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    # A flat saturation is symmetric about every axis and demonstrates nothing at all. The
+    # structural companion gate is what stops a case that never displaced anything passing
+    # the symmetry claim by being empty.
+    check = evaluate_physics(
+        "five_spot", _five_spot_outputs(paths, label="flat", uniform=True), tolerances
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "five_spot_so_range" in check.reason
+    assert check.metrics["five_spot_symmetry_abs"] == 0.0
+
+
+# --------------------------------------------------------------------------------------
+# 10.8 the refinement comparison
+# --------------------------------------------------------------------------------------
+
+
+def test_a_support_that_does_not_tile_a_grid_into_whole_cells_is_refused() -> None:
+    with pytest.raises(ValueError, match="whole cells"):
+        cartesian_zone_ids(16, 16, 5)
+
+
+def test_nested_grids_get_the_same_zones_over_the_same_physical_square() -> None:
+    coarse = cartesian_zone_ids(16, 16, SUPPORT_SIDE)
+    fine = cartesian_zone_ids(32, 32, SUPPORT_SIDE)
+    assert coarse.shape == (256,) and fine.shape == (1024,)
+    # Every zone is 2x2 coarse cells and 4x4 fine ones, and every zone is occupied on both.
+    assert np.bincount(coarse).tolist() == [4] * SUPPORT_SIDE**2
+    assert np.bincount(fine).tolist() == [16] * SUPPORT_SIDE**2
+    # The zone of a coarse cell is the zone of the fine cells that replaced it: cell (2,3) on
+    # the coarse grid covers the same rock as (4..5, 6..7) on the fine one.
+    assert coarse[2 + 16 * 3] == fine[4 + 32 * 6] == fine[5 + 32 * 7]
+
+
+def test_a_zone_id_outside_the_support_is_refused_before_any_aggregation() -> None:
+    good = cartesian_zone_ids(16, 16, SUPPORT_SIDE)
+    bad = good.copy()
+    bad[0] = SUPPORT_SIDE**2
+    with pytest.raises(ValueError, match="outside"):
+        CommonSupport(
+            name="five_spot_refinement",
+            n_zones=SUPPORT_SIDE**2,
+            coarse_zone_id=bad,
+            fine_zone_id=cartesian_zone_ids(32, 32, SUPPORT_SIDE),
+        )
+
+
+def test_a_support_zone_no_cell_falls_in_is_refused() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        CommonSupport(
+            name="five_spot_refinement",
+            n_zones=SUPPORT_SIDE**2 + 1,
+            coarse_zone_id=cartesian_zone_ids(16, 16, SUPPORT_SIDE),
+            fine_zone_id=cartesian_zone_ids(32, 32, SUPPORT_SIDE),
+        )
+
+
+def _support() -> CommonSupport:
+    return CommonSupport(
+        name="five_spot_refinement",
+        n_zones=SUPPORT_SIDE**2,
+        coarse_zone_id=cartesian_zone_ids(16, 16, SUPPORT_SIDE),
+        fine_zone_id=cartesian_zone_ids(32, 32, SUPPORT_SIDE),
+    )
+
+
+def _continuous_so(nx: int) -> NDArray[np.float64]:
+    """The SAME continuous saturation field, sampled at the cell centres of an `nx` grid.
+
+    Sampling one function on both grids is what makes the pair a refinement of one problem:
+    a second field drawn independently on the fine grid would be a different case, and the
+    difference between them would not be a discretisation error.
+    """
+    centres = (np.arange(nx, dtype=np.float64) + 0.5) / nx
+    field = 0.35 + 0.2 * np.sin(np.pi * centres)[None, :] * np.sin(np.pi * centres)[:, None]
+    return np.asarray(field.ravel(), dtype=np.float64)
+
+
+def _refinement_side(
+    paths: ProjectPaths,
+    *,
+    label: str,
+    nx: int,
+    so_shift: float = 0.0,
+    pore_volume_scale: float = 1.0,
+    monthly_scale: float = 1.0,
+    months: int = 3,
+) -> dict[str, Path]:
+    """One published side of a refinement pair: its final states and its monthly volumes."""
+    n_cells = nx * nx
+    so = np.vstack([np.full(n_cells, 0.8), _continuous_so(nx) + so_shift])
+    sw = 1.0 - so
+    cell_pv = (
+        (FIVE_SPOT_EXTENT_M / nx) ** 2 * FIVE_SPOT_THICKNESS_M * FIVE_SPOT_POROSITY
+    ) * pore_volume_scale
+    # `_write_states` writes bw = bo = 1 everywhere, so the standard-volume inventory of a
+    # side is `sum(S * PV)` and the only things that can move it are the two knobs above.
+    states = _write_states(
+        paths,
+        label,
+        times_s=np.array([0.0, SECONDS_PER_DAY], dtype=np.float64),
+        pressure_pa=np.full((2, n_cells), 1.5e7),
+        sw=sw,
+        so=so,
+        pore_volume_m3=np.full((2, n_cells), cell_pv),
+    )
+    rows = [
+        {
+            "well_id": "PRO1",
+            "month_index": month,
+            "start_s": float(month) * SECONDS_PER_DAY,
+            "end_s": float(month + 1) * SECONDS_PER_DAY,
+            "oil_prod_m3_sc": 1000.0 * monthly_scale,
+            "water_prod_m3_sc": 10.0 * monthly_scale,
+            "water_inj_m3_sc": 0.0,
+            "liquid_prod_m3_sc": 1010.0 * monthly_scale,
+            "flowing_s": SECONDS_PER_DAY,
+            "fw": 10.0 / 1010.0,
+            "fw_valid": True,
+        }
+        for month in range(months)
+    ]
+    monthly = paths.artifacts / label / "monthly.parquet"
+    monthly.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=MONTHLY_SCHEMA), monthly)
+    return {"states": states, "monthly": monthly}
+
+
+def test_two_grids_that_agree_on_the_same_support_pass(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    check = compare_refinement(
+        _refinement_side(paths, label="ref-c", nx=16),
+        _refinement_side(paths, label="ref-f", nx=32),
+        _support(),
+        tolerances,
+    )
+    assert check.status == "PASS", check.reason
+    # The mapping really is pore-volume-conservative: 4 coarse cells of 1250 m3 and 16 fine
+    # ones of 312.5 m3 both put 5000 m3 in each of the 64 zones.
+    assert check.metrics["support_pore_volume_relative"] == 0.0
+    assert check.metrics["n_zones"] == 64.0
+    assert check.metrics["coarse_cells"] == 256.0 and check.metrics["fine_cells"] == 1024.0
+    # Not vacuous: the two grids do NOT agree exactly, because sampling one continuous field
+    # at two resolutions is not the same average.
+    assert 0.0 < check.metrics["so_pv_mae"] < tolerances["refinement_so_pv_mae_max"]
+    assert check.unrun_metrics == ()
+    assert set(check.input_hashes) == {
+        "coarse_states",
+        "coarse_monthly",
+        "fine_states",
+        "fine_monthly",
+    }
+
+
+def test_a_saturation_that_moved_on_the_fine_grid_turns_the_support_mae_red(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    shift = 5 * tolerances["refinement_so_pv_mae_max"]
+    check = compare_refinement(
+        _refinement_side(paths, label="mae-c", nx=16),
+        _refinement_side(paths, label="mae-f", nx=32, so_shift=shift),
+        _support(),
+        tolerances,
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "so_pv_mae" in check.reason
+    # The shift, to within the discretisation difference the clean pair already carried.
+    assert check.metrics["so_pv_mae"] == pytest.approx(shift, rel=0.01)
+    # The pore-volume mapping and the monthly volumes are untouched and stay quiet.
+    assert check.metrics["support_pore_volume_relative"] == 0.0
+    assert check.metrics["monthly_volume_relative"] == 0.0
+
+
+def test_a_monthly_volume_that_moved_turns_the_refinement_red(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    scale = 1.0 + 5 * tolerances["refinement_monthly_volume_relative_max"]
+    check = compare_refinement(
+        _refinement_side(paths, label="mv-c", nx=16),
+        _refinement_side(paths, label="mv-f", nx=32, monthly_scale=scale),
+        _support(),
+        tolerances,
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "monthly_volume_relative" in check.reason
+    assert check.metrics["so_pv_mae"] < tolerances["refinement_so_pv_mae_max"]
+
+
+def test_a_mapping_that_is_not_pore_volume_conservative_turns_red_first(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    # The same saturations on both grids, but the fine grid carries 5% more pore volume in
+    # every zone. Nothing about the saturation comparison would notice; the inventory and the
+    # structural pore-volume gate both do, and the pore-volume one is the one that says why.
+    check = compare_refinement(
+        _refinement_side(paths, label="pv-c", nx=16),
+        _refinement_side(paths, label="pv-f", nx=32, pore_volume_scale=1.05),
+        _support(),
+        tolerances,
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "support_pore_volume_relative" in check.reason
+    assert check.metrics["support_pore_volume_relative"] == pytest.approx(0.05, rel=1e-9)
+    assert check.metrics["inventory_relative"] == pytest.approx(0.05, rel=1e-2)
+    assert check.metrics["so_pv_mae"] < tolerances["refinement_so_pv_mae_max"]
+
+
+def test_a_refinement_whose_artifacts_are_missing_is_reported_unrun(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    coarse = _refinement_side(paths, label="unrun-c", nx=16)
+    fine = dict(_refinement_side(paths, label="unrun-f", nx=32))
+    del fine["monthly"]
+    check = compare_refinement(coarse, fine, _support(), tolerances)
+    assert check.status == "NOT_RUN"
+    assert check.reason is not None and "fine_monthly" in check.reason
+    assert check.metrics == {}
+    # The thresholds it WOULD have been scored against are still on the record.
+    assert "refinement_so_pv_mae_max" in check.thresholds
+    assert "so_pv_mae" in check.unrun_metrics
+
+
+def test_a_refinement_fixture_is_not_scored_by_the_single_result_evaluator(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    with pytest.raises(ValueError, match="compare_refinement"):
+        evaluate_physics("five_spot_refinement", _closed_outputs(paths), tolerances)
+
+
+def test_a_fixture_that_is_not_a_refinement_pair_is_refused_by_compare_refinement(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    support = CommonSupport(
+        name="five_spot",
+        n_zones=SUPPORT_SIDE**2,
+        coarse_zone_id=cartesian_zone_ids(16, 16, SUPPORT_SIDE),
+        fine_zone_id=cartesian_zone_ids(32, 32, SUPPORT_SIDE),
+    )
+    with pytest.raises(ValueError, match="registered refinement fixture"):
+        compare_refinement(
+            _refinement_side(paths, label="wrong-c", nx=16),
+            _refinement_side(paths, label="wrong-f", nx=32),
+            support,
+            tolerances,
+        )

@@ -38,35 +38,13 @@ from numpy.typing import NDArray
 
 from so_recon.config.resources import P0_VERIFY_PROFILE
 from so_recon.paths import ProjectPaths
-from so_recon.registry.hashing import sha256_file
-from so_recon.simulator.case_io import (
-    cartesian_neighbors,
-    compute_model_hash,
-    validate_case,
-    write_array,
-    write_arrays,
-)
+from so_recon.simulator.case_io import write_arrays
 from so_recon.simulator.contracts import (
     CELL_AXES,
-    CELL_DIM_AXES,
-    DIM_CELL_AXES,
-    FACE_AXES,
     STANDARD_GRAVITY_M_S2,
     TIME_CELL_AXES,
-    ArrayRef,
-    BoundarySpec,
-    CaseBundle,
-    ControlSegment,
-    CostRecord,
     FluidSpec,
     ForwardStatus,
-    GridSpec,
-    InitialStateSpec,
-    JobDescriptor,
-    ObservationSpec,
-    OutputRequest,
-    RockSpec,
-    WellSpec,
 )
 from so_recon.simulator.julia_bridge import (
     JuliaNotFoundError,
@@ -76,11 +54,7 @@ from so_recon.simulator.julia_bridge import (
 from so_recon.simulator.results import (
     BALANCES_FILENAME,
     CONNECTIONS_FILENAME,
-    RESULT_FILENAME,
     STATES_FILENAME,
-    load_forward_result,
-    publish_forward_result,
-    write_forward_result,
 )
 from so_recon.validation.physics import (
     DEFAULT_TOLERANCES_RELPATH,
@@ -88,6 +62,7 @@ from so_recon.validation.physics import (
     evaluate_physics,
     load_tolerances,
 )
+from tests.integration.fixture_result import publish_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 ANALYTIC_JL = ROOT / "julia" / "verification" / "analytic.jl"
@@ -113,165 +88,18 @@ def _skip_unless_julia_is_installed() -> Path:
         pytest.skip("julia executable not found")
 
 
-def _expected_cell_centers(
-    shape: tuple[int, int, int], extent: tuple[float, float, float], datum: float = 1000.0
-) -> NDArray[np.float64]:
-    """The fixture's geometry, recomputed here rather than trusted from the report."""
-    nx, ny, nz = shape
-    dx, dy, dz = (e / n for e, n in zip(extent, shape, strict=True))
-    out = np.zeros((nx * ny * nz, 3), dtype=np.float64)
-    for k in range(nz):
-        for j in range(ny):
-            for i in range(nx):
-                out[i + nx * (j + ny * k)] = (
-                    dx * i + 0.5 * dx,
-                    dy * j + 0.5 * dy,
-                    datum + dz * k + 0.5 * dz,
-                )
-    return out
-
-
-def _publish(fixture: dict[str, Any], paths: ProjectPaths, label: str) -> tuple[CaseBundle, Path]:
-    """Rebuild one Julia fixture as a real `CaseBundle` and prove it against its own files.
-
-    Every typed record is parsed through the production contract rather than trusted: an
-    illegal fluid, an initial saturation outside the mobile range the fluid declares, a
-    control with a role its target does not belong to or a geometry that is not the uniform
-    grid its shape implies would not survive these lines.
-    """
-    case_json = fixture["case"]
-    arrays = fixture["arrays"]
-    shape = tuple(int(n) for n in case_json["grid"]["shape"])
-    extent = tuple(float(e) for e in case_json["grid"]["extent_m"])
-    n_cells = shape[0] * shape[1] * shape[2]
-    centers = np.asarray(arrays["cell_centers_m"], dtype=np.float64)
-    assert centers == pytest.approx(_expected_cell_centers(shape, extent), rel=0, abs=1e-9)
-    cell_volume = float(np.prod(np.asarray(extent))) / n_cells
-
-    written: dict[str, ArrayRef] = {}
-    for name, values, unit, axes in (
-        ("cell_centers_m", centers, "m", CELL_DIM_AXES),
-        ("cell_volume_m3", np.full(n_cells, cell_volume, dtype=np.float64), "m3", CELL_AXES),
-        ("neighbors", cartesian_neighbors(shape), "1", FACE_AXES),
-        ("porosity", np.asarray(arrays["porosity"], dtype=np.float64), "1", CELL_AXES),
-        (
-            "permeability_m2",
-            np.asarray(arrays["permeability_m2"], dtype=np.float64),
-            "m2",
-            DIM_CELL_AXES,
-        ),
-        ("pressure_pa", np.asarray(arrays["pressure_pa"], dtype=np.float64), "Pa", CELL_AXES),
-        ("sw", np.asarray(arrays["sw"], dtype=np.float64), "1", CELL_AXES),
-    ):
-        written[name] = write_array(
-            paths.artifacts / f"arrays-{label}" / f"{name}.h5",
-            "values",
-            values,
-            unit=unit,
-            axis_order=axes,
-            paths=paths,
-        )
-
-    case = CaseBundle(
-        case_id=str(case_json["case_id"]),
-        world_id=f"world-e01-analytic-{label}",
-        start_date=str(case_json["start_date"]),
-        cutoff="2020-12-31",
-        report_edges_s=tuple(float(e) for e in case_json["report_edges_s"]),
-        grid=GridSpec(
-            shape=shape,  # type: ignore[arg-type]
-            extent_m=extent,  # type: ignore[arg-type]
-            cell_centers_m=written["cell_centers_m"],
-            cell_volume_m3=written["cell_volume_m3"],
-            neighbors=written["neighbors"],
-        ),
-        rock=RockSpec(porosity=written["porosity"], permeability_m2=written["permeability_m2"]),
-        fluids=FluidSpec.model_validate(case_json["fluids"]),
-        wells=tuple(WellSpec.model_validate(w) for w in case_json["wells"]),
-        controls=tuple(ControlSegment.model_validate(c) for c in case_json["controls"]),
-        initial=InitialStateSpec(
-            kind="explicit",
-            pressure_pa=written["pressure_pa"],
-            sw=written["sw"],
-            meaning="synthetic_initial",
-        ),
-        boundary=BoundarySpec(kind="closed", cells=()),
-        observations=ObservationSpec(dynamic_channels=(), pressure_available=False),
-        renderer_version="e01.9",
-        units=dict(case_json["units"]),
-        seeds={"fixture": 20260914},
-        source_hashes={"generator": "c" * 64},
-        model_hash="e" * 64,
-    )
-    case = case.model_copy(update={"model_hash": compute_model_hash(case)})
-    report = validate_case(case, paths)
-    assert report.valid, report.errors
-
-    case_path = paths.artifacts / f"case-{label}.json"
-    case_path.write_text(json.dumps(case.model_dump(mode="json")), encoding="utf-8")
-    return case, case_path
-
-
-def _cost(extraction: dict[str, Any]) -> CostRecord:
-    solver = extraction["solver"]
-    return CostRecord(
-        wall_s=0.0,
-        cpu_s=0.0,
-        peak_rss_bytes=0,
-        output_bytes=0,
-        accepted_steps=int(solver["accepted_steps"]),
-        cut_steps=int(solver["cut_steps"]),
-        nonlinear_iterations=int(solver["nonlinear_iterations"]),
-        retry_count=0,
-        measurement_method="solver report counters from the native extraction",
-    )
-
-
 def _publish_result(
     fixture: dict[str, Any], paths: ProjectPaths, label: str, report: dict[str, Any]
 ) -> Path:
-    """Publish one fixture as a real `ForwardResult`, read it back, and return its directory."""
-    case, case_path = _publish(fixture, paths, label)
-    solver_path = paths.artifacts / "solver" / "e01_solver.json"
-    solver_path.parent.mkdir(parents=True, exist_ok=True)
-    if not solver_path.exists():
-        solver_path.write_text(
-            json.dumps({"max_timestep_days": 1, "max_nonlinear_iterations": 30}), encoding="utf-8"
-        )
-    job = JobDescriptor(
-        job_id=f"job-e01-analytic-{label}",
-        case_path=paths.relative(case_path),
-        case_sha256=sha256_file(case_path),
-        model_hash=case.model_hash,
-        solver_config_path=paths.relative(solver_path),
-        solver_config_sha256=sha256_file(solver_path),
-        output_request=OutputRequest(
-            state_times_s=tuple(case.report_edges_s), keep_native_restart=False
-        ),
-        seed=20260914,
-        result_dir=f"artifacts/results/{label}",
-        attempt=1,
-    )
-    extraction = fixture["extraction"]
-    result = publish_forward_result(
-        job,
-        case,
-        extraction,
-        paths,
-        cost=_cost(extraction),
-        solver_metadata={
-            "version.Jutul": report["jutul_version"],
-            "version.JutulDarcy": report["jutuldarcy_version"],
-        },
-    )
+    """Publish one fixture as a real `ForwardResult`, read it back, and return its directory.
+
+    `tests.integration.fixture_result` does the work — rebuilding the case through the
+    production contract, publishing the extraction through the production publisher and
+    re-proving every digest on the way back — and is shared with Task 10's operational suite.
+    Every fixture of THIS file is supposed to complete, so that is asserted here.
+    """
+    result, result_dir = publish_fixture(fixture, paths, label, report, world="analytic")
     assert result.status == "COMPLETE", result.reason
-    result_dir = paths.resolve(job.result_dir)
-    record_path = result_dir / RESULT_FILENAME
-    write_forward_result(result, record_path)
-    # Every declared digest, shape, unit and physical range re-proved from the bytes on disk.
-    reloaded = load_forward_result(record_path, paths)
-    assert reloaded == result
-    assert reloaded.times_s == tuple(extraction["states"]["times_s"])
     return result_dir
 
 

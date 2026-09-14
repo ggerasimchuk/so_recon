@@ -349,8 +349,9 @@ function merge_extractions(
     starts, ends, dts = Float64[], Float64[], Float64[]
     intervals = Int[]
     connections = Any[]
+    boundary_rows = Any[]
     inventory, reservoir_inventory = Any[], Any[]
-    surface_source, connection_source = Any[], Any[]
+    surface_source, connection_source, boundary_source = Any[], Any[], Any[]
     evidence = Dict{String,Any}()
     wells = Dict{String,Any}()
     accepted, cut, iterations = 0, 0, 0
@@ -383,6 +384,12 @@ function merge_extractions(
             push!(connections, merged)
         end
 
+        for row in payload["boundary"]
+            merged = Dict{String,Any}(row)
+            merged["step"] = Int(row["step"]) + substep_offset
+            push!(boundary_rows, merged)
+        end
+
         if index == 1
             append!(inventory, payload["inventory_m3_sc"])
             append!(reservoir_inventory, payload["reservoir_inventory_m3_sc"])
@@ -394,6 +401,7 @@ function merge_extractions(
         end
         append!(surface_source, payload["net_surface_source_m3_sc"])
         append!(connection_source, payload["net_connection_source_m3_sc"])
+        append!(boundary_source, payload["net_boundary_source_m3_sc"])
 
         for (name, well) in payload["wells"]
             if !haskey(wells, name)
@@ -473,10 +481,12 @@ function merge_extractions(
         ),
         "wells" => wells,
         "connections" => connections,
+        "boundary" => boundary_rows,
         "inventory_m3_sc" => inventory,
         "reservoir_inventory_m3_sc" => reservoir_inventory,
         "net_surface_source_m3_sc" => surface_source,
         "net_connection_source_m3_sc" => connection_source,
+        "net_boundary_source_m3_sc" => boundary_source,
         "states" => merged_states,
         "solver" => Dict{String,Any}(
             "accepted_steps" => accepted,

@@ -409,9 +409,14 @@ def test_accepted_substeps_integrate_into_a_complete_verifiable_forward(
         ("reservoir_connections", "oil"),
     ]
     assert {row["source_term"] for row in balances} == {
-        "surface component flux (q_t * mix)",
-        "reservoir-well connection flux (geometry/state/PVT)",
+        "surface component flux (q_t * mix) + boundary influx",
+        "reservoir-well connection flux (geometry/state/PVT) + boundary influx",
     }
+    # This fixture is closed: it has no `FlowBoundaryCondition` at all, so the boundary part
+    # of both net sources is an exact zero and the extraction publishes no boundary row.
+    assert [row["boundary_source_m3_sc"] for row in balances] == [0.0, 0.0, 0.0, 0.0]
+    assert extraction["boundary"] == []
+    assert np.asarray(extraction["net_boundary_source_m3_sc"], dtype=np.float64).max() == 0.0
     # The absolute residual and the throughput ratio are on the record beside the relative
     # one, so a large standing inventory cannot hide a small offtake error.
     assert all(row["absolute_residual_m3_sc"] >= 0.0 for row in balances)

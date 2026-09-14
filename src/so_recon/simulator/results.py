@@ -66,7 +66,7 @@ from so_recon.validation.balance import BalanceMetrics, component_balance
 #: The shape of the extraction `julia/adapter/outputs.jl` writes. Bumped whenever that
 #: payload changes, and checked on the way in: a worker speaking an older shape is a
 #: refusal rather than a result assembled out of fields that mean something else now.
-EXTRACT_SCHEMA_VERSION = "forward-extract-1"
+EXTRACT_SCHEMA_VERSION = "forward-extract-2"
 
 #: Files published beside a result, and the keys their digests are recorded under in
 #: `ForwardResult.solver_metadata`. `ForwardResult` has three result paths of its own
@@ -315,6 +315,11 @@ BALANCE_SCHEMA = pa.schema(
         ("initial_inventory_m3_sc", pa.float64()),
         ("final_inventory_m3_sc", pa.float64()),
         ("net_source_m3_sc", pa.float64()),
+        # How much of `net_source_m3_sc` crossed a face no well owns. A `pressure_water`
+        # boundary is a source of the balanced system exactly as a wellhead is, so it is
+        # inside the net source above; naming it here is what stops a reader attributing an
+        # aquifer's water to a well. Zero for a closed case, which is every case but 10.6's.
+        ("boundary_source_m3_sc", pa.float64()),
         ("floor_m3_sc", pa.float64()),
         ("n_steps", pa.int64()),
     ]
@@ -417,33 +422,43 @@ def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float])
 _BALANCE_LABELS: dict[str, tuple[str, str]] = {
     "full_system_surface": (
         "reservoir + wellbores",
-        "surface component flux (q_t * mix)",
+        "surface component flux (q_t * mix) + boundary influx",
     ),
     "reservoir_connections": (
         "reservoir",
-        "reservoir-well connection flux (geometry/state/PVT)",
+        "reservoir-well connection flux (geometry/state/PVT) + boundary influx",
     ),
 }
 
 
-def balance_table(balances: Mapping[str, BalanceMetrics]) -> pa.Table:
+def balance_table(
+    balances: Mapping[str, BalanceMetrics], boundary_source_m3_sc: Mapping[str, float]
+) -> pa.Table:
     """Every published balance as one row per (balance, component).
 
     Both statements are in the same table, each labelled with the system it closed over and
     the source term it closed against, in the order `BALANCE_SYSTEMS` declares them. Plan
     12.9 has the stage validator read the PUBLISHED results rather than re-run the suite, so
     a balance that only exists inside a test is invisible to the gate that has to cite it.
+
+    `boundary_source_m3_sc` is the part of each net source that crossed the reservoir's outer
+    boundary, per component. It is REQUIRED rather than defaulted: a table that quietly wrote
+    zero there would say a case had no aquifer support when nobody had looked.
     """
     rows: list[dict[str, Any]] = []
     for name, _, _ in BALANCE_SYSTEMS:
         metrics = balances[name]
         system, source_term = _BALANCE_LABELS[name]
-        rows.extend(_balance_rows(name, system, source_term, metrics))
+        rows.extend(_balance_rows(name, system, source_term, metrics, boundary_source_m3_sc))
     return pa.Table.from_pylist(rows, schema=BALANCE_SCHEMA)
 
 
 def _balance_rows(
-    balance: str, system: str, source_term: str, metrics: BalanceMetrics
+    balance: str,
+    system: str,
+    source_term: str,
+    metrics: BalanceMetrics,
+    boundary_source_m3_sc: Mapping[str, float],
 ) -> list[dict[str, Any]]:
     return [
         {
@@ -460,6 +475,7 @@ def _balance_rows(
             "initial_inventory_m3_sc": metrics.initial_inventory_m3_sc[index],
             "final_inventory_m3_sc": metrics.final_inventory_m3_sc[index],
             "net_source_m3_sc": metrics.net_source_m3_sc[index],
+            "boundary_source_m3_sc": boundary_source_m3_sc[name],
             "floor_m3_sc": metrics.floor_m3_sc,
             "n_steps": metrics.n_steps,
         }
@@ -758,6 +774,24 @@ def extraction_balance(payload: Mapping[str, Any]) -> BalanceMetrics:
     return extraction_balances(payload)[HEADLINE_BALANCE]
 
 
+def extraction_boundary_source(payload: Mapping[str, Any]) -> dict[str, float]:
+    """Cumulative standard volume each component gained across the outer boundary, m3_sc.
+
+    Positive INTO the reservoir, which is the sign of every other source in this file. The
+    adapter has already added this into both net sources — a boundary feeds the reservoir,
+    which is inside both balanced systems — so this is the NAMED part of them and never a
+    third term to add on top.
+    """
+    components = _components_of(payload)
+    matrix = _matrix(payload, "net_boundary_source_m3_sc", where="extraction")
+    if matrix.ndim != 2 or matrix.shape[1] != len(components):
+        raise ExtractionError(
+            f"net_boundary_source_m3_sc must give one row per substep and one column per "
+            f"component {list(components)}, got shape {matrix.shape}"
+        )
+    return {name: float(matrix[:, index].sum()) for index, name in enumerate(components)}
+
+
 # --------------------------------------------------------------------------------------
 # publication (plan 7.7)
 # --------------------------------------------------------------------------------------
@@ -863,12 +897,13 @@ def write_forward_outputs(
     _reject_flow_without_uptime(monthly, schedule)
     connection_months = integrate_connections(connections, month_edges)
     balances = extraction_balances(payload)
+    boundary_source = extraction_boundary_source(payload)
 
     written: dict[str, str] = {}
     for filename, table in (
         (MONTHLY_FILENAME, monthly),
         (CONNECTIONS_FILENAME, connection_months),
-        (BALANCES_FILENAME, balance_table(balances)),
+        (BALANCES_FILENAME, balance_table(balances, boundary_source)),
         (STEPS_FILENAME, accepted_step_table(payload, schedule)),
     ):
         written[filename] = _write_parquet(result_dir / filename, table)

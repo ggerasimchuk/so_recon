@@ -37,10 +37,19 @@
 # equal the sum of the connection fluxes at every instant — the difference is the wellbore
 # filling or emptying — so the two balances are kept apart: the reservoir against the
 # connections, and the reservoir plus the wells against the surface.
+#
+# A BOUNDARY IS A SOURCE AND IS COUNTED AS ONE. A `pressure_water` boundary (plan 10.6) puts
+# mass into the reservoir across a face no well owns, so BOTH balances above would be short
+# by exactly that much if it were left out — and would be short silently, because a balance
+# that ignores a term does not report a missing term, it reports a residual. The boundary
+# flux is therefore evaluated per accepted substep with JutulDarcy's OWN
+# `compute_bc_mass_fluxes`, published on its own as `net_boundary_source_m3_sc` and as one
+# row per boundary cell per substep, and added into both source terms. For a closed case it
+# is an exact zero and nothing above changes.
 
 #: The shape of the payload this file writes. The Python side checks it: a reader that
 #: guesses which version it is looking at is a reader that will one day guess wrong.
-const EXTRACT_SCHEMA_VERSION = "forward-extract-1"
+const EXTRACT_SCHEMA_VERSION = "forward-extract-2"
 
 #: Water first, oil second — the order `OW_PHASES` fixes and the whole exchange uses.
 const EXTRACT_COMPONENTS = ("water", "oil")
@@ -310,6 +319,55 @@ function connection_component_flux(system, reservoir, well, cross_term, mask::Ve
     return flux
 end
 
+"""
+    interval_boundary_conditions(force) -> Vector
+
+The `FlowBoundaryCondition`s one interval's forces really carry, or an empty list.
+
+`setup_reservoir_forces` stores them as `forces[:Reservoir].bc` (`JutulDarcy/src/utils.jl:1702`),
+and `nothing` there is a closed boundary rather than a missing one — `build_forces` is the
+only thing that ever fills the field and it writes `nothing` for `kind == "closed"`.
+"""
+function interval_boundary_conditions(force)
+    reservoir_force = get(force, :Reservoir, nothing)
+    reservoir_force === nothing && return Any[]
+    bc = get(reservoir_force, :bc, nothing)
+    bc === nothing && return Any[]
+    return collect(bc)
+end
+
+"""
+    boundary_component_flux(model, system, reservoir, bcs) -> Matrix (nph, n_bc)
+
+Component mass flux across each boundary condition, kg/s, POSITIVE OUT of the reservoir —
+the same sign `apply_forces_to_equation!` adds to the reservoir's accumulation.
+
+The kernel is `JutulDarcy.compute_bc_mass_fluxes`, called on the substep's own evaluated
+reservoir state, so the pressure drop, the mobilities and the densities are the ones the
+solver used; `q_tot = trans_flow * (p_cell - p_bc)` splits by the CELL's mobilities on the way
+out and by the boundary's declared `fractional_flow` on the way in, and none of that is
+restated here. Recomputing it from a pressure difference and a hand-written mobility would be
+a second, unvalidated flux living beside the one the solver assembled.
+"""
+function boundary_component_flux(model, system, reservoir, bcs)
+    n_phases = length(JutulDarcy.reference_densities(system))
+    flux = zeros(Float64, n_phases, length(bcs))
+    isempty(bcs) && return flux
+    state_res = Jutul.convert_to_immutable_storage(reservoir)
+    gmap = Jutul.global_map(model.models[:Reservoir].domain)
+    for (i, bc) in enumerate(bcs)
+        q = JutulDarcy.compute_bc_mass_fluxes(system, bc, gmap, state_res)
+        length(q) == n_phases || invalid(
+            "extract_interval: the native boundary flux returned $(length(q)) components for " *
+            "a $(n_phases)-phase system",
+        )
+        for ph in 1:n_phases
+            flux[ph, i] = Jutul.value(q[ph])
+        end
+    end
+    return flux
+end
+
 # --------------------------------------------------------------------------------------
 # the extraction
 # --------------------------------------------------------------------------------------
@@ -424,7 +482,9 @@ function extract_interval(
     inventory = Vector{Vector{Float64}}()
     reservoir_inventory = Vector{Vector{Float64}}()
     connection_rows = Any[]
+    boundary_rows = Any[]
     connection_source = Vector{Vector{Float64}}()
+    boundary_source = Vector{Vector{Float64}}()
     surface_source = Vector{Vector{Float64}}()
 
     # The inventory of the FIRST substep is the state before it, which the solver never
@@ -471,12 +531,39 @@ function extract_interval(
                 )
             end
         end
+        # The boundary, on the same substep and with the same native kernel the solver used.
+        bcs = interval_boundary_conditions(step_forces[k])
+        bc_flux = boundary_component_flux(model, system, evaluated[:Reservoir], bcs)
+        for (i, bc) in enumerate(bcs)
+            push!(
+                boundary_rows,
+                Dict{String,Any}(
+                    "boundary_id" => i - 1,
+                    "cell_id" => Int(bc.cell) - 1,
+                    "step" => k - 1,
+                    "pressure_pa" => Float64(bc.pressure),
+                    "trans_flow" => Float64(bc.trans_flow),
+                    # Positive out of the reservoir, exactly as the native kernel returns it.
+                    "water_mass_kg_s" => bc_flux[1, i],
+                    "oil_mass_kg_s" => bc_flux[2, i],
+                    "total_mass_kg_s" => sum(view(bc_flux, :, i)),
+                ),
+            )
+        end
         # Into standard volume, like the inventory it is balanced against: the cross term
         # is a component MASS flux in kg/s, and the inventory is `TotalMasses / rho_sc`.
-        push!(connection_source, (into_reservoir ./ rhoS) .* dt[k])
+        into_from_boundary = -vec(sum(bc_flux, dims = 2))
+        push!(boundary_source, (into_from_boundary ./ rhoS) .* dt[k])
+        # A boundary feeds the RESERVOIR, which is inside both balanced systems, so its
+        # source belongs to both statements. It is published separately as well, so a reader
+        # can see how much of either source term crossed a face no well owns.
+        push!(connection_source, ((into_reservoir .+ into_from_boundary) ./ rhoS) .* dt[k])
         push!(
             surface_source,
-            Float64[sum(surface_mass[w][c][k] for w in names) / rhoS[c] * dt[k] for c in 1:n_phases],
+            Float64[
+                (sum(surface_mass[w][c][k] for w in names) + into_from_boundary[c]) / rhoS[c] *
+                dt[k] for c in 1:n_phases
+            ],
         )
         push!(reservoir_inventory, component_inventory(evaluated, :Reservoir, rhoS))
         push!(
@@ -514,10 +601,12 @@ function extract_interval(
         ),
         "wells" => wells_out,
         "connections" => connection_rows,
+        "boundary" => boundary_rows,
         "inventory_m3_sc" => inventory,
         "reservoir_inventory_m3_sc" => reservoir_inventory,
         "net_surface_source_m3_sc" => surface_source,
         "net_connection_source_m3_sc" => connection_source,
+        "net_boundary_source_m3_sc" => boundary_source,
         "states" => requested_states(
             model, parameters, states, state0, starts, ends, rhoS, state_times_s,
         ),

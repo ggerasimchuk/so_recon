@@ -412,7 +412,7 @@ def _extraction() -> dict[str, Any]:
 
     times = [0.0, 15.0 * DAY, 30.0 * DAY]
     return {
-        "schema_version": "forward-extract-1",
+        "schema_version": "forward-extract-2",
         "status": "COMPLETE",
         "reason": None,
         "components": ["water", "oil"],
@@ -428,10 +428,13 @@ def _extraction() -> dict[str, Any]:
         },
         "wells": wells,
         "connections": connections,
+        # A closed case: no boundary condition exists, so nothing crossed one.
+        "boundary": [],
         "inventory_m3_sc": inventory,
         "reservoir_inventory_m3_sc": reservoir_inventory,
         "net_surface_source_m3_sc": source,
         "net_connection_source_m3_sc": connection_source,
+        "net_boundary_source_m3_sc": [[0.0, 0.0] for _ in range(_N_SUBSTEPS)],
         "states": {
             "times_s": times,
             "pressure_pa": [[2.5e7 - 1e5 * index] * N_CELLS for index in range(len(times))],
@@ -659,10 +662,14 @@ def test_a_published_result_is_complete_and_loads_back(tmp_project: Path) -> Non
         ("reservoir_connections", "oil"),
     ]
     assert {row["source_term"] for row in balances} == {
-        "surface component flux (q_t * mix)",
-        "reservoir-well connection flux (geometry/state/PVT)",
+        "surface component flux (q_t * mix) + boundary influx",
+        "reservoir-well connection flux (geometry/state/PVT) + boundary influx",
     }
     assert {row["system"] for row in balances} == {"reservoir + wellbores", "reservoir"}
+    # This case is closed, so the boundary part of both net sources is an exact zero — and
+    # it is PUBLISHED as a zero rather than left out, so a reader can tell "no aquifer" from
+    # "nobody looked".
+    assert [row["boundary_source_m3_sc"] for row in balances] == [0.0, 0.0, 0.0, 0.0]
     assert all(row["absolute_residual_m3_sc"] == pytest.approx(0.0) for row in balances)
     # The unprefixed metadata keys stay the whole-model statement, and the other one is
     # beside them under its own name rather than replacing it.

@@ -228,6 +228,41 @@ def bl_cell_average(
 
 
 # --------------------------------------------------------------------------------------
+# 10.3 the support aggregation
+# --------------------------------------------------------------------------------------
+
+
+def aggregate_so(
+    so: NDArray[np.float64],
+    pv: NDArray[np.float64],
+    zone_id: NDArray[np.int64],
+    n_zones: int,
+) -> NDArray[np.float64]:
+    """Pore-volume-weighted mean oil saturation of each of `n_zones` support zones.
+
+    A support average is a PORE VOLUME average and never a cell-count one: two cells of the
+    same zone at 0.2 and 0.8 with pore volumes 1 and 3 average to 0.65, not to 0.5, and a
+    refinement comparison built on the unweighted mean would be comparing two different
+    quantities as if they were one.
+
+    A zone that collected NO pore volume comes back `nan`, never `0.0`. Zero is a saturation
+    somebody will plot, cite and average further; the absence of a measurement is not a dry
+    zone, and `np.divide(..., where=den > 0)` is what keeps the two apart.
+
+    This is the KERNEL. Shape, finiteness and index-range validation happen in the caller
+    (`compare_refinement` does them for the published states it reads) so that this function
+    has exactly one behaviour and no opinion about where its inputs came from. Inventory is
+    NOT aggregated here and must never be reconstructed as `mean So * mean B`: a mean of a
+    ratio is not the ratio of the means, and `_component_inventory_m3_sc` sums it cell by
+    cell instead.
+    """
+    num = np.bincount(zone_id, weights=pv * so, minlength=n_zones)
+    den = np.bincount(zone_id, weights=pv, minlength=n_zones)
+    mean: NDArray[np.float64] = np.divide(num, den, out=np.full(n_zones, np.nan), where=den > 0)
+    return mean
+
+
+# --------------------------------------------------------------------------------------
 # 9.2 the record one check produces
 # --------------------------------------------------------------------------------------
 
@@ -305,13 +340,15 @@ class Fixture:
     the integration test proves the published case carries them.
     """
 
-    family: Literal["closed", "hydrostatic", "segregation", "bl"]
+    family: Literal["closed", "hydrostatic", "segregation", "bl", "five_spot", "refinement"]
     roles: tuple[str, ...]
     gates: tuple[Gate, ...]
     #: Thresholds that are not tolerances: a sign, a direction, a structural zero.
     structural_thresholds: dict[str, float]
     #: Depth of each cell centre, m, for the vertical fixtures. Empty otherwise.
     cell_center_depth_m: tuple[float, ...] = ()
+    #: `(nx, ny, nz)` of the case, for the areal fixtures whose metric is a reflection.
+    grid_shape: tuple[int, int, int] = ()  # type: ignore[assignment]
     #: Pore volumes of water injected over `horizon_s`, for the BL fixture.
     injected_pore_volumes: float = 0.0
     horizon_s: float = 0.0
@@ -358,6 +395,29 @@ _SEGREGATION_GATES: tuple[Gate, ...] = (
     Gate("water_mean_depth_increase_m", "water_mean_depth_increase_min_m", "greater_than"),
 )
 
+#: The five-spot is a SYMMETRY claim about a field that has to vary. The symmetry gate alone
+#: would be satisfied by a uniform saturation, which is symmetric about every axis and says
+#: nothing at all, so the structural companion requires the answer to have a range; the zero
+#: below is a structural requirement and not a threshold anybody may tune. The connection gate
+#: is deliberately ABSENT — every connection of this pattern is open and carrying flow.
+_FIVE_SPOT_GATES: tuple[Gate, ...] = (
+    *_BALANCE_GATES,
+    *_SATURATION_GATES,
+    Gate("five_spot_symmetry_abs", "five_spot_symmetry_abs_max", "at_most"),
+    Gate("five_spot_so_range", "five_spot_so_range_min", "greater_than"),
+)
+
+#: What a refinement pair is scored on. `support_pore_volume_relative` is structural: two
+#: grids that tile the same physical zones carry the same pore volume in each of them to
+#: round-off, and a mapping that is not pore-volume-conservative is a mapping whose saturation
+#: comparison means nothing — so it is checked FIRST and it is not a tolerance to widen.
+_REFINEMENT_GATES: tuple[Gate, ...] = (
+    Gate("support_pore_volume_relative", "support_pore_volume_relative_max", "at_most"),
+    Gate("so_pv_mae", "refinement_so_pv_mae_max", "at_most"),
+    Gate("inventory_relative", "refinement_inventory_relative_max", "at_most"),
+    Gate("monthly_volume_relative", "refinement_monthly_volume_relative_max", "at_most"),
+)
+
 _BL_GATES: tuple[Gate, ...] = (
     *_BALANCE_GATES,
     *_SATURATION_GATES,
@@ -370,6 +430,14 @@ _BL_GATES: tuple[Gate, ...] = (
 _COLUMN_DEPTHS_M = (1025.0, 1075.0)
 
 _CLOSED_ROLES = ("states", "balances", "connections")
+
+#: The 10.7 five-spot: 16 x 16 cells in one layer, over 400 x 400 x 10 m.
+FIVE_SPOT_SHAPE: tuple[int, int, int] = (16, 16, 1)
+
+#: How exactly two nested Cartesian grids have to agree on the pore volume of a shared zone.
+#: Not a physical tolerance: the zones are unions of whole cells on both grids and the rock is
+#: the same continuous field, so the two sums differ only by the order they were added in.
+SUPPORT_PV_EXACTNESS = 1e-9
 
 _FIXTURES: dict[str, Fixture] = {
     "closed_cell_pvt": Fixture(
@@ -391,6 +459,19 @@ _FIXTURES: dict[str, Fixture] = {
         gates=_SEGREGATION_GATES,
         structural_thresholds={"water_mean_depth_increase_min_m": 0.0},
         cell_center_depth_m=_COLUMN_DEPTHS_M,
+    ),
+    "five_spot": Fixture(
+        family="five_spot",
+        roles=_CLOSED_ROLES,
+        gates=_FIVE_SPOT_GATES,
+        structural_thresholds={"five_spot_so_range_min": 0.0},
+        grid_shape=FIVE_SPOT_SHAPE,
+    ),
+    "five_spot_refinement": Fixture(
+        family="refinement",
+        roles=("coarse_states", "coarse_monthly", "fine_states", "fine_monthly"),
+        gates=_REFINEMENT_GATES,
+        structural_thresholds={"support_pore_volume_relative_max": SUPPORT_PV_EXACTNESS},
     ),
     "bl": Fixture(
         family="bl",
@@ -726,6 +807,315 @@ def _bl_metrics(
 
 
 # --------------------------------------------------------------------------------------
+# 10.7 the five-spot: a reflection, measured
+# --------------------------------------------------------------------------------------
+
+
+def mirror_symmetry_abs(
+    field: NDArray[np.float64], shape: tuple[int, int, int]
+) -> tuple[float, float]:
+    """The largest `|f - reflect(f)|` of an areal field about each of the two grid axes.
+
+    `shape` is `(nx, ny, nz)` with a single layer, and cells are numbered `i + nx*j` exactly
+    as the exchange declares. The reflections are `i -> nx-1-i` and `j -> ny-1-j`, which are
+    the mirrors the five-spot's wells are placed about: the injectors sit at `2` and `13` on
+    a 16-cell axis and the producer's four cells at `7` and `8`, so a converged answer has to
+    be symmetric about both and nothing in the fixture forces it to be.
+    """
+    nx, ny, nz = shape
+    if nz != 1:
+        raise ArtifactUnreadable(f"an areal reflection needs a single layer, got shape {shape}")
+    if field.size != nx * ny:
+        raise ArtifactUnreadable(
+            f"the published field has {field.size} cells; this fixture is {nx}x{ny}"
+        )
+    grid = np.asarray(field, dtype=np.float64).reshape(ny, nx)
+    return (
+        float(np.abs(grid - grid[:, ::-1]).max()),
+        float(np.abs(grid - grid[::-1, :]).max()),
+    )
+
+
+def _five_spot_metrics(
+    states: Mapping[str, NDArray[np.float64]], fixture: Fixture
+) -> dict[str, float]:
+    """The symmetry of the LAST published oil saturation, and the range it varies over."""
+    final = states["so"][-1]
+    about_x, about_y = mirror_symmetry_abs(final, fixture.grid_shape)
+    return {
+        "five_spot_symmetry_x_abs": about_x,
+        "five_spot_symmetry_y_abs": about_y,
+        "five_spot_symmetry_abs": max(about_x, about_y),
+        # Non-vacuity: a uniform field is symmetric about every axis and demonstrates nothing.
+        "five_spot_so_range": float(final.max() - final.min()),
+    }
+
+
+# --------------------------------------------------------------------------------------
+# 10.8 the refinement comparison
+# --------------------------------------------------------------------------------------
+
+
+def cartesian_zone_ids(nx: int, ny: int, zones_per_side: int) -> NDArray[np.int64]:
+    """The support zone each cell of an `nx x ny` areal grid falls in, zero-based.
+
+    `zones_per_side` must divide both axes exactly, which is what makes the support a
+    partition of WHOLE cells: every cell lies entirely inside one zone, so its intersection
+    pore volume with that zone is its own pore volume and two nested grids correspond exactly
+    without any geometry library. A support that cut cells would need real intersection areas
+    and is refused here rather than approximated.
+    """
+    if nx <= 0 or ny <= 0 or zones_per_side <= 0:
+        raise ValueError(f"a support of {zones_per_side} zones over {nx}x{ny} is not a grid")
+    if nx % zones_per_side or ny % zones_per_side:
+        raise ValueError(
+            f"a {zones_per_side}-zone support does not tile an {nx}x{ny} grid into whole "
+            "cells; the zones of a refinement comparison are unions of cells on BOTH grids"
+        )
+    fx, fy = nx // zones_per_side, ny // zones_per_side
+    i = np.arange(nx) // fx
+    j = np.arange(ny) // fy
+    return np.asarray(
+        (i[None, :] + zones_per_side * j[:, None]).ravel().astype(np.int64), dtype=np.int64
+    )
+
+
+@dataclass(frozen=True)
+class CommonSupport:
+    """The fixed physical zones two grids are compared on, and which cell falls in each.
+
+    This is the `common_support` of plan 10.8: the zones are physical, they are the same on
+    both grids, and because the grids are nested Cartesian ones every cell lies wholly inside
+    one zone — so the intersection pore volume of a cell with its zone is the cell's own pore
+    volume and `compare_refinement` can take it from the published states. The check that the
+    two grids really do carry the same pore volume in each zone is the FIRST thing scored, so
+    a mapping that is not pore-volume-conservative is caught before any saturation is compared.
+    """
+
+    name: str
+    n_zones: int
+    coarse_zone_id: NDArray[np.int64]
+    fine_zone_id: NDArray[np.int64]
+
+    def __post_init__(self) -> None:
+        if self.n_zones <= 0:
+            raise ValueError(f"{self.name}: a support has at least one zone, got {self.n_zones}")
+        for label, ids in (("coarse", self.coarse_zone_id), ("fine", self.fine_zone_id)):
+            array = np.asarray(ids)
+            if array.ndim != 1 or array.size == 0:
+                raise ValueError(f"{self.name}: the {label} zone map is one id per cell")
+            if not np.issubdtype(array.dtype, np.integer):
+                raise ValueError(f"{self.name}: zone ids are integers, got {array.dtype}")
+            if array.min() < 0 or array.max() >= self.n_zones:
+                raise ValueError(
+                    f"{self.name}: a {label} zone id lies outside [0, {self.n_zones}); the "
+                    "caller validates the index range before the aggregation, not after"
+                )
+            if np.unique(array).size != self.n_zones:
+                raise ValueError(
+                    f"{self.name}: the {label} grid leaves some of the {self.n_zones} zones "
+                    "empty; an empty zone is an unmeasured zone and is never a zero"
+                )
+
+
+#: What the refinement comparison reads from each published result.
+_REFINEMENT_ROLES = ("states", "monthly")
+
+#: The monthly phase integrals of one result, per month, in the order they are compared.
+_MONTHLY_VOLUME_COLUMNS = ("oil_prod_m3_sc", "water_prod_m3_sc", "water_inj_m3_sc")
+
+
+def _component_inventory_m3_sc(
+    states: Mapping[str, NDArray[np.float64]], index: int
+) -> dict[str, float]:
+    """Standard-volume inventory of each component at one published time.
+
+    Summed CELL BY CELL: `sum(S * PV / B)`, never `mean(S) * mean(B) * PV`. The mean of a
+    ratio is not the ratio of the means, and a refinement comparison built on the latter would
+    compare two different quantities and call the difference discretisation error.
+    """
+    pore = states["pore_volume_m3"][index]
+    return {
+        "water": float(np.sum(states["sw"][index] * pore / states["bw"][index])),
+        "oil": float(np.sum(states["so"][index] * pore / states["bo"][index])),
+    }
+
+
+def _monthly_volumes(path: Path) -> dict[str, NDArray[np.float64]]:
+    """Every well's monthly phase integrals, summed to the field, one row per month."""
+    rows = _read_table(path, ("month_index", *_MONTHLY_VOLUME_COLUMNS))
+    months = [int(m) for m in rows["month_index"]]
+    n_months = max(months) + 1
+    out: dict[str, NDArray[np.float64]] = {}
+    for column in _MONTHLY_VOLUME_COLUMNS:
+        totals = np.zeros(n_months, dtype=np.float64)
+        for month, value in zip(months, rows[column], strict=True):
+            totals[month] += float(value)
+        out[column] = totals
+    return out
+
+
+def _refinement_metrics(
+    coarse: Mapping[str, Path], fine: Mapping[str, Path], support: CommonSupport
+) -> dict[str, float]:
+    grids: dict[str, dict[str, Any]] = {}
+    for label, outputs, zone_id in (
+        ("coarse", coarse, support.coarse_zone_id),
+        ("fine", fine, support.fine_zone_id),
+    ):
+        states = _read_states(outputs["states"])
+        so = np.asarray(states["so"][-1], dtype=np.float64)
+        pore = np.asarray(states["pore_volume_m3"][-1], dtype=np.float64)
+        if so.size != zone_id.size:
+            raise ArtifactUnreadable(
+                f"{support.name}: the {label} result describes {so.size} cells and its zone "
+                f"map covers {zone_id.size}"
+            )
+        if not np.isfinite(so).all() or not np.isfinite(pore).all():
+            raise ArtifactUnreadable(f"{support.name}: the {label} result is not finite")
+        if (pore < 0.0).any():
+            raise ArtifactUnreadable(f"{support.name}: the {label} result has a negative volume")
+        grids[label] = {
+            "zone_so": aggregate_so(so, pore, zone_id, support.n_zones),
+            "zone_pv": np.bincount(zone_id, weights=pore, minlength=support.n_zones),
+            "inventory": _component_inventory_m3_sc(states, -1),
+            "monthly": _monthly_volumes(outputs["monthly"]),
+            "n_cells": float(so.size),
+        }
+
+    coarse_pv = grids["coarse"]["zone_pv"]
+    fine_pv = grids["fine"]["zone_pv"]
+    pv_denominator = np.maximum(np.abs(coarse_pv), VOLUME_DENOMINATOR_FLOOR)
+    zone_so_coarse = grids["coarse"]["zone_so"]
+    zone_so_fine = grids["fine"]["zone_so"]
+    if not np.isfinite(zone_so_coarse).all() or not np.isfinite(zone_so_fine).all():
+        raise ArtifactUnreadable(
+            f"{support.name}: a support zone collected no pore volume, so its mean saturation "
+            "is unmeasured; an unmeasured zone is never compared as if it were a dry one"
+        )
+    weights = coarse_pv / max(float(coarse_pv.sum()), VOLUME_DENOMINATOR_FLOOR)
+    zone_difference = np.abs(zone_so_coarse - zone_so_fine)
+
+    inventory_relative = max(
+        abs(grids["fine"]["inventory"][name] - grids["coarse"]["inventory"][name])
+        / max(abs(grids["coarse"]["inventory"][name]), VOLUME_DENOMINATOR_FLOOR)
+        for name in ("water", "oil")
+    )
+
+    coarse_monthly = grids["coarse"]["monthly"]
+    fine_monthly = grids["fine"]["monthly"]
+    n_months = len(coarse_monthly[_MONTHLY_VOLUME_COLUMNS[0]])
+    if n_months != len(fine_monthly[_MONTHLY_VOLUME_COLUMNS[0]]):
+        raise ArtifactUnreadable(
+            f"{support.name}: the two results report {n_months} and "
+            f"{len(fine_monthly[_MONTHLY_VOLUME_COLUMNS[0]])} months; a refinement compares "
+            "the same horizon"
+        )
+    # THE DENOMINATOR, stated once. Each monthly phase integral is divided by the month's own
+    # total liquid THROUGHPUT — everything produced and injected in it — and not by its own
+    # value. A phase integral that is a millionth of the month's throughput is numerical noise,
+    # and dividing two of them by each other measures the noise floor rather than the physics;
+    # the frozen 2% is about volumes somebody would forecast. The self-relative number is
+    # reported beside it, never as the gate, so a large relative disagreement on a negligible
+    # phase stays visible.
+    throughput = sum(coarse_monthly[column] for column in _MONTHLY_VOLUME_COLUMNS)
+    throughput_denominator = np.maximum(np.abs(throughput), VOLUME_DENOMINATOR_FLOOR)
+    monthly_relative = 0.0
+    monthly_self_relative = 0.0
+    monthly_absolute = 0.0
+    for column in _MONTHLY_VOLUME_COLUMNS:
+        difference = np.abs(fine_monthly[column] - coarse_monthly[column])
+        monthly_absolute = max(monthly_absolute, float(difference.max()))
+        monthly_relative = max(monthly_relative, float((difference / throughput_denominator).max()))
+        own = np.maximum(np.abs(coarse_monthly[column]), VOLUME_DENOMINATOR_FLOOR)
+        monthly_self_relative = max(monthly_self_relative, float((difference / own).max()))
+
+    return {
+        "support_pore_volume_relative": float((np.abs(fine_pv - coarse_pv) / pv_denominator).max()),
+        "so_pv_mae": float(np.sum(zone_difference * weights)),
+        "so_zone_max_abs": float(zone_difference.max()),
+        "so_zone_range_coarse": float(zone_so_coarse.max() - zone_so_coarse.min()),
+        "inventory_relative": inventory_relative,
+        "monthly_volume_relative": monthly_relative,
+        "monthly_volume_self_relative": monthly_self_relative,
+        "monthly_volume_absolute_m3_sc": monthly_absolute,
+        "n_zones": float(support.n_zones),
+        "n_months": float(n_months),
+        "coarse_cells": grids["coarse"]["n_cells"],
+        "fine_cells": grids["fine"]["n_cells"],
+    }
+
+
+def compare_refinement(
+    coarse_result: Mapping[str, Path],
+    fine_result: Mapping[str, Path],
+    common_support: CommonSupport,
+    tolerances: Mapping[str, float],
+) -> PhysicsCheck:
+    """Score one refinement pair: the same continuous problem on two grids.
+
+    `coarse_result` and `fine_result` map `states` and `monthly` to the files each forward
+    really published. What comes back is a DISCRETIZATION SENSITIVITY verdict and nothing
+    more: it says how much of the answer moved when the mesh and the timestep were refined,
+    and it does not say the fine answer is the truth. Nothing here calls the fine grid a
+    posterior, and the fixture that produced it is a forward.
+    """
+    fixture = _FIXTURES.get(common_support.name)
+    if fixture is None or fixture.family != "refinement":
+        raise ValueError(
+            f"{common_support.name!r} is not a registered refinement fixture; this build "
+            f"compares {[n for n, f in sorted(_FIXTURES.items()) if f.family == 'refinement']}"
+        )
+    checked = require_tolerances(tolerances)
+    thresholds = _thresholds_for(fixture, checked)
+    present: dict[str, Path] = {}
+    for prefix, outputs in (("coarse", coarse_result), ("fine", fine_result)):
+        for role in _REFINEMENT_ROLES:
+            if role in outputs:
+                present[f"{prefix}_{role}"] = Path(outputs[role])
+    hashes = {role: sha256_file(path) for role, path in sorted(present.items()) if path.is_file()}
+    evidence = tuple(str(path) for _, path in sorted(present.items()))
+
+    missing = [role for role in fixture.roles if role not in present]
+    if missing:
+        return PhysicsCheck(
+            name=common_support.name,
+            status="NOT_RUN",
+            metrics={},
+            thresholds=thresholds,
+            input_hashes=hashes,
+            evidence_paths=evidence,
+            reason=(
+                f"{common_support.name}: no artifact was given for {missing}; the comparison "
+                f"did not run and its metrics {sorted({g.metric for g in fixture.gates})} are "
+                "unmeasured"
+            ),
+        )
+    try:
+        metrics = _refinement_metrics(coarse_result, fine_result, common_support)
+    except ArtifactUnreadable as exc:
+        return PhysicsCheck(
+            name=common_support.name,
+            status="NOT_RUN",
+            metrics={},
+            thresholds=thresholds,
+            input_hashes=hashes,
+            evidence_paths=evidence,
+            reason=f"{common_support.name}: the published artifacts could not be compared: {exc}",
+        )
+    failures = _failed_gates(fixture, metrics, thresholds)
+    return PhysicsCheck(
+        name=common_support.name,
+        status="FAIL" if failures else "PASS",
+        metrics=metrics,
+        thresholds=thresholds,
+        input_hashes=hashes,
+        evidence_paths=evidence,
+        reason=f"{common_support.name}: " + "; ".join(failures) if failures else None,
+    )
+
+
+# --------------------------------------------------------------------------------------
 # 9.2 the evaluator
 # --------------------------------------------------------------------------------------
 
@@ -764,7 +1154,26 @@ def _measure(
         metrics.update(_hydrostatic_metrics(states, fixture.cell_center_depth_m))
     elif fixture.family == "segregation":
         metrics.update(_segregation_metrics(states, fixture.cell_center_depth_m))
+    elif fixture.family == "five_spot":
+        metrics.update(_five_spot_metrics(states, fixture))
     return metrics
+
+
+def _failed_gates(
+    fixture: Fixture, metrics: Mapping[str, float], thresholds: Mapping[str, float]
+) -> list[str]:
+    """Every gate of this fixture that its metrics did not clear, said in full."""
+    failures: list[str] = []
+    for gate in fixture.gates:
+        if gate.metric not in metrics:
+            failures.append(f"{gate.metric} was not measured")
+            continue
+        limit = thresholds[gate.threshold]
+        value = metrics[gate.metric]
+        if gate.failed(value, limit):
+            comparison = "exceeds" if gate.direction == "at_most" else "does not exceed"
+            failures.append(f"{gate.metric}={value:.6g} {comparison} {gate.threshold}={limit:g}")
+    return failures
 
 
 def evaluate_physics(
@@ -788,6 +1197,13 @@ def evaluate_physics(
         raise ValueError(
             f"{case_name!r} is not a registered verification fixture; this build scores "
             f"{list(registered_fixtures())}"
+        )
+    if fixture.family == "refinement":
+        raise ValueError(
+            f"{case_name!r} is a refinement PAIR and is scored by "
+            "compare_refinement(coarse, fine, support, tolerances), which needs two published "
+            "results and the zones they share; evaluate_physics reads one result and cannot "
+            "compare anything"
         )
     checked = require_tolerances(tolerances)
     thresholds = _thresholds_for(fixture, checked)
@@ -822,16 +1238,7 @@ def evaluate_physics(
             reason=f"{case_name}: the published artifacts could not be scored: {exc}",
         )
 
-    failures: list[str] = []
-    for gate in fixture.gates:
-        if gate.metric not in metrics:
-            failures.append(f"{gate.metric} was not measured")
-            continue
-        limit = thresholds[gate.threshold]
-        value = metrics[gate.metric]
-        if gate.failed(value, limit):
-            comparison = "exceeds" if gate.direction == "at_most" else "does not exceed"
-            failures.append(f"{gate.metric}={value:.6g} {comparison} {gate.threshold}={limit:g}")
+    failures = _failed_gates(fixture, metrics, thresholds)
     return PhysicsCheck(
         name=case_name,
         status="FAIL" if failures else "PASS",

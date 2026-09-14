@@ -46,10 +46,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 import pytest
 from numpy.typing import NDArray
 
-from so_recon.config.resources import P0_VERIFY_PROFILE
+from so_recon.config.resources import P0_VERIFY_PROFILE, P1_LOOP_PROFILE
 from so_recon.environment.resources import ResourceSnapshot, probe_resources
 from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
@@ -74,8 +75,24 @@ from so_recon.simulator.julia_bridge import (
     SubprocessJuliaLauncher,
     find_julia,
 )
+from so_recon.simulator.results import (
+    BALANCES_FILENAME,
+    CONNECTIONS_FILENAME,
+    MONTHLY_FILENAME,
+    STATES_FILENAME,
+    extraction_balances,
+)
 from so_recon.simulator.schedule import compile_schedule, month_edges_s
 from so_recon.simulator.worker import PersistentJuliaWorker
+from so_recon.validation.physics import (
+    DEFAULT_TOLERANCES_RELPATH,
+    CommonSupport,
+    bl_cell_average,
+    cartesian_zone_ids,
+    compare_refinement,
+    evaluate_physics,
+    load_tolerances,
+)
 from tests.forward_case import (
     N_CELLS,
     SHAPE,
@@ -83,6 +100,7 @@ from tests.forward_case import (
     cell_centers,
     write_case_arrays,
 )
+from tests.integration.fixture_result import publish_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_JL = ROOT / "julia" / "verification" / "fixtures.jl"
@@ -646,7 +664,7 @@ def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: 
         "producer_phase_rate",
         "zero_rate",
         "non_positive_bhp_limit",
-        "unimplemented_boundary",
+        "unknown_boundary_kind",
         "closed_boundary_with_cells",
     }
     assert "1 entries for 2 connections" in refusals["mask_too_short"]
@@ -659,7 +677,11 @@ def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: 
     assert "SPEC 9.1" in refusals["producer_phase_rate"]
     assert "role='shut'" in refusals["zero_rate"]
     assert "must be positive when given" in refusals["non_positive_bhp_limit"]
-    assert "Tasks 9-10" in refusals["unimplemented_boundary"]
+    # Task 10.6 built `pressure_water`, so what is refused by KIND now is anything else; the
+    # refusals for an incompletely specified `pressure_water` boundary are asserted in the
+    # operational suite below, where that boundary is actually used.
+    assert "aquifer" in refusals["unknown_boundary_kind"]
+    assert "'closed' and 'pressure_water'" in refusals["unknown_boundary_kind"]
     assert "closed boundary names no cells" in refusals["closed_boundary_with_cells"]
     # Every one of them names the well or the field it is about, never just "invalid".
     for label in ("missing_well", "duplicate_well", "mask_too_short", "mask_not_boolean"):
@@ -670,3 +692,605 @@ def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: 
     crossflow_refusal = report["crossflow_refusal_message"]
     assert "allow_crossflow=false" in crossflow_refusal
     assert "0.3.11" in crossflow_refusal
+
+
+# ======================================================================================
+# E01.10 — the operational fixtures: mixing, crossflow, roles, boundaries
+# ======================================================================================
+
+OPERATIONS_JL = ROOT / "julia" / "verification" / "operations.jl"
+REFINEMENT_JL = ROOT / "julia" / "verification" / "refinement.jl"
+TOLERANCES_PATH = ROOT / DEFAULT_TOLERANCES_RELPATH
+
+#: The 10.4 sector, restated here so the published case is checked against the plan's own
+#: numbers rather than against the file that produced them.
+TWO_LAYER_SHAPE = (4, 4, 2)
+TWO_LAYER_KH_MD = (200.0, 50.0)
+TWO_LAYER_POROSITY = (0.25, 0.15)
+TWO_LAYER_SW = (0.25, 0.65)
+#: The producer's two connections: column (3, 3) of each layer, zero-based.
+TWO_LAYER_PERFORATED_CELLS = (15, 31)
+MIXING_LIQUID_RATE_M3_DAY = 4.0
+
+#: The 10.6 sector: two 10 m cubes at 100 mD, so the native face transmissibility is
+#: `A*k/dx = 100 m² * 9.869233e-14 m² / 10 m`. Recomputed here and compared against the
+#: model's own `Transmissibilities` parameter.
+SECTOR_FACE_TRANSMISSIBILITY = 10.0**2 * 100.0 * MILLIDARCY_M2 / 10.0
+
+
+def _launch_json(
+    julia_exe: Path, paths: ProjectPaths, script: Path, flag: str, timeout_s: int, label: str
+) -> dict[str, Any]:
+    """Run one verification diagnostic in its own process and read the payload it wrote."""
+    out_path = paths.artifacts / "verification" / f"{label}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    launcher = SubprocessJuliaLauncher(julia_exe, ROOT / "julia", timeout_s=timeout_s)
+    launcher.launch(script, [flag], out_path)
+    payload: dict[str, Any] = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "ok"
+    assert (payload["jutul_version"], payload["jutuldarcy_version"]) == ("0.4.31", "0.3.11")
+    return payload
+
+
+def _connection_rows(
+    extraction: dict[str, Any], well_id: str, connection_id: int
+) -> list[dict[str, Any]]:
+    rows = [
+        row
+        for row in extraction["connections"]
+        if row["well_id"] == well_id and row["connection_id"] == connection_id
+    ]
+    return sorted(rows, key=lambda row: row["step"])
+
+
+def _standard_connection_split(
+    extraction: dict[str, Any], well_id: str, connection_id: int, step: int
+) -> tuple[float, float]:
+    """One connection's water and oil flux at one substep, as a STANDARD volume rate.
+
+    The published cross term is a component MASS flux in kg/s; dividing by the phase's own
+    reference density is what makes two components comparable and is the same conversion the
+    inventory uses. Positive is out of the reservoir, so a producing connection is positive.
+    """
+    rho_w, rho_o = extraction["reference_densities_kg_m3"]
+    row = _connection_rows(extraction, well_id, connection_id)[step]
+    return (float(row["water_mass_kg_s"]) / rho_w, float(row["oil_mass_kg_s"]) / rho_o)
+
+
+def _within_spec(balances: dict[str, Any]) -> None:
+    for name, metrics in balances.items():
+        assert metrics.within_spec_tolerance, f"{name}: {metrics.cumulative_relative}"
+
+
+@pytest.mark.julia
+def test_the_operational_fixtures_mix_crossflow_isolate_and_are_supported(
+    tmp_project: Path,
+) -> None:
+    """E01.10.4-10.6 on the pinned solver, in ONE P0_VERIFY-bounded Julia process.
+
+    Nine small forwards: a two-layer sector produced through one well with a completion in
+    each layer, the same sector shut in with its wellbore open and then with it closed, a well
+    that produces, is shut and comes back as an injector inside one calendar month, two
+    bottom-hole probes, and a produced sector under three treatments of its outer face. Every
+    one of them is at or below 128 cells, 2 layers, 3 wells and 12 report intervals, which is
+    what P0_VERIFY allows.
+
+    Julia measures what only Julia can see — the native connection flux through each
+    perforation, the native boundary flux, the native face transmissibility, the control a
+    well really operated on. This side recomputes what it can from geometry and the §3.1
+    numbers, publishes the results the production path would publish, and scores them against
+    `configs/e01_tolerances.yml`.
+    """
+    julia_exe = _skip_unless_julia_is_installed()
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    report = _launch_json(
+        julia_exe,
+        paths,
+        OPERATIONS_JL,
+        "--test-operations",
+        P0_VERIFY_PROFILE.job_timeout_s,
+        "operations",
+    )
+    assert report["gravity_constant"] == STANDARD_GRAVITY_M_S2
+    fixtures = report["fixtures"]
+    tolerances = load_tolerances(TOLERANCES_PATH)
+    closed_flux_max = tolerances["closed_connection_mass_kg_s_max"]
+    rate_tolerance = tolerances["rate_control_relative_max"]
+
+    # ---- 10.4 the two-layer sector is the sector the plan describes ---------------------
+    mixing = fixtures["mixing"]
+    assert mixing["status"] == "COMPLETE"
+    case = mixing["case"]
+    assert tuple(case["grid"]["shape"]) == TWO_LAYER_SHAPE
+    arrays = mixing["arrays"]
+    porosity = np.asarray(arrays["porosity"], dtype=np.float64)
+    permeability = np.asarray(arrays["permeability_m2"], dtype=np.float64)
+    sw0 = np.asarray(arrays["sw"], dtype=np.float64)
+    upper = np.arange(16)
+    lower = np.arange(16, 32)
+    for cells, phi, kh, sw in zip(
+        (upper, lower), TWO_LAYER_POROSITY, TWO_LAYER_KH_MD, TWO_LAYER_SW, strict=True
+    ):
+        assert porosity[cells] == pytest.approx(phi)
+        assert permeability[0][cells] == pytest.approx(kh * MILLIDARCY_M2, rel=1e-12)
+        assert sw0[cells] == pytest.approx(sw)
+    # A producer with two connections, one per layer, and one injector in each layer: three
+    # wells, which is the P0_VERIFY ceiling.
+    wells = {w["well_id"]: w for w in case["wells"]}
+    assert sorted(wells) == ["INJ_LOWER", "INJ_UPPER", "PRO1"]
+    assert tuple(wells["PRO1"]["cells"]) == TWO_LAYER_PERFORATED_CELLS
+
+    # ---- 10.4 the surface composition is NATIVE MIXING ----------------------------------
+    extraction = mixing["extraction"]
+    rho_w, rho_o = extraction["reference_densities_kg_m3"]
+    producer = extraction["wells"]["PRO1"]
+    n_steps = len(extraction["chunk"]["dt_s"])
+    # SPEC 9.1: the case prescribes a TOTAL standard liquid rate and never two phase rates.
+    targets = {c["target"] for c in case["controls"] if c["well_id"] == "PRO1"}
+    assert targets == {"liquid_rate"}
+    for step in range(n_steps):
+        qw = -float(producer["surface_water_m3_s"][step])
+        qo = -float(producer["surface_oil_m3_s"][step])
+        assert (qw + qo) * SECONDS_PER_DAY == pytest.approx(
+            MIXING_LIQUID_RATE_M3_DAY, rel=rate_tolerance
+        )
+        # Both phases really flow, so the split below is a split and not "oil only".
+        assert qw > 0.0 and qo > 0.0
+    last = n_steps - 1
+    upper_w, upper_o = _standard_connection_split(extraction, "PRO1", 0, last)
+    lower_w, lower_o = _standard_connection_split(extraction, "PRO1", 1, last)
+    upper_fw = upper_w / (upper_w + upper_o)
+    lower_fw = lower_w / (lower_w + lower_o)
+    # The two layers deliver very different fluid: 200 mD at Sw = 0.25 is nearly dry oil and
+    # 50 mD at Sw = 0.65 is nearly pure water, which is the §3.1 Corey pair's own answer.
+    assert upper_fw < 0.05 and lower_fw > 0.95
+    surface_fw = -float(producer["surface_water_m3_s"][last]) / (
+        -float(producer["surface_water_m3_s"][last]) - float(producer["surface_oil_m3_s"][last])
+    )
+    # The stream that reaches the surface is what the two connections delivered, mixed in the
+    # wellbore — strictly between them, and equal to their sum rather than to an assumed split.
+    assert upper_fw < surface_fw < lower_fw
+    connection_fw = (upper_w + lower_w) / (upper_w + lower_w + upper_o + lower_o)
+    assert surface_fw == pytest.approx(connection_fw, rel=1e-5)
+    _within_spec(extraction_balances(extraction))
+
+    # ---- 10.4 a shut SURFACE with an open wellbore: opposed connection fluxes ------------
+    crossflow = fixtures["crossflow_open"]["extraction"]
+    assert fixtures["crossflow_open"]["status"] == "COMPLETE"
+    for step in range(len(crossflow["chunk"]["dt_s"])):
+        assert crossflow["wells"]["XF1"]["operating_target"][step] == "disabled"
+        # `DisabledControl` IS the native zero-net-surface formulation: an exact zero.
+        assert [c[step] for c in crossflow["wells"]["XF1"]["surface_component_mass_kg_s"]] == [
+            0.0,
+            0.0,
+        ]
+    shallow = _connection_rows(crossflow, "XF1", 0)[0]
+    deep = _connection_rows(crossflow, "XF1", 1)[0]
+    assert shallow["connection_open"] and deep["connection_open"]
+    # OPPOSED, and neither of them small: the wellbore's segments carry mass out of the
+    # higher-potential layer and into the lower-potential one while nothing leaves the well.
+    assert shallow["total_mass_kg_s"] > 1e-3
+    assert deep["total_mass_kg_s"] < -1e-3
+    # What they differ by is what the wellbore itself stored, and that is a small part of it.
+    stored = abs(shallow["total_mass_kg_s"] + deep["total_mass_kg_s"])
+    assert stored < 0.2 * max(abs(shallow["total_mass_kg_s"]), abs(deep["total_mass_kg_s"]))
+    # CONSERVATION INCLUDING WELL STORAGE. The reservoir alone is NOT conserved here — it
+    # gave up oil and took water through the connections — and the reservoir plus the wellbore
+    # is, to nine significant figures, with no surface flux at all to account for it.
+    inventory = np.asarray(crossflow["inventory_m3_sc"], dtype=np.float64)
+    reservoir = np.asarray(crossflow["reservoir_inventory_m3_sc"], dtype=np.float64)
+    total_drift = np.abs(inventory[-1] - inventory[0]) / inventory[0]
+    assert total_drift.max() < 1e-6
+    reservoir_change = reservoir[-1] - reservoir[0]
+    assert np.abs(reservoir_change).max() > 0.1
+    connection_source = np.asarray(crossflow["net_connection_source_m3_sc"], dtype=np.float64).sum(
+        axis=0
+    )
+    assert reservoir_change == pytest.approx(connection_source, rel=1e-3)
+    _within_spec(extraction_balances(crossflow))
+
+    # ---- 10.4 the SAME surface condition with both completions closed --------------------
+    isolated = fixtures["crossflow_closed"]["extraction"]
+    assert fixtures["crossflow_closed"]["status"] == "COMPLETE"
+    for connection_id in (0, 1):
+        rows = _connection_rows(isolated, "XF1", connection_id)
+        assert rows and all(not row["connection_open"] for row in rows)
+        assert max(abs(float(row["total_mass_kg_s"])) for row in rows) <= closed_flux_max
+    # A well that stopped producing is not a well that was isolated, and the difference is
+    # visible in the reservoir: the open wellbore equalised the layers it was shut in across,
+    # and the closed one left them where they were put.
+    gap = report["crossflow_layer_gap_pa"]
+    assert gap["initial"] == pytest.approx(4.0e6)
+    assert gap["open_final"] < 0.05 * gap["isolated_final"]
+    assert gap["isolated_final"] > 0.5 * gap["initial"]
+
+    # ---- 10.5 one immutable case: producer -> shut -> injector --------------------------
+    roles = fixtures["roles"]
+    assert roles["status"] == "COMPLETE"
+    roles_case = roles["case"]
+    roles_extraction = roles["extraction"]
+    # The event days are INSIDE a real calendar month: February 2020 carries all three roles.
+    edges_days = [e / SECONDS_PER_DAY for e in roles_extraction["chunk"]["edges_s"]]
+    assert edges_days == pytest.approx([0.0, 31.0, 45.0, 52.0, 60.0, 91.0])
+    month_edges = month_edges_s(date(2020, 1, 1), 3)
+    assert [e / SECONDS_PER_DAY for e in month_edges] == pytest.approx([0.0, 31.0, 60.0, 91.0])
+    # Requested and actual role, restated on every interval and never inherited.
+    segments = tuple(ControlSegment.model_validate(c) for c in roles_case["controls"])
+    assert [s.role for s in segments] == ["producer", "shut", "injector"]
+    assert [list(s.connection_open) for s in segments] == [
+        [True, True],
+        [True, False],
+        [True, True],
+    ]
+    evidence = roles_extraction["control_evidence"]["OPS1"]
+    assert all(step["honoured"] for step in evidence)
+    operating = roles_extraction["wells"]["OPS1"]["operating_target"]
+    assert set(operating) == {"lrat", "disabled", "wrat"}
+    assert operating[0] == "lrat" and operating[-1] == "wrat"
+    shut_steps = [k for k, target in enumerate(operating) if target == "disabled"]
+    assert shut_steps
+    # ISOLATION AND SHUTDOWN, on the same well at the same instant. The closed completion
+    # carries nothing at all; the open one, under the very same shut surface, does not meet
+    # the isolation gate — which is precisely why they are not one claim.
+    for step in shut_steps:
+        closed_row = _connection_rows(roles_extraction, "OPS1", 1)[step]
+        open_row = _connection_rows(roles_extraction, "OPS1", 0)[step]
+        assert not closed_row["connection_open"] and open_row["connection_open"]
+        assert abs(float(closed_row["total_mass_kg_s"])) <= closed_flux_max
+        assert abs(float(open_row["total_mass_kg_s"])) > closed_flux_max
+    _within_spec(extraction_balances(roles_extraction))
+
+    # The published monthly volumes keep production and injection APART. February holds both,
+    # and a single signed number for that month would report their difference as production.
+    _, roles_dir = publish_fixture(roles, paths, "ops-roles", report, world="operations")
+    monthly = pq.read_table(roles_dir / "monthly.parquet").to_pylist()
+    by_month = {int(row["month_index"]): row for row in monthly if row["well_id"] == "OPS1"}
+    assert sorted(by_month) == [0, 1, 2]
+    assert by_month[0]["liquid_prod_m3_sc"] > 0.0 and by_month[0]["water_inj_m3_sc"] == 0.0
+    assert by_month[1]["liquid_prod_m3_sc"] > 0.0 and by_month[1]["water_inj_m3_sc"] > 0.0
+    assert by_month[2]["liquid_prod_m3_sc"] == 0.0 and by_month[2]["water_inj_m3_sc"] > 0.0
+    # 14 days of production and 8 of injection at 0.5 m3_sc/day, on the same month's row.
+    assert by_month[1]["liquid_prod_m3_sc"] == pytest.approx(7.0, rel=1e-6)
+    assert by_month[1]["water_inj_m3_sc"] == pytest.approx(4.0, rel=1e-6)
+
+    # ---- 10.5 a bottom-hole limit that is reached, and one that is not -------------------
+    feasible = fixtures["bhp_feasible"]["extraction"]
+    assert feasible["control_infeasible_reason"] is None
+    for step in feasible["control_evidence"]["OPS1"]:
+        assert step["honoured"] and step["operating_target"] == "lrat"
+        assert step["liquid_rate_m3_day"] == pytest.approx(
+            step["requested_value"], rel=rate_tolerance
+        )
+    feasible_result, _ = publish_fixture(
+        fixtures["bhp_feasible"], paths, "ops-bhp-ok", report, world="operations"
+    )
+    assert feasible_result.status == "COMPLETE", feasible_result.reason
+
+    infeasible = fixtures["bhp_infeasible"]["extraction"]
+    steps = infeasible["control_evidence"]["OPS1"]
+    assert all(not step["honoured"] for step in steps)
+    for step in steps:
+        assert step["requested_target"] == "lrat"
+        assert step["requested_value"] == pytest.approx(1.0e5)
+        # THE LIMIT WAS REACHED and the well went onto it, at the pressure THIS CASE recorded.
+        assert step["operating_target"] == "bhp"
+        assert step["bhp_pa"] == pytest.approx(CONTROLS_PRODUCER_BHP_FLOOR_PA, rel=1e-12)
+        # And the achieved rate is nothing like the demanded one.
+        assert 0.0 < step["liquid_rate_m3_day"] < 1e-3 * step["requested_value"]
+    # `set_default_limits = false`: JutulDarcy's own convenience floor of one atmosphere was
+    # NOT silently substituted for the limit the case wrote down.
+    assert CONTROLS_PRODUCER_BHP_FLOOR_PA != 101325.0
+    infeasible_result, _ = publish_fixture(
+        fixtures["bhp_infeasible"], paths, "ops-bhp-bad", report, world="operations"
+    )
+    assert infeasible_result.status == "CONTROL_INFEASIBLE"
+    assert infeasible_result.reason is not None
+    assert "OPS1" in infeasible_result.reason
+    assert "requested lrat=100000.0" in infeasible_result.reason
+    assert "operated on bhp" in infeasible_result.reason
+    # A classified result publishes no outputs: there is no partial integral for a case whose
+    # wells did not do what the case asked (SPEC 18.4).
+    assert infeasible_result.monthly_path is None
+
+    # ---- 10.6 a closed benchmark, an infinite support, and a finite store -----------------
+    native_trans = report["sector_face_transmissibility"]
+    # The conductance the boundary was given IS the sector's own face transmissibility, and
+    # `A*k/dx` recomputed here from the geometry agrees with the model's own parameter.
+    assert native_trans["native"] == pytest.approx(SECTOR_FACE_TRANSMISSIBILITY, rel=1e-12)
+    assert native_trans["declared_boundary_trans_flow"] == pytest.approx(
+        native_trans["native"], rel=1e-12
+    )
+
+    drops: dict[str, float] = {}
+    published_boundary: dict[str, Path] = {}
+    for name in ("boundary_closed", "boundary_pressure_water", "boundary_finite_buffer"):
+        fixture = fixtures[name]
+        assert fixture["status"] == "COMPLETE"
+        states = fixture["extraction"]["states"]
+        pressure = np.asarray(states["pressure_pa"], dtype=np.float64)
+        drops[name] = float(pressure[0][0] - pressure[-1][0])
+        _within_spec(extraction_balances(fixture["extraction"]))
+        _, result_dir = publish_fixture(fixture, paths, f"ops-{name}", report, world="operations")
+        published_boundary[name] = result_dir
+
+    # THE ORDERING IS THE MEASUREMENT. A closed sector gives up about 9 bar over three days;
+    # the same sector behind a fixed-pressure boundary of that conductance gives up almost
+    # nothing; a finite buffer of a known pore volume behind the same conductance is in
+    # between, because it runs down while it supports.
+    #
+    # The closed case is stated as the no-support reference and not as a controlled contrast:
+    # the buffer case has a third cell, so some of its smaller drawdown is simply more rock
+    # in the system. What IS controlled is the pair that shares a geometry and a conductance —
+    # the fixed-pressure boundary against the finite store — and the buffer gives up more than
+    # twenty times as much pressure as the boundary does, because only one of them is finite.
+    assert drops["boundary_pressure_water"] < drops["boundary_finite_buffer"]
+    assert drops["boundary_finite_buffer"] < drops["boundary_closed"]
+    assert drops["boundary_finite_buffer"] > 20.0 * drops["boundary_pressure_water"]
+
+    # The boundary influx is IN the balance and is named there, so nobody attributes an
+    # aquifer's water to a well. Water only: the boundary's `fractional_flow` is (1, 0).
+    def _boundary_source(result_dir: Path) -> dict[str, float]:
+        rows = pq.read_table(result_dir / "balances.parquet").to_pylist()
+        return {
+            str(row["component"]): float(row["boundary_source_m3_sc"])
+            for row in rows
+            if row["balance"] == "reservoir_connections"
+        }
+
+    supported = _boundary_source(published_boundary["boundary_pressure_water"])
+    assert supported["water"] > 0.2
+    assert supported["oil"] == 0.0
+    for name in ("boundary_closed", "boundary_finite_buffer"):
+        assert _boundary_source(published_boundary[name]) == {"water": 0.0, "oil": 0.0}
+
+    # EXCHANGE SIGN. The native boundary flux is positive OUT of the reservoir, so a support
+    # that is feeding the sector is negative on every substep, and the source it becomes is
+    # positive into it.
+    boundary_rows = fixtures["boundary_pressure_water"]["extraction"]["boundary"]
+    assert boundary_rows and all(row["cell_id"] == 1 for row in boundary_rows)
+    assert all(row["water_mass_kg_s"] < 0.0 for row in boundary_rows)
+    assert all(row["oil_mass_kg_s"] == 0.0 for row in boundary_rows)
+    assert all(
+        row["trans_flow"] == pytest.approx(SECTOR_FACE_TRANSMISSIBILITY, rel=1e-12)
+        for row in boundary_rows
+    )
+    boundary_source = np.asarray(
+        fixtures["boundary_pressure_water"]["extraction"]["net_boundary_source_m3_sc"],
+        dtype=np.float64,
+    )
+    assert (boundary_source[:, 0] > 0.0).all()
+    assert (boundary_source[:, 1] == 0.0).all()
+    # The other two cases have no boundary at all, and publish that as an exact zero rather
+    # than as an absent field.
+    for name in ("boundary_closed", "boundary_finite_buffer"):
+        assert fixtures[name]["extraction"]["boundary"] == []
+        assert not np.asarray(
+            fixtures[name]["extraction"]["net_boundary_source_m3_sc"], dtype=np.float64
+        ).any()
+
+    # A FINITE STORE RUNS DOWN, which is the whole difference from the fixed-pressure model.
+    buffer_states = fixtures["boundary_finite_buffer"]["extraction"]["states"]
+    pore = np.asarray(buffer_states["pore_volume_m3"], dtype=np.float64)
+    sw = np.asarray(buffer_states["sw"], dtype=np.float64)
+    bw = np.asarray(buffer_states["bw"], dtype=np.float64)
+    pressure = np.asarray(buffer_states["pressure_pa"], dtype=np.float64)
+    # The buffer's pore volume is a number the case wrote down: a 10 m cube at porosity 0.4.
+    assert pore[0][2] == pytest.approx(400.0, rel=1e-12)
+    buffer_water = sw[:, 2] * pore[:, 2] / bw[:, 2]
+    assert buffer_water[-1] < buffer_water[0]
+    assert pressure[-1][2] < pressure[0][2]
+    # Under the fixed-pressure boundary the support pressure is a constant of the run, by
+    # construction; that is what makes it an infinite store and not an aquifer with a size.
+    assert all(row["pressure_pa"] == pytest.approx(1.5e7, rel=1e-12) for row in boundary_rows)
+
+    # ---- 10.6 a boundary nobody fully specified is refused, by name -----------------------
+    refusals = report["boundary_refusals"]
+    assert set(refusals) == {
+        "unknown_kind",
+        "no_cells",
+        "no_pressure",
+        "no_trans_flow",
+        "cell_outside_grid",
+        "duplicate_cell",
+        "fractional_flow_not_a_split",
+    }
+    assert "aquifer" in refusals["unknown_kind"]
+    assert "never defaulted" in refusals["no_pressure"]
+    assert "never guessed" in refusals["no_trans_flow"]
+    assert "outside the grid" in refusals["cell_outside_grid"]
+    assert "named twice" in refusals["duplicate_cell"]
+    assert "sum to exactly 1" in refusals["fractional_flow_not_a_split"]
+
+
+# ======================================================================================
+# E01.10.7-10.8 — the five-spot, and the grid/time refinement study
+# ======================================================================================
+
+#: The 10.7 five-spot, restated here from the plan rather than from the file that built it.
+FIVE_SPOT_SHAPE = (16, 16, 1)
+FIVE_SPOT_EXTENT_M = (400.0, 400.0, 10.0)
+FIVE_SPOT_MONTHS = 36
+FIVE_SPOT_INJECTOR_IJ = ((2, 2), (2, 13), (13, 2), (13, 13))
+FIVE_SPOT_PRODUCER_IJ = ((7, 7), (7, 8), (8, 7), (8, 8))
+FIVE_SPOT_INJECTION_M3_DAY = 10.0
+FIVE_SPOT_PRODUCTION_M3_DAY = 40.0
+SUPPORT_SIDE = 8
+
+#: The Buckley-Leverett core of plan 9.6, which 10.8 refines in space AND time: 0.2 pore
+#: volumes of water over one day, so the analytic reference is evaluated at t_pvi = 0.2.
+BL_INJECTED_PV = 0.2
+
+
+def _cell(i: int, j: int, nx: int) -> int:
+    return i + nx * j
+
+
+def _five_spot_outputs(result_dir: Path) -> dict[str, Path]:
+    return {
+        "states": result_dir / STATES_FILENAME,
+        "balances": result_dir / BALANCES_FILENAME,
+        "connections": result_dir / CONNECTIONS_FILENAME,
+    }
+
+
+def _refinement_outputs(result_dir: Path) -> dict[str, Path]:
+    return {"states": result_dir / STATES_FILENAME, "monthly": result_dir / MONTHLY_FILENAME}
+
+
+@pytest.mark.julia
+def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -> None:
+    """E01.10.7-10.8 under P1_LOOP: 256 and 1024 cells, 5 wells, 36 calendar months.
+
+    Four forwards in one Julia process: Buckley-Leverett at 64 cells with the report step and
+    at 128 with half of it, and the five-spot at 16x16 and at 32x32. The first pair has an
+    analytic answer and is scored against it; the second has none and is scored on AGREEMENT,
+    over a fixed 8x8 support of physical zones that both meshes tile exactly.
+
+    Nothing here claims the fine grid is right. What is measured is how much of the answer
+    moved when the mesh and the timestep were refined — a discretization sensitivity — and the
+    verdict `compare_refinement` returns says exactly that and no more.
+
+    Five wells and 36 report intervals put this outside P0_VERIFY, whose ceiling is three
+    wells and twelve intervals, so the launcher is bounded by the P1_LOOP job timeout.
+    """
+    julia_exe = _skip_unless_julia_is_installed()
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    report = _launch_json(
+        julia_exe,
+        paths,
+        REFINEMENT_JL,
+        "--test-refinement",
+        P1_LOOP_PROFILE.job_timeout_s,
+        "refinement",
+    )
+    fixtures = report["fixtures"]
+    tolerances = load_tolerances(TOLERANCES_PATH)
+
+    # ---- 10.7 the pattern is the pattern the plan describes ------------------------------
+    coarse = fixtures["five_spot_16"]
+    assert coarse["status"] == "COMPLETE"
+    case = coarse["case"]
+    assert tuple(case["grid"]["shape"]) == FIVE_SPOT_SHAPE
+    assert tuple(case["grid"]["extent_m"]) == FIVE_SPOT_EXTENT_M
+    assert len(case["report_edges_s"]) == FIVE_SPOT_MONTHS + 1
+    assert [e / SECONDS_PER_DAY for e in case["report_edges_s"]] == pytest.approx(
+        [e / SECONDS_PER_DAY for e in month_edges_s(date(2020, 1, 1), FIVE_SPOT_MONTHS)]
+    )
+    wells = {w["well_id"]: w for w in case["wells"]}
+    assert len(wells) == 5
+    assert sorted(wells["PRO1"]["cells"]) == sorted(
+        _cell(i, j, 16) for i, j in FIVE_SPOT_PRODUCER_IJ
+    )
+    # The producer's four connections are EQUAL: none of the four central cells is "the
+    # centre", because an even grid has none, and a `SimpleWell` is one node so all four are
+    # equidistant from it.
+    assert wells["PRO1"]["model"] == "simple"
+    injector_cells = sorted(
+        tuple(w["cells"]) for name, w in wells.items() if name.startswith("INJ")
+    )
+    assert injector_cells == sorted((_cell(i, j, 16),) for i, j in FIVE_SPOT_INJECTOR_IJ)
+    # GRAVITY IS PRESENT — the case declares the native 9.80665 — and the horizontal faces of
+    # a single layer carry a gravity head of exactly zero. The case does not switch anything
+    # off; the native parameter says the head is zero because the depths are equal.
+    assert case["gravity_m_s2"] == STANDARD_GRAVITY_M_S2
+    native = coarse["native"]
+    assert native["two_point_gravity_difference"]
+    assert set(native["two_point_gravity_difference"]) == {0.0}
+    assert len(set(native["cell_center_depth_m"])) == 1
+    rates = {(c["well_id"].startswith("INJ"), c["target"], c["value"]) for c in case["controls"]}
+    assert rates == {
+        (False, "liquid_rate", FIVE_SPOT_PRODUCTION_M3_DAY),
+        (True, "water_rate", FIVE_SPOT_INJECTION_M3_DAY),
+    }
+
+    # ---- 10.7 the symmetry, scored against the tolerance fixed before it ran --------------
+    _, coarse_dir = publish_fixture(coarse, paths, "five-spot-16", report, world="refinement")
+    check = evaluate_physics("five_spot", _five_spot_outputs(coarse_dir), tolerances)
+    assert check.status == "PASS", check.reason
+    assert check.unrun_metrics == ()
+    # Julia measured the same two reflections on its own copy of the field; they agree.
+    julia_symmetry = report["five_spot_symmetry"]["five_spot_16"]
+    assert check.metrics["five_spot_symmetry_x_abs"] == pytest.approx(
+        julia_symmetry["so_mirror_x_abs"], rel=1e-9
+    )
+    assert check.metrics["five_spot_symmetry_y_abs"] == pytest.approx(
+        julia_symmetry["so_mirror_y_abs"], rel=1e-9
+    )
+    # And the field it is symmetric about really varies over half a saturation unit.
+    assert check.metrics["five_spot_so_range"] > 0.5
+
+    # ---- 10.8 the same continuous problem on a finer grid ---------------------------------
+    fine = fixtures["five_spot_32"]
+    assert fine["status"] == "COMPLETE"
+    fine_case = fine["case"]
+    assert tuple(fine_case["grid"]["shape"]) == (32, 32, 1)
+    # THE SAME CONTINUOUS FIELD, not a second realisation: the same extent, the same
+    # homogeneous porosity and permeability, and the same total pore volume.
+    assert tuple(fine_case["grid"]["extent_m"]) == FIVE_SPOT_EXTENT_M
+    for label, fixture in (("16", coarse), ("32", fine)):
+        assert set(np.asarray(fixture["arrays"]["porosity"], dtype=np.float64)) == {0.2}, label
+    coarse_pv = float(np.asarray(coarse["native"]["pore_volume_m3"], dtype=np.float64).sum())
+    fine_pv = float(np.asarray(fine["native"]["pore_volume_m3"], dtype=np.float64).sum())
+    assert fine_pv == pytest.approx(coarse_pv, rel=1e-12)
+    # The wells are at the same PHYSICAL locations: what perforated one coarse cell perforates
+    # the 2x2 block of fine cells that replaced it.
+    fine_wells = {w["well_id"]: w for w in fine_case["wells"]}
+    assert sorted(fine_wells["INJ_SW"]["cells"]) == sorted(
+        _cell(i, j, 32) for i in (4, 5) for j in (4, 5)
+    )
+    # The native well index is RECOMPUTED from the same radius in the refined geometry, never
+    # carried over and never tuned back to reproduce the coarse answer.
+    wi = report["five_spot_well_index_total"]
+    assert wi["32"]["INJ_SW"] != wi["16"]["INJ_SW"]
+    assert wi["32"]["INJ_SW"] > wi["16"]["INJ_SW"]
+
+    _, fine_dir = publish_fixture(fine, paths, "five-spot-32", report, world="refinement")
+    support = CommonSupport(
+        name="five_spot_refinement",
+        n_zones=SUPPORT_SIDE**2,
+        coarse_zone_id=cartesian_zone_ids(16, 16, SUPPORT_SIDE),
+        fine_zone_id=cartesian_zone_ids(32, 32, SUPPORT_SIDE),
+    )
+    # The support Julia used and the one recomputed here are the same partition.
+    assert support.coarse_zone_id.tolist() == report["support_zone_ids"]["five_spot_16"]
+    assert support.fine_zone_id.tolist() == report["support_zone_ids"]["five_spot_32"]
+
+    refinement = compare_refinement(
+        _refinement_outputs(coarse_dir), _refinement_outputs(fine_dir), support, tolerances
+    )
+    assert refinement.status == "PASS", refinement.reason
+    assert refinement.unrun_metrics == ()
+    # The mapping is pore-volume-conservative to round-off, which is what makes the saturation
+    # comparison legal at all.
+    assert refinement.metrics["support_pore_volume_relative"] < 1e-12
+    assert refinement.metrics["coarse_cells"] == 256.0
+    assert refinement.metrics["fine_cells"] == 1024.0
+    assert refinement.metrics["n_months"] == float(FIVE_SPOT_MONTHS)
+    # NOT VACUOUS: the two grids really do give different answers, and the difference is a
+    # discretisation sensitivity rather than a posterior.
+    assert refinement.metrics["so_pv_mae"] > 0.0
+    assert refinement.metrics["so_zone_max_abs"] > refinement.metrics["so_pv_mae"]
+
+    # ---- 10.8 Buckley-Leverett: 64 cells at dt, 128 at dt/2, against the formula ----------
+    errors: dict[int, float] = {}
+    for n_cells in (64, 128):
+        fixture = fixtures[f"bl_{n_cells}"]
+        assert fixture["status"] == "COMPLETE"
+        states = fixture["extraction"]["states"]
+        sw = np.asarray(states["sw"][-1], dtype=np.float64)
+        pore = np.asarray(states["pore_volume_m3"][-1], dtype=np.float64)
+        assert sw.size == n_cells
+        total = float(pore.sum())
+        edges = np.concatenate([[0.0], np.cumsum(pore) / total])
+        reference = bl_cell_average(edges, BL_INJECTED_PV)
+        errors[n_cells] = float(np.sum(np.abs(sw - reference) * (pore / total)))
+    # The timestep really was refined with the grid: twice as many accepted substeps.
+    substeps = {n: len(fixtures[f"bl_{n}"]["extraction"]["chunk"]["dt_s"]) for n in (64, 128)}
+    assert substeps[128] == 2 * substeps[64]
+    # The error against the analytic solution does not GROW under refinement, which is the
+    # plan's gate, and in fact it falls.
+    ratio = errors[128] / errors[64]
+    assert ratio <= tolerances["bl_refinement_ratio_max"]
+    assert errors[128] < errors[64]

@@ -195,7 +195,7 @@ system rather than from the case, so an injection mixture cannot be scaled by a 
 that disagrees with the fluid the model was built from.
 """
 function build_forces(model, controls, boundary)
-    bc = boundary_conditions(boundary)
+    bc = boundary_conditions(model, boundary)
     rho_water_sc = Float64(JutulDarcy.reference_densities(model.models[:Reservoir].system)[1])
     names = well_names(model)
 
@@ -258,11 +258,27 @@ well_name(c::AbstractDict) = String(get(c, "well_id", "<unnamed>"))
 """
 Boundary forces for the reservoir. `closed` is the absence of them.
 
-`pressure_water` is a declared kind of the contract whose reference physics plan Tasks 9-10
-decide; building one here would be a plausible-looking boundary rather than a verified one,
-so it is refused by name instead.
+`pressure_water` is the E01 boundary of plan Task 10.6, and it is an INFINITE one: a
+`FlowBoundaryCondition` holds `pressure` fixed for the whole run whatever crosses it, so it
+is an unbounded source and sink of water and never a finite aquifer. A case that needs a
+FINITE store attaches a real buffer cell with a real pore volume instead — that cell is in
+the grid, in the inventory and in the balance, and its pressure falls as it gives water up.
+Calling the fixed-pressure model a finite aquifer would be claiming a storage it does not
+have; the two are different cases and are kept apart by name.
+
+The native flux is `JutulDarcy.compute_bc_mass_fluxes`: `q_tot = trans_flow * (p_cell - p_bc)`
+is positive OUT of the domain and is then split by the reservoir cell's own mobilities on the
+way out, or by the boundary's declared `fractional_flow` on the way in. Nothing about that
+kernel is written here, and `outputs.jl` reads the same one when it accounts for what crossed.
+
+The injected stream is declared, not inferred: `fractional_flow = (1, 0)` makes the inflow
+pure water and `density` is the system's own STANDARD water density, so the standard volume
+the balance records for an influx is exactly its native mass divided by `rho_w_sc`. Taking
+the water density at the boundary pressure instead would be a different boundary — about 0.6%
+denser at 15 MPa under the §3.1 water compressibility — and that is a modelling choice rather
+than a correction, so the one the case gets is the one written down here.
 """
-function boundary_conditions(boundary)
+function boundary_conditions(model, boundary)
     kind = String(get(boundary, "kind", ""))
     if kind == "closed"
         cells = collect(get(boundary, "cells", Any[]))
@@ -270,12 +286,65 @@ function boundary_conditions(boundary)
             invalid("build_forces: a closed boundary names no cells, got $(cells)")
         return nothing
     end
-    invalid(
-        "build_forces: boundary kind $(repr(kind)) is not implemented in this build. Only " *
-        "'closed' is built so far; the pressure_water boundary's reference physics is " *
-        "decided in plan Tasks 9-10, and a stub would be a wrong boundary rather than a " *
-        "missing one",
+    kind == "pressure_water" || invalid(
+        "build_forces: boundary kind $(repr(kind)) is not implemented in this build; E01 " *
+        "builds 'closed' and 'pressure_water'",
     )
+
+    cells = collect(get(boundary, "cells", Any[]))
+    isempty(cells) &&
+        invalid("build_forces: a pressure_water boundary names at least one cell")
+    pressure = get(boundary, "pressure_pa", nothing)
+    pressure === nothing && invalid(
+        "build_forces: a pressure_water boundary carries pressure_pa, which this case leaves " *
+        "null; a boundary pressure is never defaulted",
+    )
+    p = Float64(pressure)
+    p > 0.0 || invalid(
+        "build_forces: boundary.pressure_pa is an absolute pressure in Pa and must be " *
+        "positive, got $(p)",
+    )
+    trans = get(boundary, "trans_flow", nothing)
+    trans === nothing && invalid(
+        "build_forces: a pressure_water boundary carries trans_flow, which this case leaves " *
+        "null; the conductance of a boundary decides how much it supports and is never guessed",
+    )
+    t_flow = Float64(trans)
+    t_flow > 0.0 ||
+        invalid("build_forces: boundary.trans_flow must be positive, got $(t_flow)")
+
+    fractional = Float64.(collect(get(boundary, "fractional_flow", [1.0, 0.0])))
+    length(fractional) == PHASE_COUNT || invalid(
+        "build_forces: boundary.fractional_flow gives one fraction per phase " *
+        "($(PHASE_COUNT)), got $(fractional)",
+    )
+    all(>=(0.0), fractional) && sum(fractional) == 1.0 || invalid(
+        "build_forces: boundary.fractional_flow must be non-negative and sum to exactly 1, " *
+        "got $(fractional)",
+    )
+
+    n_cells = Jutul.number_of_cells(model.models[:Reservoir].domain)
+    rho_water_sc = Float64(JutulDarcy.reference_densities(model.models[:Reservoir].system)[1])
+    seen = Set{Int}()
+    return [
+        begin
+            zero_based = Int(c)
+            (zero_based >= 0 && zero_based < n_cells) || invalid(
+                "build_forces: boundary cell $(zero_based) is outside the grid's " *
+                "$(n_cells) cells; boundary cell ids are zero-based",
+            )
+            zero_based in seen &&
+                invalid("build_forces: boundary cell $(zero_based) is named twice")
+            push!(seen, zero_based)
+            FlowBoundaryCondition(
+                zero_based + 1,
+                p;
+                fractional_flow = fractional,
+                density = rho_water_sc,
+                trans_flow = t_flow,
+            )
+        end for c in cells
+    ]
 end
 
 # --------------------------------------------------------------------------------------

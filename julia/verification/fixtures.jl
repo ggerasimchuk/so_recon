@@ -1114,18 +1114,21 @@ function selftest_controls(adapter::Module)
         )
         @test occursin("must be positive when given", limit_message)
 
-        # A boundary this build does not implement is named, not stubbed; and a closed one
-        # that names cells is a contradiction rather than a closed boundary.
+        # A boundary KIND this build does not implement is named, not stubbed. Task 10.6 adds
+        # `pressure_water` beside `closed`; anything else is still refused by name, and the
+        # refusals for a `pressure_water` boundary that is incompletely specified belong to
+        # that task's own diagnostic (`operations.jl`). A closed boundary that names cells is
+        # a contradiction rather than a closed boundary.
         boundary_message = expect_refusal!(
-            "unimplemented_boundary",
+            "unknown_boundary_kind",
             () -> adapter.build_forces(
                 model,
                 interval0,
-                Dict{String,Any}("kind" => "pressure_water", "cells" => Any[0]),
+                Dict{String,Any}("kind" => "aquifer", "cells" => Any[0]),
             ),
         )
-        @test occursin("pressure_water", boundary_message)
-        @test occursin("Tasks 9-10", boundary_message)
+        @test occursin("aquifer", boundary_message)
+        @test occursin("'closed' and 'pressure_water'", boundary_message)
         closed_message = expect_refusal!(
             "closed_boundary_with_cells",
             () -> adapter.build_forces(

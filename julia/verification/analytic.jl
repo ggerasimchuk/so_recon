@@ -9,12 +9,19 @@
 # reimplemented flux: SPEC 8.1 leaves JutulDarcy the only operational backend, and a
 # verification that used its own numerics would verify the wrong thing.
 #
-# This file is a PROGRAM, not a definition module. `fixtures.jl` deliberately avoids loading
-# the adapter so it can be included from either side of the tree; nothing includes this file,
-# so it loads the adapter at the top and is done with it. What it shares with `fixtures.jl` is
-# only the constants and the JSON shapes — `SECONDS_PER_DAY`, `DATUM_M`, `educational_fluids`,
+# This file is both a program and the place Task 9's shared fixture vocabulary lives.
+# `fixtures.jl` deliberately avoids loading the adapter so it can be included from either side
+# of the tree; this file loads it at the top, and what it shares with `fixtures.jl` is only the
+# constants and the JSON shapes — `SECONDS_PER_DAY`, `DATUM_M`, `educational_fluids`,
 # `control_segment`, `serialisable_arrays` — which is why that file is included rather than
 # copied.
+#
+# Task 10's `operations.jl` includes THIS file in turn, for `uniform_cell_centers`,
+# `limit_fluids`, `analytic_well`, `analytic_skeleton`, the adapter handle and `bl_case` — the
+# 10.8 refinement study drives the same Buckley-Leverett core 9.6 does, at a second grid and a
+# halved timestep, and a second copy of that case would be a second reference. The
+# `PROGRAM_FILE` guard at the foot of this file is what makes including it inert: the
+# diagnostic runs only when this file is the one julia was given.
 #
 # The scoring itself is NOT here. Julia measures what only Julia can see (the native face
 # gravity parameter, the native densities, the exception a broken PVT raises at construction)
@@ -83,19 +90,28 @@ function limit_fluids(;
     return fluid
 end
 
-"""One well of an analytic fixture, perforating `cells` with its datum at `reference_depth`."""
+"""
+One well of a fixture, perforating `cells` with its datum at `reference_depth`.
+
+`model` is `"multisegment"` by default because that is the wellbore whose SEGMENTS can carry
+opposed connection fluxes, which is what plan 10.4's crossflow case is about. Task 10.7's
+five-spot producer asks for `"simple"` instead: a `SimpleWell` is one node, so its four
+connections are equidistant by construction and the pressure support of the five-spot has the
+exact symmetry of the even grid.
+"""
 function analytic_well(
     well_id::AbstractString,
     cells::Vector{Int};
     reference_depth::Float64,
     radius::Float64 = 0.1,
+    model::AbstractString = "multisegment",
 )
     return Dict{String,Any}(
         "well_id" => String(well_id),
         "cells" => cells,
         "radius_m" => radius,
         "reference_depth_m" => reference_depth,
-        "model" => "multisegment",
+        "model" => String(model),
         # The native wellbore always couples its connections (`check_crossflow` in model.jl).
         "allow_crossflow" => true,
     )
@@ -126,7 +142,15 @@ function shut_monitor_controls(well_id::AbstractString, edges_days::Vector{Float
     ]
 end
 
-"""The case skeleton every analytic fixture shares, in the exchange's own JSON shape."""
+"""
+The case skeleton every analytic and operational fixture shares, in the exchange's own JSON
+shape.
+
+`boundary` defaults to the closed one every Task 9 fixture has; Task 10.6 is the first case
+to pass anything else, and it passes the `pressure_water` mapping the contract declares.
+`start_date` is a keyword for the same reason: a fixture whose events fall inside a real
+calendar month needs to say which month.
+"""
 function analytic_skeleton(;
     case_id::AbstractString,
     dims::NTuple{3,Int},
@@ -135,11 +159,13 @@ function analytic_skeleton(;
     wells::Vector{Any},
     controls::Vector{Any},
     report_edges_days::Vector{Float64},
+    boundary::AbstractDict = Dict{String,Any}("kind" => "closed", "cells" => Any[]),
+    start_date::AbstractString = "2020-01-01",
 )
     return Dict{String,Any}(
         "schema_version" => "case-1",
         "case_id" => String(case_id),
-        "start_date" => "2020-01-01",
+        "start_date" => String(start_date),
         "grid" => Dict{String,Any}(
             "shape" => collect(dims),
             "extent_m" => collect(extent),
@@ -149,7 +175,7 @@ function analytic_skeleton(;
         "fluids" => fluids,
         "wells" => wells,
         "controls" => controls,
-        "boundary" => Dict{String,Any}("kind" => "closed", "cells" => Any[]),
+        "boundary" => Dict{String,Any}(boundary),
         "report_edges_s" => report_edges_days .* SECONDS_PER_DAY,
         "units" => Dict{String,Any}("control_rate" => "m3_sc/day"),
         "gravity_m_s2" => STANDARD_GRAVITY_M_S2,

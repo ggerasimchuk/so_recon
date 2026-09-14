@@ -27,12 +27,17 @@ from so_recon.validation.balance import (
 from so_recon.validation.physics import (
     DEFAULT_TOLERANCES_RELPATH,
     TOLERANCE_SCHEMA_VERSION,
+    CommonSupport,
     PhysicsCheck,
+    aggregate_so,
     bl_cell_average,
     bl_front_position,
     bl_saturation,
+    cartesian_zone_ids,
+    compare_refinement,
     evaluate_physics,
     load_tolerances,
+    mirror_symmetry_abs,
 )
 
 __all__ = [
@@ -43,12 +48,17 @@ __all__ = [
     "MEDIAN_STEP_RELATIVE_TOLERANCE",
     "STRICT_STEP_RELATIVE_TARGET",
     "BalanceMetrics",
+    "CommonSupport",
     "PhysicsCheck",
+    "aggregate_so",
     "bl_cell_average",
     "bl_front_position",
     "bl_saturation",
+    "cartesian_zone_ids",
+    "compare_refinement",
     "component_balance",
     "evaluate_physics",
     "load_tolerances",
+    "mirror_symmetry_abs",
     "relative_balance_errors",
 ]
