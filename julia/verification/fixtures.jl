@@ -1451,15 +1451,17 @@ function selftest_outputs(adapter::Module)
         @test all(abs(c["total_mass_kg_s"]) > 1.0e-3 for c in open_payload["connections"])
         measured["open_connections"] = open_payload["connections"]
 
-        # --- 7.4 a well whose connection flux cannot be reproduced is REFUSED ------------
-        # `setup_well(...; simple_well = true)` builds a `SimpleWell` domain with
-        # `explicit_dp = true`, and JutulDarcy 0.3.11 keeps that connection pressure drop as
-        # an EXTRA STATE FIELD which is not in the model's `output_variables`. The value the
-        # solver used at each substep is therefore never stored, and
-        # `perforation_phase_potential_difference` prefers it over the density head whenever
-        # it is present — so a flux rebuilt from the re-initialised zeros is a plausible
-        # number that conserves nothing. Measured before this guard existed: 6.8 m³_sc of
-        # reservoir mass unaccounted for over a single day. It is refused by name instead.
+        # --- 7.4 a SimpleWell's connection flux, and the field it depends on -------------
+        # `setup_well(...; simple_well = true)` builds a `SimpleWell` with `explicit_dp =
+        # true`, whose connection pressure drop JutulDarcy 0.3.11 keeps as an EXTRA STATE
+        # FIELD rather than a variable; `select_minimum_output_variables!` does not list it,
+        # so by default it is never stored, and `perforation_phase_potential_difference`
+        # reads it in preference to the density head. Measured with it missing: 6.8 m³_sc of
+        # reservoir mass unaccounted for over a single day. `request_extra_outputs!` asks the
+        # well submodel to record it — a change to what is stored, not to what is solved —
+        # and `evaluated_state` restores the stored value over the zeros `setup_state!`
+        # re-initialises. Both halves are checked here: that it conserves WITH the field, and
+        # that the extraction still refuses WITHOUT it.
         simple_case, simple_arrays = selftest_single_well_case(
             nz = 2,
             cells = [CONTROLS_NX - 1, 2 * CONTROLS_NX - 1],
@@ -1470,9 +1472,71 @@ function selftest_outputs(adapter::Module)
             bhp_limit_pa = nothing,
             connection_open = Bool[true, true],
             well_model = "simple",
+            days = 5.0,
         )
+        simple_schedule = adapter.compile_intervals(simple_case)
+        simple_physical = adapter.build_ow(simple_case, simple_arrays)
+        # What the model would have recorded on its own, and what asking adds.
+        simple_wm = simple_physical.model.models[:PRO1]
+        @test !(:ConnectionPressureDrop in simple_wm.output_variables)
+        @test adapter.request_extra_outputs!(simple_physical.model) ==
+              Dict("PRO1" => ["ConnectionPressureDrop"])
+        @test :ConnectionPressureDrop in simple_wm.output_variables
+        # Asking for it a second time is a no-op, and Jutul agrees the field is askable.
+        @test adapter.request_extra_outputs!(simple_physical.model) == Dict{String,Any}()
+        Jutul.check_output_variables(simple_physical.model)
+
+        simple_forces = [
+            adapter.build_forces(simple_physical.model, g, simple_case["boundary"])
+            for g in simple_schedule.controls
+        ]
+        simple_state0 = deepcopy(simple_physical.state0)
+        simple_result = simulate_reservoir(
+            simple_physical.state0,
+            simple_physical.model,
+            diff(simple_schedule.edges_s);
+            parameters = simple_physical.parameters,
+            forces = simple_forces,
+            info_level = -1,
+            output_substates = true,
+            max_timestep = SECONDS_PER_DAY,
+        )
+        simple_states, _, _ = Jutul.expand_to_ministeps(simple_result.result)
+        # It really is stored now, and it is not a vector of zeros.
+        @test haskey(simple_states[1][:PRO1], :ConnectionPressureDrop)
+        @test all(!iszero, simple_states[1][:PRO1][:ConnectionPressureDrop])
+        simple = adapter.extract_interval(
+            simple_result,
+            simple_physical.model,
+            simple_physical.parameters,
+            simple_forces,
+            simple_state0;
+            controls_by_interval = simple_schedule.controls,
+            edges_s = simple_schedule.edges_s,
+            state_times_s = Float64.(simple_case["report_edges_s"]),
+        )
+        @test simple["stored_extra_state_fields"] == Dict("PRO1" => ["ConnectionPressureDrop"])
+        @test any(abs(c["total_mass_kg_s"]) > 1.0e-3 for c in simple["connections"])
+        simple_residual = balance_residual(
+            simple["reservoir_inventory_m3_sc"], simple["net_connection_source_m3_sc"],
+        )
+        # 6.8 m³_sc without the field; measured 9.3e-5 m³_sc with it.
+        @test maximum(maximum(abs.(r)) for r in simple_residual) < 1.0e-2
+        measured["simple_well_extraction"] = simple
+        measured["simple_well_residual_m3_sc"] =
+            maximum(maximum(abs.(r)) for r in simple_residual)
+        measured["simple_well_connection_pressure_drop_pa"] =
+            collect(simple_states[1][:PRO1][:ConnectionPressureDrop])
+
+        # And the guard is still a guard: strip the stored field out of one substate and the
+        # extraction refuses rather than reading the re-initialised zeros. This needs no
+        # second simulation — it is the same states with one key taken away.
+        stripped = deepcopy(simple_states[1])
+        delete!(stripped[:PRO1], :ConnectionPressureDrop)
         simple_refusal = try
-            adapter.run_forward(simple_case, simple_arrays)
+            adapter.evaluated_state(
+                simple_physical.model, simple_physical.parameters, stripped,
+            )
             nothing
         catch err
             err
@@ -1481,7 +1545,7 @@ function selftest_outputs(adapter::Module)
         simple_message = simple_refusal === nothing ? "" : sprint(showerror, simple_refusal)
         @test occursin("ConnectionPressureDrop", simple_message)
         @test occursin("PRO1", simple_message)
-        @test occursin("use a multisegment well", simple_message)
+        @test occursin("request_extra_outputs!", simple_message)
         measured["simple_well_refusal"] = simple_message
 
         # --- 7.3 the same integral under real timestep cuts -----------------------------

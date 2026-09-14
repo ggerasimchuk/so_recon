@@ -50,6 +50,19 @@ const EXTRACT_COMPONENTS = ("water", "oil")
 #: reservoir time scales and far below any event anybody schedules.
 const TIME_MATCH_TOLERANCE_S = 1e-6
 
+#: Fields the native perforation flux reads that are EXTRA STATE FIELDS rather than
+#: variables, and are therefore not stored unless a model is asked to store them.
+#:
+#: There is one in JutulDarcy 0.3.11. A `SimpleWell` built with `explicit_dp = true` — the
+#: constructor's default — keeps its connection pressure drop in
+#: `initialize_extra_state_fields!` (`src/facility/wells/stdwells.jl:71`), and
+#: `select_minimum_output_variables!` does not list it, so `get_output_state` never copies
+#: it out. `perforation_phase_potential_difference` (`src/facility/cross_terms.jl:74`) reads
+#: it in preference to the density head, so without it every connection flux of such a well
+#: is computed from zeros: measured 6.8 m³_sc of reservoir mass unaccounted for over a single
+#: day. `request_extra_outputs!` asks for it and `evaluated_state` restores it.
+const PERFORATION_EXTRA_STATE_FIELDS = (:ConnectionPressureDrop,)
+
 # --------------------------------------------------------------------------------------
 # the schedule, as the production path compiles it
 # --------------------------------------------------------------------------------------
@@ -142,29 +155,31 @@ function evaluated_state(model, parameters, state::AbstractDict)
     for name in vcat([:Reservoir], well_names(model))
         haskey(state, name) ||
             invalid("extract_interval: the stored state carries no submodel $(name)")
+        stored = state[name]
         evaluated = Jutul.evaluate_all_secondary_variables(
             model.models[name],
-            state[name],
+            stored,
             parameters[name],
         )
-        # `setup_state!` re-initialises a model's EXTRA state fields, which is not the same
-        # thing as recomputing a secondary variable: an extra field that was not stored comes
-        # back as whatever it is initialised to, and for a `SimpleWell`'s explicit connection
-        # pressure drop that is a vector of zeros. `perforation_phase_potential_difference`
-        # prefers that field over the density term whenever it is present, so a flux computed
-        # from the zeros would be a plausible number that conserves nothing. It is refused
-        # instead — see the note on `connection_component_flux`.
-        if haskey(evaluated, :ConnectionPressureDrop) && !haskey(state[name], :ConnectionPressureDrop)
-            invalid(
-                "extract_interval: well $(name) carries an explicit ConnectionPressureDrop, " *
-                "which JutulDarcy $(pkgversion(JutulDarcy)) keeps as an extra state field and " *
-                "does NOT list in the model's output_variables, so the value the solver used " *
-                "at each accepted substep was never stored. The native perforation flux reads " *
-                "that field in preference to the density head, so this connection flux cannot " *
-                "be reproduced from the stored state. Refusing rather than publishing a flux " *
-                "computed from a re-initialised zero; use a multisegment well, whose segment " *
-                "pressures ARE stored",
+        # An EXTRA STATE FIELD is not a secondary variable and is not recomputed from
+        # anything: `setup_state!` ends by calling `initialize_extra_state_fields!`, which
+        # assigns the field its initial value unconditionally — zeros, for a `SimpleWell`'s
+        # explicit connection pressure drop. `perforation_phase_potential_difference` prefers
+        # that field over the density head whenever it is present, so evaluating a substate
+        # and using the result directly would compute every perforation flux from those
+        # zeros. The value the solver actually used is restored from the stored substate
+        # instead, and a substate that does not carry it is refused rather than guessed.
+        for field in PERFORATION_EXTRA_STATE_FIELDS
+            haskey(evaluated, field) || continue
+            haskey(stored, field) || invalid(
+                "extract_interval: well $(name) carries an explicit $(field), which " *
+                "JutulDarcy $(pkgversion(JutulDarcy)) keeps as an extra state field rather " *
+                "than a variable, and this run did not store it. The native perforation flux " *
+                "reads that field in preference to the density head, so a flux rebuilt here " *
+                "would come from a re-initialised zero and would conserve nothing. Call " *
+                "request_extra_outputs!(model) before simulating",
             )
+            evaluated[field] = copy(stored[field])
         end
         out[name] = evaluated
     end
@@ -175,6 +190,43 @@ end
 function component_inventory(evaluated, name::Symbol, rhoS::Vector{Float64})
     masses = evaluated[name][:TotalMasses]
     return Float64[sum(view(masses, c, :)) / rhoS[c] for c in eachindex(rhoS)]
+end
+
+"""
+    request_extra_outputs!(model) -> Dict{String, Vector{String}}
+
+Ask every well submodel to STORE the extra state fields its perforation flux depends on.
+
+A `SimulationModel` carries its own `output_variables`, and `get_output_state`
+(`Jutul/src/models.jl:1048`) copies exactly those; Jutul's own `check_output_variables`
+enumerates `initialize_extra_state_fields!` alongside the variables when it decides what a
+model may legally be asked for, so an extra state field is a permitted output and is simply
+not one of the defaults. Pushing it on is therefore a change to what is RECORDED and not to
+what is solved: no equation, variable or parameter moves, and the model hash covers none of
+it.
+
+This has to be called on the model BEFORE it is simulated. `run_forward` does it; a driver
+that assembles its own simulation must do it too, and `evaluated_state` refuses rather than
+silently reading a re-initialised zero if it was not.
+
+Returns what was added, per well, so a diagnostic can show the mechanism fired.
+"""
+function request_extra_outputs!(model)
+    added = Dict{String,Vector{String}}()
+    for name in well_names(model)
+        submodel = model.models[name]
+        probe = Jutul.JutulStorage()
+        Jutul.initialize_extra_state_fields!(probe, submodel)
+        gained = String[]
+        for field in PERFORATION_EXTRA_STATE_FIELDS
+            (haskey(probe, field) && !(field in submodel.output_variables)) || continue
+            push!(submodel.output_variables, field)
+            push!(gained, String(field))
+        end
+        unique!(submodel.output_variables)
+        isempty(gained) || (added[String(name)] = gained)
+    end
+    return added
 end
 
 """
@@ -435,10 +487,19 @@ function extract_interval(
     end
 
     accepted, cut, iterations = solver_counters(sim_result)
+    # Which extra state fields the perforation flux depended on were really in the stored
+    # substates. Empty for a multisegment well, which has none; non-empty for a `SimpleWell`,
+    # where it is the difference between a conserving flux and one computed from zeros.
+    stored_extra = Dict{String,Any}(
+        String(name) => String[
+            String(f) for f in PERFORATION_EXTRA_STATE_FIELDS if haskey(states[1][name], f)
+        ] for name in names
+    )
     return Dict{String,Any}(
         "schema_version" => EXTRACT_SCHEMA_VERSION,
         "components" => collect(EXTRACT_COMPONENTS),
         "reference_densities_kg_m3" => rhoS,
+        "stored_extra_state_fields" => stored_extra,
         "chunk" => Dict{String,Any}(
             "horizon_start_s" => chunk_start_s,
             "horizon_end_s" => chunk_start_s + horizon,
@@ -570,11 +631,16 @@ question about the record, not about the solver (plan 3.3).
 
 `solver` keywords are forwarded to `simulate_reservoir`; `output_substates = true` is not
 one of them, because without it there are no accepted substeps to integrate and this whole
-file would silently report report-step averages instead.
+file would silently report report-step averages instead. Nor is `request_extra_outputs!`,
+for the same reason: without it a `SimpleWell`'s connection flux would be read off a
+re-initialised zero.
 """
 function run_forward(case::AbstractDict, arrays::AbstractDict; state_times_s = nothing, solver...)
     schedule = compile_intervals(case)
     physical = build_ow(case, arrays)
+    # Before anything is simulated: what is RECORDED has to include the extra state fields
+    # the perforation flux reads, or they are gone by the time the result is read.
+    request_extra_outputs!(physical.model)
     forces = [
         build_forces(physical.model, group, case["boundary"]) for group in schedule.controls
     ]

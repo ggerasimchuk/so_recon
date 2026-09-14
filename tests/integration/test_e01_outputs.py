@@ -426,15 +426,23 @@ def test_accepted_substeps_integrate_into_a_complete_verifiable_forward(
     assert february[1]["open_s"] == pytest.approx(8.0 * DAY)
     assert february[0]["bhp_mean_pa"] > 0.0
 
-    # A well whose connection flux cannot be reproduced from the stored state is refused by
-    # name rather than published. `setup_well(simple_well=true)` keeps its explicit
-    # connection pressure drop as an extra state field that JutulDarcy does not output, and
-    # the native perforation flux prefers that field over the density head — so a flux
-    # rebuilt from the re-initialised zeros would conserve nothing (6.8 m³_sc lost over one
-    # day, measured before the guard existed).
+    # A `SimpleWell`'s connection flux depends on an EXTRA STATE FIELD — its explicit
+    # connection pressure drop — which JutulDarcy 0.3.11 does not store by default and which
+    # the native perforation flux reads in preference to the density head. Asking the well
+    # submodel to record it (a change to what is stored, not to what is solved) takes the
+    # reservoir balance from 6.8 m³_sc of mass unaccounted for over one day to 9.3e-5.
+    assert report["simple_well_extraction"]["stored_extra_state_fields"] == {
+        "PRO1": ["ConnectionPressureDrop"]
+    }
+    assert report["simple_well_residual_m3_sc"] < 1e-2
+    assert all(value != 0.0 for value in report["simple_well_connection_pressure_drop_pa"])
+    # A multisegment well has no such field, so nothing is asked for and nothing is stored.
+    assert extraction["stored_extra_state_fields"] == {"INJ1": [], "PRO1": []}
+    # And the guard behind it is still a guard: a substate without the field is refused
+    # rather than read off the re-initialised zeros.
     refusal = report["simple_well_refusal"]
     assert "ConnectionPressureDrop" in refusal
-    assert "PRO1" in refusal and "use a multisegment well" in refusal
+    assert "PRO1" in refusal and "request_extra_outputs!" in refusal
 
     # A fully masked well moves exactly nothing: not a tolerance, a multiplication by zero.
     masked = report["masked_connections"]

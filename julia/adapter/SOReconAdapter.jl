@@ -31,5 +31,6 @@ export build_ow, load_arrays, run_job, InvalidCaseInput
 export build_forces, native_control, control_limits, perforation_mask
 export control_evidence, infeasible_controls
 export compile_intervals, extract_interval, run_forward
+export request_extra_outputs!, evaluated_state
 
 end # module
