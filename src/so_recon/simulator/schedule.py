@@ -123,6 +123,22 @@ class Schedule(StrictModel):
     def durations_s(self) -> tuple[float, ...]:
         return tuple(b - a for a, b in zip(self.edges_s, self.edges_s[1:], strict=False))
 
+    @property
+    def month_edges_s(self) -> tuple[float, ...]:
+        """The report edges the compiled intervals were grouped into, recovered.
+
+        The compiled edge list is the union of the report edges and every event boundary,
+        so the report edges are the subset of it at which `month_index` changes — plus the
+        two ends. Recovering them is what lets an aggregator be given the months a case
+        reports on without the case having to travel beside its own schedule.
+        """
+        edges = [self.edges_s[0]]
+        for interval, month in enumerate(self.month_index):
+            last = interval + 1 == len(self.month_index)
+            if last or self.month_index[interval + 1] != month:
+                edges.append(self.edges_s[interval + 1])
+        return tuple(edges)
+
     def control_for(self, interval: int, well_id: str) -> ControlSegment:
         """The one control this well runs on this interval."""
         for control in self.controls_by_interval[interval]:

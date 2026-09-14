@@ -141,6 +141,30 @@ def test_an_event_inside_a_month_splits_that_month_and_keeps_its_month_index() -
     assert schedule.control_for(2, "PRO1").connection_open == (True, False)
 
 
+def test_the_report_calendar_is_recoverable_from_the_compiled_schedule() -> None:
+    """The months an aggregator reports on, read back out of the compiled intervals.
+
+    The compiled edge list is the union of the report edges and every event boundary, so the
+    report edges are the subset of it where the month changes. Recovering them is what lets
+    a monthly aggregator be given the case's own months without the case travelling beside
+    its schedule — and getting it wrong would silently report on the events instead.
+    """
+    report = month_edges_s(date(2020, 1, 1), 3)
+    schedule = compile_schedule(
+        report,
+        (
+            _segment(0.0, 45.0),
+            _segment(45.0, 52.0, connection_open=(True, False)),
+            _segment(52.0, 91.0),
+        ),
+    )
+    assert schedule.edges_s == (0.0, 31.0 * DAY, 45.0 * DAY, 52.0 * DAY, 60.0 * DAY, 91.0 * DAY)
+    assert schedule.month_index == (0, 1, 1, 1, 2)
+    # Three real months — 31, 29 and 31 days — and not the five compiled intervals.
+    assert schedule.month_edges_s == report
+    assert schedule.month_edges_s == (0.0, 31.0 * DAY, 60.0 * DAY, 91.0 * DAY)
+
+
 def test_a_role_switch_gives_one_month_two_flows() -> None:
     """SPEC 9.1 controls both roles; a well that switches mid-month is two flows, not one."""
     report = month_edges_s(date(2020, 1, 1), 1)

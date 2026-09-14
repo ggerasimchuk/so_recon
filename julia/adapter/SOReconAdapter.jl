@@ -23,9 +23,13 @@ include("model.jl")
 # Forces after the model: `controls.jl` refuses a case through `invalid`, which `model.jl`
 # defines together with the exception the worker maps to INVALID_INPUT.
 include("controls.jl")
+# Outputs last: reading a finished result needs both the model it was built from and the
+# forces it was driven with, and refuses through the same `invalid`.
+include("outputs.jl")
 
 export build_ow, load_arrays, run_job, InvalidCaseInput
 export build_forces, native_control, control_limits, perforation_mask
 export control_evidence, infeasible_controls
+export compile_intervals, extract_interval, run_forward
 
 end # module

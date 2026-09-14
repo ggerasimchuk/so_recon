@@ -7,9 +7,10 @@ Three jobs, in the order a case meets them:
    is refused here, in Python, before any Julia process is started. `validate_case`
    collects everything it finds into a `ValidationReport` instead of raising on the first
    problem, because an operator fixing a case wants the whole list.
-2. **Publish immutably, in one sequence.** `write_array` writes an array to a temporary
-   neighbour file with a single writer, flushes, closes, hashes, compares against whatever
-   already occupies the destination, and only then renames into place. `write_case` then
+2. **Publish immutably, in one sequence.** `write_arrays` writes one or more arrays into a
+   temporary neighbour file with a single writer, flushes, closes, hashes, compares against
+   whatever already occupies the destination, and only then renames into place;
+   `write_array` is the one-dataset case of it. `write_case` then
    runs the rest of that sequence end to end: it registers every array of the case through
    the existing artifact registry and into the run's outputs, and publishes the JSON
    manifest LAST. Losing the process halfway therefore leaves unfinished staging rather
@@ -25,6 +26,7 @@ Three jobs, in the order a case meets them:
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -194,40 +196,49 @@ def _decode(value: Any) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
 
-def write_array(
+def write_arrays(
     path: Path,
-    dataset: str,
-    values: NDArray[Any],
+    datasets: Mapping[str, tuple[NDArray[Any], str, tuple[str, ...]]],
     *,
-    unit: str,
-    axis_order: tuple[str, ...],
     paths: ProjectPaths,
-) -> ArrayRef:
-    """Publish one array as an immutable HDF5 file and describe it.
+) -> dict[str, ArrayRef]:
+    """Publish several arrays into ONE immutable HDF5 file and describe each of them.
 
-    `track_times=False` is not cosmetic: with the HDF5 default the file embeds the moment
-    it was created, so writing the same array twice produces different bytes and the
+    One file, one writer, one rename: the datasets are written together by a single handle
+    and the whole file is staged, flushed, closed, hashed and only then renamed into place.
+    Every `ArrayRef` this returns therefore carries the SAME `sha256`, which is the digest of
+    the file (plan 3.1: «Artifact SHA — байты файла»), and differs only in `dataset`. A
+    reader proves the file first and the dataset second.
+
+    `track_times=False` is not cosmetic: with the HDF5 default the file embeds the moment it
+    was created, so writing the same array twice produces different bytes and the
     content-addressed artifact contract would be unenforceable.
     """
     repo_relative = paths.relative(path)  # also proves containment inside the repository
-    array = np.asarray(values)
-    dtype = _dtype_name(array.dtype)
-    if len(axis_order) != array.ndim:
-        raise ValueError(
-            f"{repo_relative}: axis_order {axis_order} does not describe a "
-            f"{array.ndim}-dimensional array"
-        )
+    if not datasets:
+        raise ValueError(f"{repo_relative}: an HDF5 file is written with at least one dataset")
+    prepared: dict[str, tuple[NDArray[Any], str, str, tuple[str, ...]]] = {}
+    for name, (values, unit, axis_order) in datasets.items():
+        array = np.asarray(values)
+        dtype = _dtype_name(array.dtype)
+        if len(axis_order) != array.ndim:
+            raise ValueError(
+                f"{repo_relative}: {name}: axis_order {axis_order} does not describe a "
+                f"{array.ndim}-dimensional array"
+            )
+        prepared[name] = (array, dtype, unit, tuple(axis_order))
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = stage_path(path)
     try:
         with h5py.File(tmp, "w") as handle:
-            written = handle.create_dataset(dataset, data=array, track_times=False)
-            written.attrs[UNIT_ATTRIBUTE] = unit
-            written.attrs.create(
-                AXIS_ORDER_ATTRIBUTE,
-                list(axis_order),
-                dtype=h5py.string_dtype(encoding="utf-8"),
-            )
+            for name, (array, _, unit, axis_order) in prepared.items():
+                written = handle.create_dataset(name, data=array, track_times=False)
+                written.attrs[UNIT_ATTRIBUTE] = unit
+                written.attrs.create(
+                    AXIS_ORDER_ATTRIBUTE,
+                    list(axis_order),
+                    dtype=h5py.string_dtype(encoding="utf-8"),
+                )
             handle.flush()
         digest = sha256_file(tmp)
         if path.exists():
@@ -240,15 +251,33 @@ def write_array(
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    return ArrayRef(
-        path=repo_relative,
-        dataset=dataset,
-        sha256=digest,
-        shape=tuple(int(n) for n in array.shape),
-        dtype=dtype,
-        unit=unit,
-        axis_order=tuple(axis_order),
-    )
+    return {
+        name: ArrayRef(
+            path=repo_relative,
+            dataset=name,
+            sha256=digest,
+            shape=tuple(int(n) for n in array.shape),
+            dtype=dtype,
+            unit=unit,
+            axis_order=axis_order,
+        )
+        for name, (array, dtype, unit, axis_order) in prepared.items()
+    }
+
+
+def write_array(
+    path: Path,
+    dataset: str,
+    values: NDArray[Any],
+    *,
+    unit: str,
+    axis_order: tuple[str, ...],
+    paths: ProjectPaths,
+) -> ArrayRef:
+    """Publish one array as an immutable single-dataset HDF5 file and describe it."""
+    return write_arrays(path, {dataset: (np.asarray(values), unit, axis_order)}, paths=paths)[
+        dataset
+    ]
 
 
 def read_array(ref: ArrayRef, paths: ProjectPaths) -> NDArray[Any]:

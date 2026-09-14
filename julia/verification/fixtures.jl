@@ -741,6 +741,7 @@ function selftest_single_well_case(;
     bhp_limit_pa::Union{Nothing,Real},
     connection_open::Vector{Bool},
     days::Real = 1.0,
+    well_model::AbstractString = "multisegment",
 )
     nx = CONTROLS_NX
     n_cells = nx * nz
@@ -755,7 +756,7 @@ function selftest_single_well_case(;
         ),
         "rock" => Dict{String,Any}("rock_compressibility_pa_inv" => 0.0),
         "fluids" => educational_fluids(),
-        "wells" => Any[well_spec("PRO1", cells)],
+        "wells" => Any[well_spec("PRO1", cells; model = well_model)],
         "controls" => Any[control_segment(
             start_day = 0.0,
             end_day = days,
@@ -1313,11 +1314,227 @@ function selftest_controls(adapter::Module)
     return measured
 end
 
+# ======================================================================================
+# The outputs diagnostic (plan Task 7.8). Also only runs as a program.
+# ======================================================================================
+
+"""Serialise a matrix as an explicit list of ROWS, so no layout has to be guessed."""
+rows_of(m::AbstractMatrix) = [collect(Float64.(r)) for r in eachrow(m)]
+
+"""The fixture arrays in the row-explicit shape the Python side rebuilds a case from."""
+function serialisable_arrays(arrays::AbstractDict)
+    return Dict{String,Any}(
+        "cell_centers_m" => rows_of(arrays["cell_centers_m"]),
+        "permeability_m2" => rows_of(arrays["permeability_m2"]),
+        "porosity" => collect(Float64.(arrays["porosity"])),
+        "pressure_pa" => collect(Float64.(arrays["pressure_pa"])),
+        "sw" => collect(Float64.(arrays["sw"])),
+    )
+end
+
+"""Per-step balance residual of one extraction, as `ΔI - source`, per component."""
+function balance_residual(inventory, source)
+    return [
+        [inventory[k + 1][c] - inventory[k][c] - source[k][c] for c in eachindex(source[k])]
+        for k in eachindex(source)
+    ]
+end
+
+function selftest_outputs(adapter::Module)
+    measured = Dict{String,Any}(
+        "julia_version" => string(VERSION),
+        "jutul_version" => string(pkgversion(Jutul)),
+        "jutuldarcy_version" => string(pkgversion(JutulDarcy)),
+    )
+
+    @testset "E01 accepted-substep integrals and outputs" begin
+        # --- 7.3/7.5/7.6 the calendar fixture, integrated over its accepted substeps -----
+        case, arrays = verification_case(:two_interval_controls)
+        payload = adapter.run_forward(case, arrays; max_timestep = 5 * SECONDS_PER_DAY)
+        @test payload["status"] == "COMPLETE"
+        chunk = payload["chunk"]
+        dt = chunk["dt_s"]
+        @test all(>(0.0), dt)
+        @test sum(dt) ≈ sum(CONTROLS_MONTH_DAYS) * SECONDS_PER_DAY
+        # Every accepted substep, and nothing else: the solver's own accepted count.
+        @test length(dt) == payload["solver"]["accepted_steps"]
+        @test payload["solver"]["cut_steps"] == 0
+        # More substeps than report intervals, so the integral really is over substeps.
+        @test length(dt) > length(chunk["edges_s"]) - 1
+
+        # Conservation, both ways. The reservoir against the native connection cross term,
+        # and the reservoir PLUS the wellbores against the surface flux: the two differ by
+        # the well storage, which is why they are kept apart.
+        surface_residual = balance_residual(
+            payload["inventory_m3_sc"], payload["net_surface_source_m3_sc"],
+        )
+        connection_residual = balance_residual(
+            payload["reservoir_inventory_m3_sc"], payload["net_connection_source_m3_sc"],
+        )
+        @test maximum(maximum(abs.(r)) for r in surface_residual) < 1.0e-2
+        @test maximum(maximum(abs.(r)) for r in connection_residual) < 1.0e-2
+
+        # --- 7.3 `result.result`, not `result.states` -----------------------------------
+        # The high-level states are `map(x -> x[:Reservoir], states)`: no facility and no
+        # wellbore, so no well rate can be read from them. This is the choice the plan
+        # names, pinned by a test rather than by a comment.
+        iso_case, iso_arrays = selftest_single_well_case(
+            nz = 2,
+            cells = [CONTROLS_NX - 1, 2 * CONTROLS_NX - 1],
+            pressure = fill(CONTROLS_INITIAL_PRESSURE_PA, CONTROLS_NX * 2),
+            role = "producer",
+            target = "bhp",
+            value = CONTROLS_PRODUCER_BHP_FLOOR_PA,
+            bhp_limit_pa = nothing,
+            connection_open = Bool[false, false],
+            days = 1.0,
+        )
+        iso_schedule = adapter.compile_intervals(iso_case)
+        iso_physical = adapter.build_ow(iso_case, iso_arrays)
+        iso_forces = [
+            adapter.build_forces(iso_physical.model, g, iso_case["boundary"])
+            for g in iso_schedule.controls
+        ]
+        iso_state0 = deepcopy(iso_physical.state0)
+        iso_result = simulate_reservoir(
+            iso_physical.state0,
+            iso_physical.model,
+            diff(iso_schedule.edges_s);
+            parameters = iso_physical.parameters,
+            forces = iso_forces,
+            info_level = -1,
+            output_substates = true,
+        )
+        high_level = sort(string.(collect(keys(iso_result.states[1]))))
+        raw = sort(string.(collect(keys(iso_result.result.states[1]))))
+        @test !("Facility" in high_level) && !("PRO1" in high_level)
+        @test "Facility" in raw && "PRO1" in raw
+        measured["state_keys"] = Dict{String,Any}("high_level" => high_level, "raw" => raw)
+
+        # --- 7.4 a fully masked well moves exactly nothing through its connections -------
+        iso_payload = adapter.extract_interval(
+            iso_result,
+            iso_physical.model,
+            iso_physical.parameters,
+            iso_forces,
+            iso_state0;
+            controls_by_interval = iso_schedule.controls,
+            edges_s = iso_schedule.edges_s,
+            state_times_s = Float64.(iso_case["report_edges_s"]),
+        )
+        masked = iso_payload["connections"]
+        @test !isempty(masked)
+        @test all(!c["connection_open"] for c in masked)
+        # Not a tolerance: a masked connection multiplies the native cross term by zero.
+        @test all(c["total_mass_kg_s"] == 0.0 for c in masked)
+        @test all(c["water_mass_kg_s"] == 0.0 && c["oil_mass_kg_s"] == 0.0 for c in masked)
+        measured["masked_connections"] = masked
+
+        # The contrast, so the zero above is the mask and not an empty extraction.
+        open_case, open_arrays = selftest_single_well_case(
+            nz = 2,
+            cells = [CONTROLS_NX - 1, 2 * CONTROLS_NX - 1],
+            pressure = fill(CONTROLS_INITIAL_PRESSURE_PA, CONTROLS_NX * 2),
+            role = "producer",
+            target = "bhp",
+            value = CONTROLS_PRODUCER_BHP_FLOOR_PA,
+            bhp_limit_pa = nothing,
+            connection_open = Bool[true, true],
+            days = 1.0,
+        )
+        open_payload = adapter.run_forward(open_case, open_arrays)
+        @test all(c["connection_open"] for c in open_payload["connections"])
+        # The same well, the same day, the same bottom-hole target, with the completions
+        # open: every connection carries a real flux (about 0.09 kg/s here) rather than the
+        # exact zero above. Without this the masked assertion would also pass on an
+        # extraction that computed nothing at all.
+        @test all(abs(c["total_mass_kg_s"]) > 1.0e-3 for c in open_payload["connections"])
+        measured["open_connections"] = open_payload["connections"]
+
+        # --- 7.4 a well whose connection flux cannot be reproduced is REFUSED ------------
+        # `setup_well(...; simple_well = true)` builds a `SimpleWell` domain with
+        # `explicit_dp = true`, and JutulDarcy 0.3.11 keeps that connection pressure drop as
+        # an EXTRA STATE FIELD which is not in the model's `output_variables`. The value the
+        # solver used at each substep is therefore never stored, and
+        # `perforation_phase_potential_difference` prefers it over the density head whenever
+        # it is present — so a flux rebuilt from the re-initialised zeros is a plausible
+        # number that conserves nothing. Measured before this guard existed: 6.8 m³_sc of
+        # reservoir mass unaccounted for over a single day. It is refused by name instead.
+        simple_case, simple_arrays = selftest_single_well_case(
+            nz = 2,
+            cells = [CONTROLS_NX - 1, 2 * CONTROLS_NX - 1],
+            pressure = fill(CONTROLS_INITIAL_PRESSURE_PA, CONTROLS_NX * 2),
+            role = "producer",
+            target = "bhp",
+            value = CONTROLS_PRODUCER_BHP_FLOOR_PA,
+            bhp_limit_pa = nothing,
+            connection_open = Bool[true, true],
+            well_model = "simple",
+        )
+        simple_refusal = try
+            adapter.run_forward(simple_case, simple_arrays)
+            nothing
+        catch err
+            err
+        end
+        @test simple_refusal isa adapter.InvalidCaseInput
+        simple_message = simple_refusal === nothing ? "" : sprint(showerror, simple_refusal)
+        @test occursin("ConnectionPressureDrop", simple_message)
+        @test occursin("PRO1", simple_message)
+        @test occursin("use a multisegment well", simple_message)
+        measured["simple_well_refusal"] = simple_message
+
+        # --- 7.3 the same integral under real timestep cuts -----------------------------
+        # A deliberately starved nonlinear budget makes the solver fail and cut. The cut
+        # trial states are NOT in the accepted list, the accepted ones still tile the
+        # chunk, and the rate-controlled month still integrates to the volume its control
+        # pins — which is the property a cut must not be able to break.
+        cut = adapter.run_forward(case, arrays; max_nonlinear_iterations = 3)
+        @test cut["status"] == "COMPLETE"
+        @test cut["solver"]["cut_steps"] > 0
+        @test length(cut["chunk"]["dt_s"]) == cut["solver"]["accepted_steps"]
+        @test all(>(0.0), cut["chunk"]["dt_s"])
+        @test sum(cut["chunk"]["dt_s"]) ≈ sum(CONTROLS_MONTH_DAYS) * SECONDS_PER_DAY
+
+        # --- 7.8 an unreachable rate still extracts, and says it was unreachable --------
+        bad_case, bad_arrays = selftest_single_well_case(
+            nz = 2,
+            cells = [CONTROLS_NX - 1, 2 * CONTROLS_NX - 1],
+            pressure = fill(CONTROLS_INITIAL_PRESSURE_PA, CONTROLS_NX * 2),
+            role = "producer",
+            target = "liquid_rate",
+            value = 1.0e5,
+            bhp_limit_pa = CONTROLS_PRODUCER_BHP_FLOOR_PA,
+            connection_open = Bool[true, true],
+        )
+        infeasible = adapter.run_forward(bad_case, bad_arrays)
+        @test infeasible["status"] == "COMPLETE"
+        @test infeasible["control_infeasible_reason"] !== nothing
+        @test occursin("requested lrat=100000.0", infeasible["control_infeasible_reason"])
+        measured["infeasible_reason"] = infeasible["control_infeasible_reason"]
+        measured["infeasible_evidence"] = infeasible["control_evidence"]
+
+        # --- what the Python side reads back --------------------------------------------
+        measured["case"] = case
+        measured["arrays"] = serialisable_arrays(arrays)
+        measured["extraction"] = payload
+        measured["extraction_with_cuts"] = cut
+        measured["isolated_extraction"] = iso_payload
+    end
+
+    measured["status"] = "ok"
+    return measured
+end
+
 """Parse the diagnostic to run and the optional `--out` the project launcher appends."""
 function parse_selftest_args(args::Vector{String})
     out = nothing
     mode = nothing
-    modes = Dict("--test-model" => :model, "--test-controls" => :controls)
+    modes = Dict(
+        "--test-model" => :model,
+        "--test-controls" => :controls,
+        "--test-outputs" => :outputs,
+    )
     i = 1
     while i <= length(args)
         if haskey(modes, args[i])
@@ -1339,11 +1556,17 @@ end
 function selftest_main(args::Vector{String}, adapter::Module)
     mode, out = parse_selftest_args(args)
     mode === nothing && error(
-        "nothing to do: pass --test-model for the constructor diagnostic or --test-controls " *
-        "for the calendar and control diagnostic",
+        "nothing to do: pass --test-model for the constructor diagnostic, --test-controls " *
+        "for the calendar and control diagnostic, or --test-outputs for the accepted-substep " *
+        "integrals and their balance",
+    )
+    diagnostics = Dict(
+        :model => selftest,
+        :controls => selftest_controls,
+        :outputs => selftest_outputs,
     )
     payload = try
-        mode === :model ? selftest(adapter) : selftest_controls(adapter)
+        diagnostics[mode](adapter)
     catch err
         # The launcher reads --out when stderr is empty, so the cause has to be in the file.
         failure = Dict{String,Any}("status" => "error", "message" => sprint(showerror, err))
