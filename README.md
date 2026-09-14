@@ -57,13 +57,15 @@ E00 открывает их только на чтение. Каталог `data
     uv run so-recon --config configs/e01.yml forward --case PATH
     uv run so-recon --config configs/e01.yml forward-resume --case PATH --restart PATH
     uv run so-recon --config configs/e01.yml verify-physics --suite {p0|p1|bo}
+    uv run so-recon --config configs/e01.yml verify-physics --suite p0 \
+        --resume-ledger artifacts/runs/<run_id>/ledgers/<job>.json [--replay]
     uv run so-recon --config configs/e01.yml synthetic-p1 --seeds 41 42 43 44 45
     uv run so-recon --config configs/e01.yml benchmark-forward --case PATH --warm-runs 5
     uv run so-recon --config configs/e01.yml e01-report --runs PATH [PATH ...]
 
     make e01-p0                   # зарегистрированный P0 suite (бюджет 10 минут)
     make e01-p1                   # зарегистрированный P1 suite (бюджет 1 час)
-    make e01-gate                 # регрессия + suites + stage-валидаторы
+    make e01-gate                 # регрессия + suites + валидаторы + stage-отчёт
     make e01-report RUNS="artifacts/runs/<run_id> ..."
 
 `PATH` — **фактический** путь: файл, который у оператора есть, или путь, который напечатала
@@ -79,7 +81,18 @@ E00 открывает их только на чтение. Каталог `data
 Фигуры (`reports/figures/*.png`) читаются из опубликованных HDF5/Parquet; подпись на каждой:
 «synthetic truth; exploratory; educational OW».
 
-`scripts/e01_gate.sh` намеренно **не** вызывает `scripts/gate.sh`: тот удаляет `.venv` и
+`--resume-ledger` принимает путь ledger, который напечатала предыдущая команда. Сессия
+читает опубликованный `e01_suite.json` того запуска: группа, все запланированные jobs которой
+вернулись ожидаемым статусом и все проверки которой PASS, переносится вперёд и не
+перезапускается; остальные выполняются **в прежнем порядке плана**. Forward, чей model hash и
+digest опубликованного case-манифеста уже имеют COMPLETE-запись на ledger родителя, не входит
+в solver повторно. Проваленная проверка никогда не переносится. `--replay` отключает и то, и
+другое и перезапускает всё.
+
+`scripts/e01_gate.sh` запускает регрессию, зарегистрированные suites, stage-валидаторы
+(`--fail-on-skip`: SKIP в матрице gate — это не PASS, план 12.9) и пересобирает
+`reports/stages/E01.md` из тех же артефактов. Frozen inputs проверяются на **любом** выходе,
+включая выход после провалившегося шага. Он намеренно **не** вызывает `scripts/gate.sh`: тот удаляет `.venv` и
 сверяет lock-файлы с HEAD. Полный foundation gate выполняется отдельно, после коммита
 изменений зависимостей (E01 добавляет Matplotlib). Детерминированный отчёт окружения E00
 не перезаписывается: каждая E01-сессия пишет свои lock-хэши и свой хост в

@@ -37,7 +37,7 @@ from typing import Any, Literal
 from so_recon.config.schema import StrictModel
 from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
-from so_recon.simulator.commands import (
+from so_recon.simulator.suite_record import (
     MANDATORY_CHECKS,
     SUITE_REPORT_FILENAME,
     JobOutcome,
@@ -134,11 +134,13 @@ class CostAccount(StrictModel):
 
     ledger_forwards: int
     ledger_wall_s: float
-    ledger_cpu_s: float
-    ledger_output_bytes: int
+    #: `None` where nothing measured it. A launcher forward has no process of its own to
+    #: weigh, so summing its absence as a zero would publish a total nobody measured.
+    ledger_cpu_s: float | None
+    ledger_output_bytes: int | None
     launcher_forwards: int
     launcher_wall_s: float
-    peak_rss_bytes: int
+    peak_rss_bytes: int | None
     restart_write_s: float | None
     restart_read_s: float | None
     note: str
@@ -270,6 +272,29 @@ def _status(
     return "PASS", "every mandatory check passed and black oil ran"
 
 
+def _total(values: Sequence[float | int | None]) -> float | None:
+    """The sum of what was measured, or None when nothing was.
+
+    An absent measurement is not a zero contribution: it is an unknown one, and a total
+    that quietly treated it as zero would understate the stage's cost without saying so.
+    """
+    present = [v for v in values if v is not None]
+    return float(sum(present)) if present else None
+
+
+def _ow_gate(status: StageStatus) -> str:
+    """The oil-water gate, read off the stage verdict itself.
+
+    `_status` is the only place that decides whether this stage's matrix is complete and
+    green, and the OW gate is a name for exactly that decision about the oil-water scope. A
+    second, looser computation of the same thing is how `ow_gate: PASS` came to sit inside
+    the JSON of a report whose rendered status was FAIL.
+    """
+    if status == "NOT_RUN":
+        return "NOT_RUN"
+    return "PASS" if status in ("PASS", "PASS_WITH_LIMITATIONS") else "FAIL"
+
+
 def _costs(jobs: Sequence[JobOutcome], ledgers: Sequence[Mapping[str, Any]]) -> CostAccount:
     ledger_jobs = [job for job in jobs if job.accounting == "ledger" and job.status != "NOT_RUN"]
     launcher_jobs = [
@@ -277,14 +302,17 @@ def _costs(jobs: Sequence[JobOutcome], ledgers: Sequence[Mapping[str, Any]]) -> 
     ]
     writes = [job.restart_write_s for job in jobs if job.restart_write_s is not None]
     reads = [job.restart_read_s for job in jobs if job.restart_read_s is not None]
+    cpu = _total([job.cpu_s for job in ledger_jobs])
+    written = _total([job.output_bytes for job in ledger_jobs])
+    peaks = [job.peak_rss_bytes for job in jobs if job.peak_rss_bytes is not None]
     return CostAccount(
         ledger_forwards=len(ledger_jobs),
         ledger_wall_s=sum(job.wall_s for job in ledger_jobs),
-        ledger_cpu_s=sum(job.cpu_s for job in ledger_jobs),
-        ledger_output_bytes=sum(job.output_bytes for job in ledger_jobs),
+        ledger_cpu_s=cpu,
+        ledger_output_bytes=None if written is None else int(written),
         launcher_forwards=len(launcher_jobs),
         launcher_wall_s=sum(job.wall_s for job in launcher_jobs),
-        peak_rss_bytes=max((job.peak_rss_bytes for job in jobs), default=0),
+        peak_rss_bytes=max(peaks) if peaks else None,
         restart_write_s=max(writes) if writes else None,
         restart_read_s=max(reads) if reads else None,
         note=(
@@ -322,6 +350,92 @@ def _budget(jobs: Sequence[JobOutcome]) -> BudgetForecast:
                 "measurement is not a full ML/SMC budget and is not offered as one."
             ),
         },
+    )
+
+
+P1_SUITE_MANIFEST_RELPATH = "reports/p1_suite_manifest.json"
+
+
+def resource_failures_across_runs(paths: ProjectPaths, cited: Sequence[Path]) -> tuple[str, ...]:
+    """Every RESOURCE_FAILURE this repository holds, named by run id, cited or not.
+
+    Limitations used to be generated only from the suites the operator passed to `--runs`,
+    which made a session the operator did not cite structurally invisible: the repository
+    could hold four `RESOURCE_FAILURE` worlds in a published manifest while this page said
+    the stage named none. An operator chooses which runs to CITE; an operator does not
+    choose what happened on the host. So the whole of `artifacts/runs/` is swept here, and
+    a refused session is named with its run id, its suite and its jobs whether or not it is
+    part of the evidence — SPEC 18.4 and the standing ruling that every resource failure is
+    a NAMED limitation.
+
+    A cited run's failures are named by the per-suite pass above; this adds only the ones
+    nobody cited, so nothing is listed twice.
+    """
+    cited_ids = {Path(run_dir).name for run_dir in cited}
+    out: list[str] = []
+    if not paths.runs.is_dir():
+        return ()
+    for run_dir in sorted(paths.runs.iterdir()):
+        if run_dir.name in cited_ids or not run_dir.is_dir():
+            continue
+        payload = _read_json(run_dir / SUITE_REPORT_FILENAME)
+        if payload is None:
+            continue
+        try:
+            report = SuiteReport.model_validate(payload)
+        except ValueError:
+            continue
+        refused = [job for job in report.jobs if job.status == "RESOURCE_FAILURE"]
+        if not refused:
+            continue
+        out.append(
+            f"uncited session {report.run_id} (suite {report.suite}, exit {report.exit_code}) "
+            f"recorded {len(refused)} RESOURCE_FAILURE job(s): "
+            + ", ".join(f"`{job.job_id}`" for job in refused)
+            + ". It is not part of this report's evidence and it is named here because a "
+            "resource failure is never a physical zero (SPEC 18.4) and every one of them is "
+            "a named limitation."
+        )
+    return tuple(out)
+
+
+def p1_manifest_reconciliation(
+    paths: ProjectPaths, suites: Mapping[str, SuiteReport]
+) -> tuple[str, ...]:
+    """Whether the published P1 suite manifest agrees with the `p1_worlds` verdict above.
+
+    `reports/p1_suite_manifest.json` is written to ONE published path by every P1 session,
+    so the committed file always describes the most recent one — which need not be the
+    session this report cites. When the two disagree, a reader sees a PASS beside a manifest
+    whose rows are all refused, and nothing on the page explains it. This says it.
+    """
+    manifest = _read_json(paths.root / P1_SUITE_MANIFEST_RELPATH)
+    if manifest is None:
+        return ()
+    rows = manifest.get("rows", [])
+    refused = [
+        str(row.get("parent_world_id"))
+        for row in rows
+        if isinstance(row, Mapping) and not row.get("accepted")
+    ]
+    if not refused:
+        return ()
+    p1 = suites.get("p1")
+    scored = p1.checks if p1 is not None else ()
+    verdict = next((c.status for c in scored if c.name == "p1_worlds"), None)
+    cited = "no p1 suite is cited by this report" if p1 is None else f"run {p1.run_id}"
+    return (
+        f"`{P1_SUITE_MANIFEST_RELPATH}` is the COMMITTED manifest and it records "
+        f"fully_accepted={manifest.get('fully_accepted')!r} with {len(refused)} of "
+        f"{len(rows)} parent world(s) not accepted ("
+        + ", ".join(f"`{name}`" for name in refused)
+        + "). The `p1_worlds` verdict on this page is "
+        + (f"{verdict}" if verdict is not None else "absent")
+        + f" and is scored on {cited}. Task 11 publishes that manifest to a single path, so "
+        "it describes the MOST RECENT P1 session rather than necessarily the cited one; the "
+        "two are reconciled here rather than left to read as a contradiction. Where they "
+        "disagree, the manifest is the state of the repository and the verdict is the state "
+        "of the cited run.",
     )
 
 
@@ -385,6 +499,9 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         bo_status,
         any_evidence=bool(suites),
     )
+    # Every RESOURCE_FAILURE in the repository, not only the ones inside a cited suite.
+    limitations.extend(resource_failures_across_runs(paths, run_dirs))
+    limitations.extend(p1_manifest_reconciliation(paths, suites))
     anchor = suites.get("p0") or (next(iter(suites.values())) if suites else None)
     lock_hashes = {
         name: (sha256_file(paths.root / name) if (paths.root / name).is_file() else "missing")
@@ -427,9 +544,11 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         jobs=tuple(jobs),
         remaining_job_ids=tuple(sorted(set(remaining))),
         limitations=tuple(limitations),
-        ow_gate=(
-            "PASS" if not failed and not unrun and bool(suites) else "FAIL" if failed else "NOT_RUN"
-        ),
+        # The OW gate is the STAGE's own predicate, not a second one. It used to be computed
+        # from failed/unrun alone, which ignored the `missing` and `remaining` branches
+        # `_status` correctly fails on — so a p0-only report published `status: FAIL` beside
+        # `ow_gate: PASS`. Derived from the same verdict now, so the two cannot disagree.
+        ow_gate=_ow_gate(status),
         bo_status=bo_status,
         physical_class=PHYSICAL_CLASS,
         fluid_claim=FLUID_CLAIM,
@@ -475,6 +594,40 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> list[str]:
 
 def _number(value: float | None, digits: int = 3) -> str:
     return "—" if value is None else f"{value:.{digits}g}"
+
+
+def _count(value: int | None) -> str:
+    """An em dash where nobody measured, a number where somebody did.
+
+    A `0` in this column used to mean both "measured, and it was nothing" and "never
+    measured" — 26 of 48 rows published `peak RSS 0`, `out bytes 0` and `cpu s 0` on a page
+    whose own header says every number came out of a published artifact. They are different
+    facts and they now look different.
+    """
+    return "—" if value is None else str(value)
+
+
+def _measurement_methods(jobs: Sequence[JobOutcome]) -> list[str]:
+    """How the rows above were arrived at, one paragraph per distinct method.
+
+    `JobOutcome.measurement_method` was recorded from the beginning and never printed, so a
+    reader of the jobs table had no way to know that a launcher row's `wall s` is the whole
+    diagnostic's wall divided evenly across the forwards it ran, or that a reused row's
+    costs belong to another session. Printed here, under the table it explains.
+    """
+    seen: dict[str, list[str]] = {}
+    for job in jobs:
+        if job.measurement_method:
+            seen.setdefault(job.measurement_method, []).append(job.job_id)
+    if not seen:
+        return []
+    out = ["**How these numbers were measured.** An em dash is a quantity nobody measured.", ""]
+    for method, job_ids in sorted(seen.items(), key=lambda item: item[1][0]):
+        shown = ", ".join(f"`{j}`" for j in job_ids[:6])
+        more = f" (+{len(job_ids) - 6} more)" if len(job_ids) > 6 else ""
+        out.append(f"* {shown}{more}: {method}")
+    out.append("")
+    return out
 
 
 def render_e01_report(report: StageReport) -> str:
@@ -599,17 +752,18 @@ def render_e01_report(report: StageReport) -> str:
                 job.expected_outcome,
                 _number(job.wall_s),
                 _number(job.cpu_s),
-                job.peak_rss_bytes,
-                job.output_bytes,
-                job.native_chunk_calls,
-                job.accepted_steps,
-                job.cut_steps,
-                job.nonlinear_iterations,
+                _count(job.peak_rss_bytes),
+                _count(job.output_bytes),
+                _count(job.native_chunk_calls),
+                _count(job.accepted_steps),
+                _count(job.cut_steps),
+                _count(job.nonlinear_iterations),
                 job.retry_count,
             )
             for job in report.jobs
         ],
     )
+    lines += _measurement_methods(report.jobs)
     if report.remaining_job_ids:
         lines += [
             "**Jobs that were planned and never reached:** "
@@ -635,10 +789,10 @@ def render_e01_report(report: StageReport) -> str:
             ("ledger forwards", costs.ledger_forwards),
             ("ledger wall s", _number(costs.ledger_wall_s)),
             ("ledger cpu s", _number(costs.ledger_cpu_s)),
-            ("ledger output bytes", costs.ledger_output_bytes),
+            ("ledger output bytes", _count(costs.ledger_output_bytes)),
             ("launcher forwards", costs.launcher_forwards),
             ("launcher wall s", _number(costs.launcher_wall_s)),
-            ("peak process-tree RSS bytes", costs.peak_rss_bytes),
+            ("peak process-tree RSS bytes", _count(costs.peak_rss_bytes)),
             ("restart write s", _number(costs.restart_write_s)),
             ("restart read s", _number(costs.restart_read_s)),
         ],
@@ -665,6 +819,15 @@ def render_e01_report(report: StageReport) -> str:
         lines += ["## Benchmark (exploratory)", "", "```json"]
         lines += [json.dumps(report.benchmark, indent=2, sort_keys=True)]
         lines += ["```", ""]
+    lines += ["## Oil-water gate", ""]
+    lines += [
+        f"**OW gate: {report.ow_gate}.** This is the stage verdict itself, not a second "
+        "reading of it: it is PASS only where `status` is PASS or PASS_WITH_LIMITATIONS, "
+        "which means every mandatory oil-water check is present, passing, and joined by "
+        "every planned job the matrix declares. A matrix with a hole in it is not a passing "
+        "gate (plan 12.9).",
+        "",
+    ]
     lines += ["## Black oil", ""]
     lines += [
         f"**BO status: {report.bo_status}.** The black-oil capability is a separate P0 "

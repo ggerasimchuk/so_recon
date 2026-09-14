@@ -20,7 +20,11 @@ import pyarrow.parquet as pq
 import pytest
 
 from so_recon.paths import ProjectPaths, find_repo_root
-from so_recon.simulator.commands import MANDATORY_CHECKS, SUITE_REPORT_FILENAME, SuiteReport
+from so_recon.simulator.suite_record import (
+    MANDATORY_CHECKS,
+    SUITE_REPORT_FILENAME,
+    SuiteReport,
+)
 
 pytestmark = pytest.mark.e01_physics
 

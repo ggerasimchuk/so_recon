@@ -41,11 +41,12 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import (
     ArtifactImmutabilityError,
     ArtifactRef,
+    json_artifact_bytes,
     register_artifact,
     write_json_artifact,
 )
 from so_recon.registry.atomic import fsync_dir, stage_path
-from so_recon.registry.hashing import sha256_file, sha256_json
+from so_recon.registry.hashing import sha256_bytes, sha256_file, sha256_json
 from so_recon.registry.run import RunContext
 from so_recon.simulator.contracts import (
     SATURATION_SUM_TOLERANCE,
@@ -499,6 +500,20 @@ def compute_static_hash(case: CaseBundle) -> str:
     return sha256_json(
         {name: dumped[name] for name in MODEL_HASH_FIELDS if name not in STATIC_HASH_EXCLUDED}
     )
+
+
+def case_manifest_sha256(case: CaseBundle) -> str:
+    """The digest the published manifest of THIS case has, without publishing it again.
+
+    `JobDescriptor.case_sha256` — and therefore every `BudgetLedger` entry — records
+    `sha256_file` of the manifest `write_case` wrote, and that manifest is exactly
+    `json_artifact_bytes(case.model_dump(mode="json"))`: no timestamp, no run id, nothing
+    that moves between sessions. So a resumed session can ask whether a previous one already
+    completed this exact case without republishing it, and
+    `tests/unit/test_e01_resume.py::test_the_case_digest_matches_the_manifest_a_session_really_publishes`
+    pins the two together.
+    """
+    return sha256_bytes(json_artifact_bytes(case.model_dump(mode="json")))
 
 
 def write_case(

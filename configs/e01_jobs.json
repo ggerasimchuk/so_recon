@@ -622,6 +622,23 @@
           "deferred_to": null
         },
         {
+          "job_id": "bl64_halfdt",
+          "group": "refinement",
+          "kind": "fixture",
+          "profile": "P1_LOOP",
+          "expected_outcome": "COMPLETE",
+          "output_request": "states+monthly+balances+connections",
+          "julia_threads": 4,
+          "cache_bypass": false,
+          "accounting": "launcher",
+          "native_source": "julia/verification/refinement.jl#bl_64",
+          "scored_as": "bl_refinement",
+          "note": "The coarse member of the timestep pair: 64 cells at the full report step. It is DECLARED by the plan's P0 table (where it carries deferred_to=p1) and it is EXECUTED here, by the P1 refinement diagnostic, so it is listed here with declared_by_plan=false. Without this row the forward `refinement.jl` really runs had no JobOutcome anywhere and the diagnostic's wall was divided by three instead of four.",
+          "declared_by_plan": false,
+          "parent_job_id": null,
+          "deferred_to": null
+        },
+        {
           "job_id": "world41",
           "group": "worlds",
           "kind": "world",
