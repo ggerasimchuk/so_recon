@@ -8,9 +8,13 @@ side effect.
 
 The geology block of the latent point is assembled as `concat(v[:8], z_perp[:4])` — all
 twelve whitened coordinates, none dropped (SPEC §7.5) — and mapped to the E01 coefficients
-by `a = mean + chol @ rotation @ w`. The hypothesis `s` selects the family, which moves
-`kz/kx` and nothing else; the three nuisance coordinates of `v` give the noise law through
-the map `NoiseTheta` already declares.
+by `a = mean + chol @ rotation @ w`, where `chol` is the PRINCIPAL SYMMETRIC square root of
+the conditional covariance (`conditional_square_root`). Only a root that commutes with the
+rotation leaves the composition's columns in eigenvalue order, and therefore leaves the
+four trailing ones in the null space of the log-permeability operator: with a triangular
+factor a unit move in `z_perp` shifts the very logs the prior was conditioned on. The
+hypothesis `s` selects the family, which moves `kz/kx` and nothing else; the three nuisance
+coordinates of `v` give the noise law through the map `NoiseTheta` already declares.
 
 **An unrenderable geology is a failure, not a zero density.** E01's `layer_geology` refuses
 a permeability outside `[1e-3, 1e6]` mD rather than clipping it. That refusal is NOT a
@@ -121,7 +125,7 @@ def geology_coefficients(theta: ThetaRecord, context: PriorContext) -> F64:
     """The twelve E01 coefficients of a latent point: `mean + chol @ rotation @ w`.
 
     `w` is `concat(v[:8], z_perp[:4])` — every whitened direction, including the four the
-    sparse logs left unconstrained.
+    sparse logs left unconstrained, which the symmetric factor keeps unconstrained.
     """
     _check_context(context)
     context.density_schema.validate_theta(theta)

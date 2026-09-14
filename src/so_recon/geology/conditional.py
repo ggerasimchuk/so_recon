@@ -329,6 +329,38 @@ def check_informed_split(
         )
 
 
+def conditional_square_root(rotation: F64, eigenvalues: F64) -> F64:
+    """The PRINCIPAL SYMMETRIC square root of `cov = (I + A^T R^-1 A)^-1`.
+
+    `cov` shares its eigenvectors with the information matrix, so in the canonical basis it
+    is `Q diag(1/(1+lambda)) Q^T` and its principal root is `S = Q diag((1+lambda)^-1/2) Q^T`.
+
+    The symmetry is the whole point. The renderer composes `S @ Q`, and only a root that
+    commutes with `Q` leaves that composition equal to `Q diag((1+lambda)^-1/2)` — the
+    columns stay the eigen-directions, in the order the eigenvalues put them, so the four
+    trailing columns are still the null space of `A` and a move in `z_perp` does not touch
+    the log permeabilities the prior was conditioned on. A lower-triangular Cholesky factor
+    is an equally valid square root of `cov` and gives exactly the same law, but it re-mixes
+    the columns and destroys the ordering the whole eigendecomposition existed to produce.
+    """
+    q = np.asarray(rotation, dtype=np.float64)
+    spectrum = np.asarray(eigenvalues, dtype=np.float64)
+    if q.ndim != 2 or q.shape[0] != q.shape[1] or spectrum.shape != (q.shape[0],):
+        raise ValueError(
+            f"a square root needs a square rotation and one eigenvalue per column, got "
+            f"{q.shape} and {spectrum.shape}"
+        )
+    if not (np.isfinite(q).all() and np.isfinite(spectrum).all()):
+        raise ValueError("the rotation and its spectrum must be finite")
+    if float(np.min(spectrum)) <= -1.0:
+        raise ValueError(
+            f"the posterior precision I + A^T R^-1 A is positive definite, so every "
+            f"eigenvalue exceeds -1; the smallest here is {float(np.min(spectrum)):g}"
+        )
+    root: F64 = (q * np.sqrt(1.0 / (1.0 + spectrum))) @ q.T
+    return (root + root.T) / 2
+
+
 # --------------------------------------------------------------------------------------
 # the P1 conditional prior context
 # --------------------------------------------------------------------------------------
@@ -381,7 +413,14 @@ def p1_prior_context(
     mean, cov = condition_gaussian(a, values - b, variance)
     rotation, eigenvalues = whitening_rotation(information_matrix(a, variance))
     check_informed_split(eigenvalues, N_P1_GEOLOGY_IN_V)
-    chol: F64 = np.linalg.cholesky(cov)
+    # `chol` is the plan's name for the factor; the SYMMETRIC root is the one that keeps
+    # `rotation`'s ordering through the renderer's composition. See the function.
+    chol = conditional_square_root(rotation, eigenvalues)
+    if not np.allclose(chol @ chol.T, cov, rtol=0.0, atol=1e-10):
+        raise ValueError(
+            "the square root taken from the spectrum does not reproduce the covariance the "
+            "conditioning returned; the rotation and the conditional disagree"
+        )
 
     supports = observation_supports(design)
     g_hash = sha256_json(
@@ -478,6 +517,7 @@ __all__ = [
     "cell_log_permeability_operator",
     "check_informed_split",
     "condition_gaussian",
+    "conditional_square_root",
     "information_matrix",
     "log_k_observation_ids",
     "p1_design_for",

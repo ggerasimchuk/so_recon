@@ -26,7 +26,6 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 from scipy import stats
-from scipy.linalg import solve_triangular
 
 from so_recon.geology.conditional import (
     FAMILY_BY_S,
@@ -54,9 +53,11 @@ from so_recon.synthetic.p1 import (
     N_MODES,
     P1_PARENTS,
     P1Design,
+    observation_supports,
     render_coefficients,
     render_p1,
     streams,
+    support_mean,
 )
 
 #: SHA-256 of every scientific array of the five P1 parents, recorded from `render_p1`
@@ -157,9 +158,10 @@ def test_the_renderer_reproduces_an_e01_world_from_its_own_coefficients() -> Non
     world = render_p1(41, design)
     context = _context()
     target = np.asarray(world.theta["coefficients"], dtype=np.float64).ravel()
-    whitened = context.rotation.T @ solve_triangular(
-        context.chol, target - context.mean, lower=True
-    )
+    # A general solve: the factor is the symmetric root of the covariance, not a
+    # triangular one, and inverting it as though it were would silently give a
+    # different point.
+    whitened = context.rotation.T @ np.linalg.solve(context.chol, target - context.mean)
     nuisance = [0.3, -0.4, 0.5]
     coordinates = np.concatenate(
         [whitened[:N_P1_GEOLOGY_IN_V], nuisance, whitened[N_P1_GEOLOGY_IN_V:]]
@@ -217,6 +219,36 @@ def test_the_residual_coordinates_move_the_rock() -> None:
     first, second = render_theta(base, context), render_theta(moved, context)
     for name in ("permeability_m2", "porosity", "log_permeability_m2"):
         assert not np.array_equal(first.arrays[name], second.arrays[name]), name
+
+
+def test_the_residual_moves_the_rock_without_moving_the_measured_logs() -> None:
+    """What the residual block MEANS, read off the rendered arrays themselves.
+
+    `z_perp` spans the directions the sparse logs left unconstrained, so a move in it must
+    change the field everywhere and leave the eight support averages the prior was
+    conditioned on exactly where they were. That is a statement about `chol @ rotation` —
+    the map the renderer applies — and not about `rotation` alone.
+    """
+    context = _context()
+    design = P1Design()
+    supports = observation_supports(design)
+    base = _draw(context, 101)
+    moved_residual = base.model_copy(update={"z_perp": tuple(x + 1.5 for x in base.z_perp)})
+    moved_informed = base.model_copy(
+        update={"v": (base.v[0] + 1.5, *base.v[1:])},
+    )
+
+    def measured(theta: ThetaRecord) -> list[float]:
+        field = render_theta(theta, context).arrays["log_permeability_m2"]
+        return [support_mean(field, support.cell_ids) for support in supports]
+
+    reference = measured(base)
+    np.testing.assert_allclose(measured(moved_residual), reference, atol=1e-10)
+    assert not np.array_equal(
+        render_theta(moved_residual, context).arrays["log_permeability_m2"],
+        render_theta(base, context).arrays["log_permeability_m2"],
+    )
+    assert float(np.max(np.abs(np.array(measured(moved_informed)) - reference))) > 0.1
 
 
 def test_two_prior_draws_differ_in_permeability_and_porosity() -> None:

@@ -369,6 +369,30 @@ def test_the_residual_directions_are_the_ones_the_logs_say_nothing_about() -> No
     np.testing.assert_allclose(a @ context.rotation[:, N_P1_GEOLOGY_IN_V:], 0.0, atol=1e-10)
 
 
+def test_the_composed_map_the_renderer_applies_leaves_the_logs_alone() -> None:
+    """The binding assertion: `chol @ rotation` is what `geology_coefficients` applies.
+
+    `rotation` alone having the right null block proves nothing about the renderer. A
+    factor that does not commute with `rotation` — a lower-triangular Cholesky, say —
+    re-mixes the residual columns back into the informed directions, and a unit move in
+    `z_perp` then shifts the very log permeabilities the prior was conditioned on.
+    """
+    a, _ = support_log_permeability_operator(P1Design())
+    context = _context()
+    composed = context.chol @ context.rotation
+    np.testing.assert_allclose(a @ composed[:, N_P1_GEOLOGY_IN_V:], 0.0, atol=1e-10)
+
+
+def test_the_factor_is_the_square_root_that_commutes_with_the_rotation() -> None:
+    """`S @ Q = Q diag(sqrt(1/(1+lambda)))`, which is what keeps the ordering meaningful."""
+    design = P1Design()
+    context = p1_prior_context(design, _observations())
+    eigenvalues = np.asarray(context.design[WHITENING_KEY]["eigenvalues"], dtype=np.float64)
+    scaled = context.rotation * np.sqrt(1.0 / (1.0 + eigenvalues))
+    np.testing.assert_allclose(context.chol @ context.rotation, scaled, atol=1e-12)
+    np.testing.assert_allclose(context.chol, context.chol.T, atol=1e-14)
+
+
 def test_conditioning_moves_the_mean_towards_the_measured_logs() -> None:
     """A noiseless `G` from known coefficients must be recovered up to prior shrinkage."""
     design = P1Design()
