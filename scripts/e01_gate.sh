@@ -20,10 +20,23 @@
 #      «Stage gate требует присутствия всех mandatory checks и нуля skipped/unrun в его
 #      собственной matrix; обычный pytest PASS с skips недостаточен.» Hence --fail-on-skip.
 #
-#   2. THE FROZEN INPUTS ARE CHECKED WHATEVER HAPPENED. `check_frozen` used to run only
-#      when every earlier step had passed, so a tolerance block or a job plan mutated BY a
-#      failing step — the one case worth reporting — was never reported. It runs from an
-#      EXIT trap now, on every path out of this script.
+#   2. THE FROZEN INPUTS ARE CHECKED AFTER A FAILING STEP, NOT ONLY AFTER A PASSING ONE.
+#      `check_frozen` used to run only when every earlier step had passed, so a tolerance
+#      block or a job plan mutated BY a failing step — the one case worth reporting — was
+#      never reported. `main` now RETURNS rather than exiting, and `report_outcome` runs
+#      after it whatever that return was, including the early `|| return` of a failed
+#      fail-fast step; the status of the whole run is then taken from `PIPESTATUS[0]`.
+#
+#      There is NO `trap` in this file, and the guarantee is bounded accordingly: anything
+#      that terminates the shell without returning from `main` — a SIGINT or SIGTERM, or a
+#      `set -u` abort — skips the frozen check, and such a run exits non-zero reporting
+#      nothing rather than reporting a pass. A previous revision DID use `trap … EXIT` and
+#      claimed "on every path out of this script"; on this host (bash 3.2.57) an EXIT trap
+#      set inside a function that runs as the left side of a pipeline never fires at all, so
+#      `check_frozen` ran on NO path and the gate returned `tee`'s status. That is why the
+#      mechanism is plain control flow and why this paragraph states its edge rather than
+#      claiming not to have one. `tests/unit/test_e01_gate.py` executes both halves: the
+#      frozen check after a failed step 1, and the absence of the trap.
 #
 #   3. THE STAGE REPORT IS REBUILT FROM THE ARTIFACTS THIS RUN PRODUCED. Otherwise the
 #      committed `reports/stages/E01.md` can drift from `artifacts/runs/` with nothing
@@ -34,7 +47,13 @@
 # than merely detected. The environment and regression steps do fail fast, because nothing
 # downstream of a broken environment means anything.
 #
-# pipefail lives here because GNU Make 3.81 silently ignores .SHELLFLAGS.
+# `set -e` is deliberately ABSENT: steps 5 onwards must record a failure and carry on to the
+# validators and the report, which is the paragraph above. `set -u` is the load-bearing one —
+# an unset variable here is a bug, not a default. `pipefail` is belt-and-braces only: the one
+# pipeline whose status matters is the `{ … } | tee` at the foot of this file, and that
+# status is read from `PIPESTATUS[0]` explicitly rather than from the pipeline. Both flags
+# are set here rather than in the Makefile because GNU Make 3.81 silently ignores
+# .SHELLFLAGS.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"

@@ -12,6 +12,7 @@ under it rather than asserting anything about the conftest's source.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -78,6 +79,23 @@ def test_the_gate_runs_the_stage_validators_with_fail_on_skip() -> None:
 def test_the_gate_names_check_frozen_at_all() -> None:
     """The cheap half of the frozen-input rule; the executed half is below."""
     assert "check_frozen" in _gate_text()
+
+
+def _code_lines() -> list[str]:
+    """The script with its comments stripped, so prose about `trap` is not code."""
+    return [re.sub(r"#.*", "", line) for line in _gate_text().splitlines()]
+
+
+def test_the_gate_installs_no_trap() -> None:
+    """The header's rule 2 says there is no `trap`, and bounds its guarantee on that.
+
+    A trap re-introduced here would silently make that paragraph false again — and on this
+    host an EXIT trap in a pipeline's subshell does not fire, so it would also be useless.
+    Matched against the code with comments removed, because rule 2 discusses `trap` at
+    length and a substring test over the whole file would pass on the prose.
+    """
+    offending = [line for line in _code_lines() if re.search(r"(^|[;&|\s])trap\s", line)]
+    assert not offending, offending
 
 
 def test_the_gate_rebuilds_the_stage_report() -> None:
