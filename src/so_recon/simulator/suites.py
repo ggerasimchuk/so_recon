@@ -1554,17 +1554,26 @@ STRUCTURAL_CACHE_BYPASS = (
 )
 
 
+def first_worker_job(jobs: Sequence[JobOutcome]) -> JobOutcome | None:
+    """The first job of this session that went through the persistent worker.
+
+    Not `jobs[0]`: a P1 session opens with the refinement diagnostic, which is a SUBPROCESS
+    and pays no import of the worker's. The job that paid the worker's import and the model
+    specialisation is the first one that came back carrying a `cold_import_s`, and naming
+    any other job as the one that paid it is the same mistake finding 6 is about.
+    """
+    return next((job for job in jobs if job.cold_import_s is not None), None)
+
+
 def first_cold_import_s(jobs: Sequence[JobOutcome]) -> float | None:
     """The import/compile cost this session paid, from the FIRST job that recorded one.
 
-    Every job of a session carries the same `cold_import_s` — the session's worker start —
-    because it is a property of the session and not of the job. Reading it from the first
-    job is reading it from the job that actually paid it.
+    Every job that reaches the worker carries the same `cold_import_s` — the session's
+    worker start — because it is a property of the session and not of the job. Reading it
+    from the first such job is reading it from the job that actually paid it.
     """
-    for job in jobs:
-        if job.cold_import_s is not None:
-            return job.cold_import_s
-    return None
+    first = first_worker_job(jobs)
+    return None if first is None else first.cold_import_s
 
 
 def warm_block(
@@ -1628,7 +1637,7 @@ def _run_benchmark(run: SuiteRun) -> None:
         else:
             failures.append(f"{job.job_id}: {outcome.status}")
 
-    first = run.jobs[0] if run.jobs else None
+    first = first_worker_job(run.jobs)
     run.benchmark["warm41"] = warm_block(
         warm_s=warm,
         failures=failures,

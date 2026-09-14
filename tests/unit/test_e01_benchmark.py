@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from so_recon.simulator.suite_record import JobOutcome
-from so_recon.simulator.suites import first_cold_import_s, warm_block
+from so_recon.simulator.suites import first_cold_import_s, first_worker_job, warm_block
 
 
 def _job(job_id: str, wall_s: float, cold_import_s: float | None) -> JobOutcome:
@@ -55,15 +55,21 @@ def test_the_first_run_of_a_model_is_not_published_as_the_cold_cost() -> None:
     assert block["p50_s"] > 0.0
 
 
-def test_the_cold_import_comes_from_the_session_s_first_job() -> None:
+def test_the_cold_import_comes_from_the_first_job_that_reached_the_worker() -> None:
+    """Not `jobs[0]`: a P1 session opens with a SUBPROCESS diagnostic that pays no import."""
+    launcher = _job("five_spot_coarse", 16.554, None)
     jobs = (
+        launcher,
         _job("world41_preflight", 28.808, 7.458),
         _job("world41", 5.062, 7.458),
         _job("world42", 3.959, 7.458),
     )
     assert first_cold_import_s(jobs) == 7.458
+    first = first_worker_job(jobs)
+    assert first is not None and first.job_id == "world41_preflight"
     assert first_cold_import_s(()) is None
-    assert first_cold_import_s((_job("x", 1.0, None),)) is None
+    assert first_worker_job((launcher,)) is None
+    assert first_cold_import_s((launcher,)) is None
 
 
 def test_a_short_warm_sample_still_reports_what_it_has() -> None:
