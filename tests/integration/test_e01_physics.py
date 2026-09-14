@@ -1,6 +1,6 @@
 """E01.0: the native JutulDarcy oil-water model, and the worker's route into it.
 
-Two real Julia processes, no more. The cold start plus the first JutulDarcy specialisation
+Three real Julia processes, no more. The cold start plus the first JutulDarcy specialisation
 is the expensive part of every one of these tests, so each launch is made to carry as many
 independent claims as it can:
 
@@ -20,16 +20,26 @@ independent claims as it can:
   `BudgetLedger`. It proves the wiring (a job now reaches the constructor and comes back
   describing the model that was built), and it proves the isolation the wiring is for: B's
   model must not change what the second A reports.
+* `test_the_native_controls_follow_the_calendar_the_case_declares` runs the controls
+  diagnostic (`julia/verification/fixtures.jl --test-controls`) the same way, and compares
+  what Julia measured against what `so_recon.simulator.schedule` computes here: the real
+  month lengths, the compiled intervals, the uptime, and the monthly volumes the rate
+  controls imply. That diagnostic is the one place in this build where time is actually
+  integrated — seven small verification forwards (a four-interval fixture, two infeasible
+  rates, two isolation runs and two crossflow runs), all inside ONE launcher process bounded
+  by the P0_VERIFY job timeout, against a session allowance of 64.
 
-Neither test claims a COMPLETE forward. This build constructs a model and an initial state;
-integrating the requested time axis and publishing its outputs is a later stage, and a
-worker that cannot produce states says so instead of reporting success.
+None of these tests claims a COMPLETE forward. This build constructs a model, drives it
+with the schedule's forces and reads the wells back; publishing the requested time axis and
+its outputs is a later stage, and a worker that cannot produce states says so instead of
+reporting success.
 """
 
 from __future__ import annotations
 
 import json
 import math
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -45,10 +55,12 @@ from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
 from so_recon.simulator.case_io import CASE_MANIFEST_FILENAME, write_case
 from so_recon.simulator.contracts import (
+    CONTROL_RATE_UNIT,
     MILLIDARCY_M2,
     SECONDS_PER_DAY,
     STANDARD_GRAVITY_M_S2,
     CaseBundle,
+    ControlSegment,
     FluidSpec,
     ForwardResult,
     JobDescriptor,
@@ -59,6 +71,7 @@ from so_recon.simulator.julia_bridge import (
     SubprocessJuliaLauncher,
     find_julia,
 )
+from so_recon.simulator.schedule import compile_schedule, month_edges_s
 from so_recon.simulator.worker import PersistentJuliaWorker
 from tests.forward_case import (
     N_CELLS,
@@ -370,3 +383,214 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
     ]
     assert all(entry.state == "FAILED" for entry in ledger.record.entries)
     assert {entry.status for entry in ledger.record.entries} == {"INVALID_INPUT"}
+
+
+#: The fixture of `verification_case(:two_interval_controls)`: January and the leap
+#: February of 2020, split by a completion event on day 45 and a field shutdown on day 52.
+CONTROLS_START = date(2020, 1, 1)
+CONTROLS_MONTHS = 2
+CONTROLS_RATE_M3_DAY = 2.0
+CONTROLS_PRODUCER_BHP_FLOOR_PA = 5.0e6
+CONTROLS_PRODUCER_BHP_TARGET_PA = 1.9e7
+CONTROLS_INJECTOR_BHP_CEILING_PA = 4.0e7
+
+
+@pytest.mark.julia
+def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: Path) -> None:
+    julia_exe = _skip_unless_julia_is_installed()
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    out_path = paths.artifacts / "verification" / "controls.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    launcher = SubprocessJuliaLauncher(
+        julia_exe, ROOT / "julia", timeout_s=P0_VERIFY_PROFILE.job_timeout_s
+    )
+    launcher.launch(FIXTURES_JL, ["--test-controls"], out_path)
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+
+    assert report["status"] == "ok"
+    assert (report["jutul_version"], report["jutuldarcy_version"]) == ("0.4.31", "0.3.11")
+
+    fixture = report["two_interval_controls"]
+    assert fixture["start_date"] == CONTROLS_START.isoformat()
+    assert fixture["control_rate_unit"] == CONTROL_RATE_UNIT
+
+    # --- the calendar is the real one ----------------------------------------------------
+    # The case's report edges are January and the LEAP February, recomputed here from the
+    # calendar rather than read back from the file that produced them. Twelve 30-day months
+    # would put the second edge 60 days out instead of 60 ... which is the point: the third
+    # edge lands on 60 days only because 31 + 29 is 60, and on 61 in 2021.
+    expected_edges = month_edges_s(CONTROLS_START, CONTROLS_MONTHS)
+    assert fixture["report_edges_s"] == pytest.approx(list(expected_edges), rel=0, abs=0)
+    assert expected_edges[1] == 31.0 * SECONDS_PER_DAY
+    assert expected_edges[2] - expected_edges[1] == 29.0 * SECONDS_PER_DAY
+    assert month_edges_s(date(2021, 1, 1), CONTROLS_MONTHS)[2] == 59.0 * SECONDS_PER_DAY
+
+    # --- the two schedule compilers agree -------------------------------------------------
+    # Julia grouped the case's flat control segments into intervals; Python compiles the
+    # same segments with `compile_schedule`. Parsing them into `ControlSegment` also puts
+    # the fixture through the real contract: an illegal role, target or rate would not
+    # survive this line.
+    segments = tuple(ControlSegment.model_validate(c) for c in fixture["controls"])
+    schedule = compile_schedule(expected_edges, segments)
+    assert schedule.edges_s == pytest.approx(fixture["edges_s"], rel=0, abs=0)
+    assert list(schedule.month_index) == fixture["month_index"]
+    assert schedule.wells == ("INJ1", "PRO1")
+    # Four intervals, three of them inside February: the two events are not rounded away.
+    assert schedule.month_index == (0, 1, 1, 1)
+    assert schedule.edges_s == tuple(d * SECONDS_PER_DAY for d in (0.0, 31.0, 45.0, 52.0, 60.0))
+    for interval, group in enumerate(fixture["controls_by_interval"]):
+        for control in group:
+            compiled = schedule.control_for(interval, control["well_id"])
+            assert compiled == ControlSegment.model_validate(control)
+
+    # --- roles, masks and limits are restated on every interval ---------------------------
+    assert fixture["control_types"]["PRO1"] == [
+        "ProducerControl",
+        "ProducerControl",
+        "DisabledControl",
+        "ProducerControl",
+    ]
+    assert fixture["control_types"]["INJ1"] == [
+        "InjectorControl",
+        "InjectorControl",
+        "DisabledControl",
+        "InjectorControl",
+    ]
+    # The producer's lower completion closes on interval 1, everything closes on interval 2,
+    # and interval 3 is fully open AGAIN: a mask that was inherited could not come back.
+    assert fixture["masks"]["PRO1"] == [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0], [1.0, 1.0]]
+    assert fixture["masks"]["INJ1"] == [[1.0, 1.0], [1.0, 1.0], [0.0, 0.0], [1.0, 1.0]]
+
+    # Only the limits the case recorded. A bhp control and a shut well carry none, and
+    # JutulDarcy's own defaults (which WOULD have added a rate floor, as the diagnostic
+    # reports) are switched off.
+    assert fixture["recorded_bhp_limits_pa"]["PRO1"] == [
+        CONTROLS_PRODUCER_BHP_FLOOR_PA,
+        CONTROLS_PRODUCER_BHP_FLOOR_PA,
+        None,
+        None,
+    ]
+    assert fixture["recorded_bhp_limits_pa"]["INJ1"] == [
+        CONTROLS_INJECTOR_BHP_CEILING_PA,
+        CONTROLS_INJECTOR_BHP_CEILING_PA,
+        None,
+        CONTROLS_INJECTOR_BHP_CEILING_PA,
+    ]
+    assert "rate_lower" in fixture["native_default_limit_for_bhp_producer"]
+
+    # --- the native sign convention --------------------------------------------------------
+    producer = fixture["evidence"]["PRO1"]
+    injector = fixture["evidence"]["INJ1"]
+    assert [s["operating_target"] for s in producer] == ["lrat", "lrat", "disabled", "bhp"]
+    assert all(s["honoured"] for s in producer)
+    # Production is negative natively and positive in the public number beside it; the
+    # native rate is the day rate divided by 86400 and nothing else.
+    assert producer[0]["native_lrat_m3_s"] == pytest.approx(
+        -CONTROLS_RATE_M3_DAY / SECONDS_PER_DAY, rel=1e-12
+    )
+    assert producer[0]["liquid_rate_m3_day"] == pytest.approx(CONTROLS_RATE_M3_DAY, rel=1e-12)
+    # Injection is the other direction under the same production-positive convention.
+    assert injector[0]["water_rate_m3_day"] == pytest.approx(-CONTROLS_RATE_M3_DAY, rel=1e-12)
+    assert producer[3]["bhp_pa"] == pytest.approx(CONTROLS_PRODUCER_BHP_TARGET_PA, rel=1e-12)
+
+    # --- uptime, and Vo + Vw = q_liquid * uptime ------------------------------------------
+    # The uptime Julia used is the open part of each interval; the same number falls out of
+    # the compiled schedule here, aggregated to the months the case reports on.
+    interval_uptime = fixture["uptime_s"]
+    assert interval_uptime == pytest.approx(
+        [d * SECONDS_PER_DAY for d in (31.0, 14.0, 0.0, 8.0)], rel=0, abs=0
+    )
+    monthly = [0.0] * CONTROLS_MONTHS
+    for month, seconds in zip(fixture["month_index"], interval_uptime, strict=True):
+        monthly[month] += seconds
+    assert tuple(monthly) == schedule.monthly_uptime_s("PRO1")
+    assert schedule.monthly_uptime_s("PRO1") == (31.0 * SECONDS_PER_DAY, 22.0 * SECONDS_PER_DAY)
+
+    volumes = fixture["liquid_volume_m3"]
+    for interval in (0, 1):
+        expected = CONTROLS_RATE_M3_DAY * interval_uptime[interval] / SECONDS_PER_DAY
+        assert volumes[interval] == pytest.approx(expected, rel=1e-10)
+        # Both phases really flow, so the identity is not "oil only" wearing a total's name.
+        assert producer[interval]["oil_rate_m3_day"] > 0.0
+        assert producer[interval]["water_rate_m3_day"] > 0.0
+        assert producer[interval]["oil_rate_m3_day"] + producer[interval][
+            "water_rate_m3_day"
+        ] == pytest.approx(CONTROLS_RATE_M3_DAY, rel=1e-10)
+    # No uptime, no volume, and no phase split to report.
+    assert interval_uptime[2] == 0.0
+    assert volumes[2] == 0.0
+    assert (producer[2]["oil_rate_m3_day"], producer[2]["water_rate_m3_day"]) == (0.0, 0.0)
+    schedule.reject_flow_without_uptime("PRO1", (volumes[0], sum(volumes[1:])))
+
+    # --- an unreachable rate is CONTROL_INFEASIBLE, with the target it really ran on -------
+    infeasible = report["infeasible"]["evidence"]
+    assert infeasible["requested_target"] == "lrat"
+    assert infeasible["requested_value"] == 1.0e5
+    assert infeasible["honoured"] is False
+    assert infeasible["operating_target"] == "bhp"
+    assert infeasible["bhp_pa"] == pytest.approx(CONTROLS_PRODUCER_BHP_FLOOR_PA, rel=1e-12)
+    # The well kept producing; the achieved rate is four orders below what was demanded.
+    assert 0.0 < infeasible["liquid_rate_m3_day"] < 1.0e-2 * infeasible["requested_value"]
+    reason = report["infeasible"]["reason"]
+    assert "requested lrat=100000.0" in reason and "operated on bhp" in reason
+    assert "PRO1" in reason
+
+    # The same recorded `bhp_limit_pa` is a FLOOR under a producer and a CEILING over an
+    # injector; one `:bhp` key does both because the native check reads it off the control.
+    over = report["infeasible_injector"]["evidence"]
+    assert over["requested_target"] == "wrat"
+    assert over["honoured"] is False
+    assert over["operating_target"] == "bhp"
+    assert over["bhp_pa"] == pytest.approx(CONTROLS_INJECTOR_BHP_CEILING_PA, rel=1e-12)
+    # Injection is negative under the production-positive convention, and far short of the
+    # 100 000 m3_sc/day demanded.
+    assert -1.0e-2 * over["requested_value"] < over["water_rate_m3_day"] < 0.0
+    assert "requested wrat=100000.0" in report["infeasible_injector"]["reason"]
+
+    # --- full isolation is zero connection mass flux, exactly ------------------------------
+    isolation = report["isolation"]
+    assert isolation["isolated"]["max_abs_dp_pa"] == 0.0
+    assert isolation["isolated"]["max_abs_dsw"] == 0.0
+    # Not vacuous: the same well with its completions open empties the box.
+    assert isolation["open"]["max_abs_dp_pa"] > 1.0e6
+    assert isolation["open"]["liquid_rate_m3_day"] > 1.0
+    # What still crosses the isolated well's surface is the wellbore's own decompression,
+    # two orders below the open well and a small part of the mass standing in the bore.
+    assert (
+        isolation["isolated"]["liquid_rate_m3_day"] < 0.01 * isolation["open"]["liquid_rate_m3_day"]
+    )
+    assert (
+        isolation["isolated"]["surface_mass_over_one_day_kg"]
+        < 0.05 * isolation["isolated"]["well_mass_kg"]
+    )
+
+    # --- a shut surface is not a shut well --------------------------------------------------
+    crossflow = report["crossflow"]
+    for run in crossflow.values():
+        assert run["operating_target"] == "disabled"
+        # DisabledControl IS the native zero-net-surface-rate formulation: exactly zero.
+        assert run["surface_mass_rate_kg_s"] == 0.0
+        assert run["liquid_rate_m3_day"] == 0.0
+    # And it is not an isolated well: with both completions open the wellbore carried fluid
+    # from the deep, higher-pressure connection to the shallow one while the surface stayed
+    # at zero. Closing the completions is what takes that away.
+    assert (
+        crossflow["coupled"]["upper_perforated_pressure_pa"]
+        > crossflow["isolated"]["upper_perforated_pressure_pa"]
+    )
+    assert (
+        crossflow["coupled"]["lower_perforated_pressure_pa"]
+        < crossflow["isolated"]["lower_perforated_pressure_pa"]
+    )
+    coupled = abs(crossflow["coupled"]["well_segment_mass_flux_kg_s"][1])
+    isolated = abs(crossflow["isolated"]["well_segment_mass_flux_kg_s"][1])
+    assert coupled > 50.0 * isolated
+
+    # --- the refusals name what they refuse -------------------------------------------------
+    hole = report["missing_control_message"]
+    assert "INJ1" in hole and "never inherited" in hole
+    crossflow_refusal = report["crossflow_refusal_message"]
+    assert "allow_crossflow=false" in crossflow_refusal
+    assert "0.3.11" in crossflow_refusal

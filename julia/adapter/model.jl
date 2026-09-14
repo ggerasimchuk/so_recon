@@ -225,6 +225,10 @@ function build_ow(case::AbstractDict, arrays::AbstractDict)
     )
     check_cell_centers(domain, centers)
 
+    declared_wells = get(case, "wells", Any[])
+    # Before any of them is built: a crossflow declaration this backend cannot express is
+    # refused, never quietly replaced by the semantics it is able to offer.
+    foreach(check_crossflow, declared_wells)
     wells = [
         setup_well(
             domain,
@@ -233,7 +237,7 @@ function build_ow(case::AbstractDict, arrays::AbstractDict)
             radius = Float64(w["radius_m"]),
             simple_well = w["model"] == "simple",
             reference_depth = Float64(w["reference_depth_m"]),
-        ) for w in get(case, "wells", Any[])
+        ) for w in declared_wells
     ]
 
     rhoS = Float64.(fluid["density_sc_kg_m3"])
@@ -338,6 +342,38 @@ function check_cell_centers(domain, declared::AbstractMatrix)
         "against a tolerance of $(CELL_CENTER_TOLERANCE_M) m",
     )
     return nothing
+end
+
+"""
+    check_crossflow(well)
+
+Refuse a well whose declared crossflow semantics this backend cannot express.
+
+`allow_crossflow` is a physical switch the case must state (plan 3.2), and JutulDarcy
+0.3.11 implements only one side of it: the string "crossflow" does not appear anywhere in
+either pinned package. A well is a wellbore, and a wellbore with more than one connection
+can always take fluid in at one and put it out at another — under a rate control, under a
+bhp control, and under `DisabledControl`, whose whole formulation is a net surface rate of
+zero with the connections still coupled. There is no keyword that turns that off.
+
+So a multi-connection well that declares `allow_crossflow = false` is refused with the
+reason, rather than simulated with the semantics it asked not to have. A well with a single
+connection has nowhere to cross to, so both declarations are honoured there.
+"""
+function check_crossflow(well::AbstractDict)
+    allow = get(well, "allow_crossflow", nothing)
+    allow isa Bool || invalid(
+        "build_ow: well $(get(well, "well_id", "<unnamed>")) must declare allow_crossflow as " *
+        "a boolean, got $(repr(allow)); a physical switch is stated, never inherited",
+    )
+    (allow || length(well["cells"]) < 2) && return nothing
+    invalid(
+        "build_ow: well $(well["well_id"]) declares allow_crossflow=false over " *
+        "$(length(well["cells"])) connections, which JutulDarcy $(pkgversion(JutulDarcy)) " *
+        "cannot express: a multi-connection wellbore always couples its connections, and " *
+        "no native control or force switches that off. Refusing rather than simulating the " *
+        "opposite semantics under the case's own label",
+    )
 end
 
 """Convert one well's zero-based connection list into Julia's one-based cell indices."""

@@ -140,13 +140,13 @@ def build_case(refs: dict[str, ArrayRef], **overrides: Any) -> CaseBundle:
         "grid": grid_spec(refs),
         "rock": RockSpec(porosity=refs["porosity"], permeability_m2=refs["permeability_m2"]),
         "fluids": FluidSpec(),
+        # Crossflow is declared true because the native wellbore couples its connections and
+        # JutulDarcy 0.3.11 has no switch that turns that off; the adapter refuses a
+        # multi-connection well that declares otherwise (`check_crossflow` in model.jl)
+        # instead of silently simulating the opposite semantics.
         "wells": (
-            WellSpec(
-                well_id="INJ1", cells=(0, 4), reference_depth_m=DATUM_M, allow_crossflow=False
-            ),
-            WellSpec(
-                well_id="PRO1", cells=(3, 7), reference_depth_m=DATUM_M, allow_crossflow=False
-            ),
+            WellSpec(well_id="INJ1", cells=(0, 4), reference_depth_m=DATUM_M, allow_crossflow=True),
+            WellSpec(well_id="PRO1", cells=(3, 7), reference_depth_m=DATUM_M, allow_crossflow=True),
         ),
         "controls": control_segments(),
         "initial": InitialStateSpec(

@@ -20,7 +20,12 @@ using JSON
 using SHA
 
 include("model.jl")
+# Forces after the model: `controls.jl` refuses a case through `invalid`, which `model.jl`
+# defines together with the exception the worker maps to INVALID_INPUT.
+include("controls.jl")
 
 export build_ow, load_arrays, run_job, InvalidCaseInput
+export build_forces, native_control, control_limits, perforation_mask
+export control_evidence, infeasible_controls
 
 end # module
