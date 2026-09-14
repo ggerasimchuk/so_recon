@@ -134,7 +134,25 @@ def e01_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _runs(root: Path) -> list[Path]:
-    return sorted((root / "artifacts" / "runs").iterdir())
+    """Run directories, oldest first BY RECORDED START TIME.
+
+    Sorting by directory name orders two runs of the same second by the digest in their
+    run id, and that digest is over the command, the resolved config hash and the commit
+    (`registry.run.make_run_id`) — not over when the run started. A test that opens a
+    context of its own and then invokes the CLI in the same second would therefore read
+    back whichever digest happened to sort last, and adding a field to the configuration
+    schema would silently flip it. `created_at` carries microseconds and orders them the
+    way the tests mean.
+    """
+
+    def started_at(run_dir: Path) -> tuple[str, str]:
+        record = run_dir / "run.json"
+        if not record.is_file():
+            return ("", run_dir.name)
+        payload = json.loads(record.read_text(encoding="utf-8"))
+        return (str(payload.get("created_at", "")), run_dir.name)
+
+    return sorted((root / "artifacts" / "runs").iterdir(), key=started_at)
 
 
 def _last_record(root: Path) -> dict[str, Any]:

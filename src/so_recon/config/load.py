@@ -39,7 +39,7 @@ def load_project_config(path: Path) -> ProjectConfig:
 #:
 #: This only ever removes a None: `ProjectConfig` refuses a 3.0 config that actually sets
 #: one of these fields, so the exclusion can never hide a value that was in force.
-SPEC_4_0_ONLY_FIELDS: frozenset[str] = frozenset({"resources"})
+SPEC_4_0_ONLY_FIELDS: frozenset[str] = frozenset({"resources", "inference"})
 
 
 def resolved_config_dict(cfg: ProjectConfig) -> dict[str, Any]:

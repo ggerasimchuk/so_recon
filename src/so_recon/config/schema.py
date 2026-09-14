@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from so_recon import SpecVersion
+from so_recon.config.inference import InferenceConfig
 from so_recon.config.resources import ResourceProfile
 from so_recon.paths import validate_relative_path
 
@@ -94,27 +95,32 @@ class ProjectConfig(StrictModel):
     # needs bounding — but a physical E01 command refuses without one; see
     # `so_recon.config.resources.require_resource_profile`.
     resources: ResourceProfile | None = None
+    # 4.0 only, and absent by default. Every E00/E01 command runs without inference
+    # settings, so requiring a block here would invalidate configurations that have no
+    # inverse problem to configure; E02's own commands ask for one explicitly.
+    inference: InferenceConfig | None = None
 
-    @field_validator("resources", mode="before")
+    @field_validator("resources", "inference", mode="before")
     @classmethod
-    def _resources_are_a_4_0_field(cls, v: object, info: ValidationInfo) -> object:
-        """A 3.0 config may not carry a budget it cannot describe.
+    def _fields_added_in_4_0(cls, v: object, info: ValidationInfo) -> object:
+        """A 3.0 config may not carry a block it cannot describe.
 
-        `resolved_config_dict` drops `resources` from a 3.0 dump so that every historical
-        E00 `resolved_config_hash` still resolves. If a 3.0 config were allowed to SET the
-        field, that exclusion would silently drop a value that really was in force, and
-        the hash would stop describing the configuration actually in use. Refusing here
-        means the exclusion only ever removes a None.
+        `resolved_config_dict` drops the 4.0-only fields from a 3.0 dump so that every
+        historical E00 `resolved_config_hash` still resolves. If a 3.0 config were allowed
+        to SET one, that exclusion would silently drop a value that really was in force,
+        and the hash would stop describing the configuration actually in use. Refusing
+        here means the exclusion only ever removes a None.
 
-        A `before` validator so that this fires ahead of the profile's own field checks:
-        an operator who put a resource block in a 3.0 file is told exactly that, instead
-        of being handed a list of missing profile fields. `spec_version` is declared first
+        A `before` validator so that this fires ahead of the block's own field checks: an
+        operator who put a resource or inference block in a 3.0 file is told exactly that,
+        instead of being handed a list of missing fields. `spec_version` is declared first
         in this model, so it is already validated and available in `info.data` here.
         """
         if v is not None and info.data.get("spec_version") == "3.0":
+            name = info.field_name
             raise ValueError(
-                "spec_version 3.0 has no 'resources' field: a resource profile is a 4.0 "
-                "addition, and a 3.0 config that set one would be hashed without it. "
-                "Declare spec_version 4.0, or remove the resources block"
+                f"spec_version 3.0 has no {name!r} field: it is a 4.0 addition, and a 3.0 "
+                f"config that set one would be hashed without it. Declare spec_version "
+                f"4.0, or remove the {name} block"
             )
         return v
