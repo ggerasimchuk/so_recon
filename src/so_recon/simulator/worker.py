@@ -216,7 +216,7 @@ def classify_termination(
 
 @dataclass(frozen=True)
 class _SolverCounters:
-    """The solver's own step and iteration counts, as the worker reported them."""
+    """What the solver spent ON THIS JOB, and how that was arrived at."""
 
     accepted_steps: int
     cut_steps: int
@@ -231,18 +231,81 @@ _NO_COUNTERS = _SolverCounters(
     note="solver counters unavailable: this job reported none, recorded as 0",
 )
 
+_COUNTER_NAMES = ("accepted_steps", "cut_steps", "nonlinear_iterations")
 
-def _solver_counters(reported: object) -> _SolverCounters:
-    """Read the counters out of a reply, refusing to invent the ones it did not send."""
+
+def _counter_triple(reported: object) -> dict[str, int] | None:
+    """The three counts, or `None` if any of them is absent or not a count."""
     if not isinstance(reported, Mapping):
-        return _NO_COUNTERS
+        return None
     values: dict[str, int] = {}
-    for name in ("accepted_steps", "cut_steps", "nonlinear_iterations"):
+    for name in _COUNTER_NAMES:
         value = reported.get(name)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            return _NO_COUNTERS
+            return None
         values[name] = value
-    return _SolverCounters(**values, note="solver counters from the native simulation report")
+    return values
+
+
+def _solver_counters(extraction: object) -> _SolverCounters:
+    """What this job spent, read from the RE-HASHED record rather than off the wire.
+
+    Two things are being avoided here.
+
+    The counters are physics, and physics crosses this transport as bytes somebody hashed.
+    A number taken off the reply frame is a number nobody vouched for, so the source is
+    `record["extraction"]["solver"]` — inside the file whose digest the reply had to match.
+
+    And a RESUMED job's totals are not its own. `restart.jl` re-extracts the chunks the
+    parent simulated from the parent's `.jld2` files so that the published integrals cover
+    the whole horizon, so the merged totals include work this job never did — and the
+    parent's ledger entry already holds it. `resumed_solver` is what the adapter says it
+    re-extracted, and subtracting it is what makes a session's totals the work the session
+    performed. The difference is recorded in `measurement_method` either way, because a
+    count that silently changed meaning is worse than one that is large.
+    """
+    if not isinstance(extraction, Mapping):
+        return _NO_COUNTERS
+    total = _counter_triple(extraction.get("solver"))
+    if total is None:
+        return _NO_COUNTERS
+    resumed = _counter_triple(extraction.get("resumed_solver"))
+    if resumed is None:
+        # The adapter states this for every job, zeros included. Its absence means a worker
+        # this build cannot tell a fresh run from a continuation with, and guessing "zero"
+        # is exactly the double count this exists to prevent.
+        return _SolverCounters(
+            accepted_steps=0,
+            cut_steps=0,
+            nonlinear_iterations=0,
+            note=(
+                "solver counters unusable: the extraction reports totals but not the "
+                "resumed_solver counters that say how much of them this job spent, "
+                "recorded as 0"
+            ),
+        )
+    spent = {name: total[name] - resumed[name] for name in _COUNTER_NAMES}
+    if any(value < 0 for value in spent.values()):
+        return _SolverCounters(
+            accepted_steps=0,
+            cut_steps=0,
+            nonlinear_iterations=0,
+            note=(
+                f"solver counters unusable: the extraction reports totals {total} of which "
+                f"{resumed} were resumed, which is not a cost this job could have paid, "
+                "recorded as 0"
+            ),
+        )
+    if any(resumed[name] for name in _COUNTER_NAMES):
+        note = (
+            "solver counters from the native simulation report, less the "
+            f"{resumed['accepted_steps']} accepted step(s), {resumed['cut_steps']} cut "
+            f"step(s) and {resumed['nonlinear_iterations']} nonlinear iteration(s) this job "
+            "re-extracted from the checkpoint it resumed rather than simulating"
+        )
+    else:
+        note = "solver counters from the native simulation report"
+    return _SolverCounters(**spent, note=note)
 
 
 # ------------------------------------------------------------------ control plane file
@@ -276,6 +339,63 @@ def request_stop_after_chunk(
 
 def stop_after_chunk_requested(session_dir: Path) -> bool:
     return (session_dir / STOP_FILE_NAME).is_file()
+
+
+#: A completed time and a requested stop time may differ by this much and still be the same
+#: instant. Both are built from day counts times 86400; the same number is `1e-6` in
+#: `julia/worker/main.jl:stop_is_due`, which asks this same question at every chunk boundary.
+STOP_TIME_TOLERANCE_S = 1e-6
+
+
+@dataclass(frozen=True)
+class StopRequest:
+    """An operator's "stop after a completed chunk", as read from the session directory."""
+
+    reason: str | None
+    after_completed_time_s: float | None
+
+    def is_due(self, completed_time_s: float) -> bool:
+        """Whether this request applies to a run that has completed up to `completed_time_s`.
+
+        This is the Python half of `julia/worker/main.jl:stop_is_due`, and it answers the
+        same question the same way — which is the point. Julia asks it at every chunk
+        boundary; the driver asks it once at the boundary BEFORE the first chunk, where
+        "completed" is the start of the horizon. An unconditional request is due there, so
+        no new job starts; a request naming a month the run can still reach is not, so the
+        job that reaches it runs and stops where it was asked to.
+        """
+        if self.after_completed_time_s is None:
+            return True
+        return completed_time_s >= self.after_completed_time_s - STOP_TIME_TOLERANCE_S
+
+
+def read_stop_request(session_dir: Path) -> StopRequest | None:
+    """The stop request an operator left in this session, or `None` if there is none.
+
+    A file that cannot be read is the UNCONDITIONAL request, exactly as Julia treats it: a
+    stop nobody can parse is still a stop somebody asked for, and the safe reading of an
+    unreadable request is the one that stops sooner.
+    """
+    path = session_dir / STOP_FILE_NAME
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return StopRequest(reason=None, after_completed_time_s=None)
+    if not isinstance(payload, Mapping):
+        return StopRequest(reason=None, after_completed_time_s=None)
+    raw_reason = payload.get("reason")
+    raw_after = payload.get("after_completed_time_s")
+    after = (
+        float(raw_after)
+        if isinstance(raw_after, int | float) and not isinstance(raw_after, bool)
+        else None
+    )
+    return StopRequest(
+        reason=raw_reason if isinstance(raw_reason, str) and raw_reason else None,
+        after_completed_time_s=after,
+    )
 
 
 # --------------------------------------------------------------- the physics hand-off
@@ -914,7 +1034,23 @@ class PersistentJuliaWorker:
                 cost_inputs,
                 counters,
             )
-        return result
+        # The publisher wrote `states.h5` and the output tables into this job's directory
+        # while the cost above was already built, so the directory is measured AGAIN here
+        # and the cost replaced. Measuring only before the publisher runs records every
+        # successful result as costing the disk of its worker record alone —
+        # `BudgetLedger.committed_output_bytes` sums this field and the disk guard compares
+        # the sum against the budget, so an under-count is a session that believes it has
+        # room it does not have.
+        published = cost_inputs.with_output_bytes(
+            _directory_bytes(self._paths.resolve(job.result_dir)),
+            note=(
+                "output_bytes is this job's whole result directory, measured AFTER the "
+                "publisher wrote its outputs into it"
+            ),
+        )
+        return result.model_copy(
+            update={"cost": published.to_record(attempt=job.attempt, counters=counters)}
+        )
 
     def _result_from_reply(
         self,
@@ -926,7 +1062,9 @@ class PersistentJuliaWorker:
         status: ForwardStatus = reply["status"]
         raw_reason = reply.get("reason")
         reason = raw_reason if isinstance(raw_reason, str) and raw_reason else None
-        counters = _solver_counters(reply.get("cost"))
+        # Not from `reply`: the counters are read below, out of the record whose digest the
+        # reply had to match. A job that never got as far as publishing one has none.
+        counters = _NO_COUNTERS
         if status != "COMPLETE" and reason is None:
             return self._classified(
                 job,
@@ -981,7 +1119,9 @@ class PersistentJuliaWorker:
                     cost_inputs,
                     counters,
                 )
-            if isinstance(record.get("extraction"), dict):
+            extraction = record.get("extraction")
+            counters = _solver_counters(extraction)
+            if isinstance(extraction, dict):
                 return self._published(job, record, cost_inputs, counters, metadata, handoff)
         declared = reply.get("physics_class")
         try:
@@ -1137,13 +1277,13 @@ class _CostInputs:
     output_bytes: int
     notes: tuple[str, ...]
 
-    def with_output_bytes(self, value: int) -> _CostInputs:
+    def with_output_bytes(self, value: int, *, note: str | None = None) -> _CostInputs:
         return _CostInputs(
             wall_s=self.wall_s,
             cpu_s=self.cpu_s,
             peak_rss_bytes=self.peak_rss_bytes,
             output_bytes=value,
-            notes=self.notes,
+            notes=self.notes if note is None else (*self.notes, note),
         )
 
     def to_record(self, *, attempt: int, counters: _SolverCounters = _NO_COUNTERS) -> CostRecord:
@@ -1152,9 +1292,10 @@ class _CostInputs:
             cpu_s=self.cpu_s,
             peak_rss_bytes=self.peak_rss_bytes,
             output_bytes=self.output_bytes,
-            # The solver's OWN counters, as the worker reported them. A job that never
-            # reached the solver has none, and records three honest zeros rather than a
-            # guess — `measurement_method` says which of the two happened.
+            # The solver's OWN counters, read out of the re-hashed record rather than off
+            # the reply frame (see `_solver_counters`). A job that never got as far as
+            # publishing one has none, and records three honest zeros rather than a guess —
+            # `measurement_method` says which of the two happened.
             accepted_steps=counters.accepted_steps,
             cut_steps=counters.cut_steps,
             nonlinear_iterations=counters.nonlinear_iterations,

@@ -1208,9 +1208,11 @@ def write_forward_result(result: ForwardResult, path: Path) -> str:
 def load_forward_result(path: Path, paths: ProjectPaths) -> ForwardResult:
     """Read a published result and re-prove everything the result alone can prove.
 
-    That is: every declared digest against the bytes on disk, every state array's shape,
-    axis order, unit and dtype, that every published number is finite and physically in
-    range, and that the time axis the record claims is the one the states file holds.
+    That is: every declared digest against the bytes on disk — the output tables, the states
+    file, the accepted-step diagnostics AND the native checkpoint's manifest — every state
+    array's shape, axis order, unit and dtype, that every published number is finite and
+    physically in range, and that the time axis the record claims is the one the states file
+    holds.
 
     What it deliberately does NOT check is the half that needs a second record: whether the
     axis is the one an `OutputRequest` asked for, and whether a restart is present because
@@ -1221,6 +1223,11 @@ def load_forward_result(path: Path, paths: ProjectPaths) -> ForwardResult:
     relative = paths.relative(path)
     payload = json.loads(path.read_text(encoding="utf-8"))
     result = ForwardResult.model_validate(payload)
+    # Before the status gate, not after it: a run stopped after a completed month is
+    # INCOMPLETE_BUDGET *and* resumable, and its checkpoint is the only part of it anybody
+    # will use. A digest that is only checked on the results nobody resumes is not a gate.
+    if result.restart is not None:
+        _verify_restart_manifest(relative, result.restart, result.solver_metadata, paths)
     if result.status != "COMPLETE":
         return result
 
@@ -1249,6 +1256,49 @@ def load_forward_result(path: Path, paths: ProjectPaths) -> ForwardResult:
     _verify_time_axis(relative, result, np.asarray(result.times_s, dtype=np.float64), paths)
     _verify_physical_ranges(relative, fields)
     return result
+
+
+def _verify_restart_manifest(
+    relative: str,
+    restart: RestartRef,
+    solver_metadata: Mapping[str, str],
+    paths: ProjectPaths,
+) -> None:
+    """Re-prove the checkpoint manifest's digest, and the copy of it in `solver_metadata`.
+
+    The manifest names every native file with its own SHA-256, so a manifest whose bytes
+    hash to what the record declares is a trustworthy list; `restart.jl:verify_restart`
+    re-hashes each file it names at resume time, before a single native byte is read. This
+    is the other end of that: it stops a record from travelling with a digest for a
+    checkpoint that is no longer the checkpoint it was written for.
+
+    `solver_metadata` carries a convenience copy of the path and the digest. `RestartRef` is
+    the authority, so the copy is not required — but where it exists it must agree, because
+    a record that says two different things about one checkpoint is a record nobody can act
+    on.
+    """
+    target = paths.resolve(restart.manifest_path)
+    if not target.is_file():
+        raise ForwardResultIntegrityError(
+            f"{relative}: the restart names {restart.manifest_path}, which does not exist; an "
+            "unfinished staging directory is not a checkpoint"
+        )
+    digest = sha256_file(target)
+    if digest != restart.sha256:
+        raise ForwardResultIntegrityError(
+            f"{relative}: the checkpoint manifest {restart.manifest_path} hashes to {digest}, "
+            f"but the record declares {restart.sha256}"
+        )
+    for key, actual in (
+        ("restart_manifest_path", restart.manifest_path),
+        ("restart_manifest_sha256", restart.sha256),
+    ):
+        declared = solver_metadata.get(key)
+        if declared is not None and declared != actual:
+            raise ForwardResultIntegrityError(
+                f"{relative}: solver_metadata[{key!r}] is {declared!r}, but the restart "
+                f"reference says {actual!r}"
+            )
 
 
 def _verify_published_file(

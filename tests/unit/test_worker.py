@@ -53,6 +53,7 @@ from so_recon.simulator.worker import (
     PersistentJuliaWorker,
     WorkerStartupError,
     classify_termination,
+    read_stop_request,
     request_stop_after_chunk,
     stop_after_chunk_requested,
     validate_reply,
@@ -938,14 +939,24 @@ def test_a_job_id_that_is_not_a_safe_file_name_is_refused_before_it_is_reserved(
 # ----------------------------------------- the hand-off: a COMPLETE nobody could fabricate
 
 
-def _extraction_job(paths: ProjectPaths, job_id: str) -> JobDescriptor:
+def _extraction_job(
+    paths: ProjectPaths,
+    job_id: str,
+    *,
+    solver: dict[str, int] | None = None,
+    resumed: dict[str, int] | None = None,
+) -> JobDescriptor:
     """A job whose worker record carries a native extraction, as a real COMPLETE does."""
     job = write_job_inputs(paths, job_id)
     record = paths.root / job.result_dir / "result.json"
     record.parent.mkdir(parents=True, exist_ok=True)
+    extraction: dict[str, Any] = {"schema_version": "extract-1"}
+    if solver is not None:
+        extraction["solver"] = solver
+    if resumed is not None:
+        extraction["resumed_solver"] = resumed
     record.write_text(
-        json.dumps({"status": "COMPLETE", "extraction": {"schema_version": "extract-1"}}),
-        encoding="utf-8",
+        json.dumps({"status": "COMPLETE", "extraction": extraction}), encoding="utf-8"
     )
     return job
 
@@ -1045,3 +1056,289 @@ def _forward_result(job: JobDescriptor, cost: Any) -> Any:
         cost=cost,
         parent_attempt_ids=(),
     )
+
+
+# --------------------------------------- what a cost record measures, and where it reads it
+
+
+def _capturing_publisher(job: JobDescriptor) -> tuple[Any, dict[str, Any]]:
+    """A publisher that records the cost it was handed and returns a result for `job`."""
+    seen: dict[str, Any] = {}
+
+    def publish(record: Any, cost: Any, metadata: Any) -> Any:
+        seen["cost"] = cost
+        return _forward_result(job, cost)
+
+    return publish, seen
+
+
+def test_the_cost_counters_come_from_the_re_hashed_record_not_from_the_wire(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """Physics crosses this transport as bytes somebody hashed, counters included."""
+    job = _extraction_job(
+        project,
+        "job-0001",
+        solver={"accepted_steps": 40, "cut_steps": 2, "nonlinear_iterations": 128},
+        resumed={"accepted_steps": 0, "cut_steps": 0, "nonlinear_iterations": 0},
+    )
+    reply = _complete_reply(project, job)
+    # A reply that lies about the counters. The record is what is believed.
+    reply["cost"] = {"accepted_steps": 999, "cut_steps": 999, "nonlinear_iterations": 999}
+    scenario(reply=reply)
+    publish, seen = _capturing_publisher(job)
+
+    result = worker_factory().submit(
+        job, make_ledger(project), handoff=ForwardHandoff(publish=publish)
+    )
+
+    assert (result.cost.accepted_steps, result.cost.cut_steps) == (40, 2)
+    assert result.cost.nonlinear_iterations == 128
+    assert "solver counters from the native simulation report" in result.cost.measurement_method
+    assert seen["cost"].accepted_steps == 40
+
+
+def test_a_resumed_job_does_not_charge_the_ledger_for_the_prefix_it_re_extracted(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """The merged extraction covers the whole horizon; the parent already paid for its half.
+
+    `restart.jl` re-extracts the chunks the parent simulated so that the published integrals
+    cover the whole horizon, so a continuation's merged totals include work it never did —
+    and the parent's own ledger entry already holds that work. Charging it twice makes a
+    session's totals larger than the session.
+    """
+    job = _extraction_job(
+        project,
+        "job-0001",
+        solver={"accepted_steps": 40, "cut_steps": 0, "nonlinear_iterations": 128},
+        resumed={"accepted_steps": 21, "cut_steps": 0, "nonlinear_iterations": 67},
+    )
+    scenario(reply=_complete_reply(project, job))
+    publish, _ = _capturing_publisher(job)
+    ledger = make_ledger(project)
+
+    result = worker_factory().submit(job, ledger, handoff=ForwardHandoff(publish=publish))
+
+    assert result.cost.accepted_steps == 40 - 21 == 19
+    assert result.cost.nonlinear_iterations == 128 - 67 == 61
+    assert "re-extracted from the checkpoint it resumed" in result.cost.measurement_method
+    assert "21 accepted step(s)" in result.cost.measurement_method
+    # And the ledger charges the session what the session spent.
+    assert ledger.record.entries[0].cost is not None
+    assert ledger.record.entries[0].cost.accepted_steps == 19
+
+
+def test_an_extraction_without_the_resumed_counters_records_zero_rather_than_a_double_count(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """Guessing "nothing was resumed" is exactly the double count this exists to prevent."""
+    job = _extraction_job(
+        project,
+        "job-0001",
+        solver={"accepted_steps": 40, "cut_steps": 0, "nonlinear_iterations": 128},
+    )
+    scenario(reply=_complete_reply(project, job))
+    publish, _ = _capturing_publisher(job)
+
+    result = worker_factory().submit(
+        job, make_ledger(project), handoff=ForwardHandoff(publish=publish)
+    )
+
+    assert result.cost.accepted_steps == 0
+    assert "not the resumed_solver counters" in result.cost.measurement_method
+
+
+def test_output_bytes_counts_what_the_publisher_wrote_after_the_record(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """The publisher writes into the job's directory; the cost is measured after it does.
+
+    Measuring only before it runs records every successful result as costing the disk of its
+    worker record alone, and `BudgetLedger.committed_output_bytes` sums exactly this field.
+    """
+    job = _extraction_job(
+        project,
+        "job-0001",
+        solver={"accepted_steps": 1, "cut_steps": 0, "nonlinear_iterations": 1},
+        resumed={"accepted_steps": 0, "cut_steps": 0, "nonlinear_iterations": 0},
+    )
+    scenario(reply=_complete_reply(project, job))
+    record_bytes = (project.root / job.result_dir / "result.json").stat().st_size
+    written = 4096
+    seen: dict[str, Any] = {}
+
+    def publish(record: Any, cost: Any, metadata: Any) -> Any:
+        # Exactly what `publish_forward_result` does: write the outputs, THEN build the
+        # record from the cost it was handed.
+        (project.root / job.result_dir / "states.h5").write_bytes(b"\0" * written)
+        seen["cost"] = cost
+        return _forward_result(job, cost)
+
+    ledger = make_ledger(project)
+    result = worker_factory().submit(job, ledger, handoff=ForwardHandoff(publish=publish))
+
+    assert seen["cost"].output_bytes == record_bytes  # what the publisher was handed
+    assert result.cost.output_bytes == record_bytes + written  # what it is charged for
+    assert ledger.committed_output_bytes() == record_bytes + written
+
+
+# ------------------------------------------- a stop request is noticed before a job is booked
+
+
+def _six_month_case_on(paths: ProjectPaths) -> Any:
+    from tests.restart_case import six_month_case
+
+    return six_month_case(paths)
+
+
+def test_a_stop_request_refuses_the_next_job_before_it_is_booked(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """SPEC 3.3: once a stop is asked for, continuing is a separate command.
+
+    Without this the operator's request costs a forward and a chunk of wall time per later
+    call, and answers `INCOMPLETE_BUDGET` after month one anyway — the budget the continuing
+    command needs, spent on producing nothing.
+    """
+    from so_recon.registry.run import RunContext
+    from so_recon.simulator.contracts import OutputRequest
+    from so_recon.simulator.forward import simulate
+
+    scenario(reply={"status": "INVALID_INPUT", "reason": "the fake worker should never be asked"})
+    case = _six_month_case_on(project)
+    worker = worker_factory()
+    request_stop_after_chunk(worker.session_dir, reason="operator asked to wind down")
+    ledger = make_ledger(project)
+
+    result = simulate(
+        case,
+        OutputRequest(state_times_s=case.report_edges_s, keep_native_restart=False),
+        worker=worker,
+        ctx=RunContext.start(command="forward", argv=[], cfg=None, paths=project),
+        ledger=ledger,
+        solver_config=None,
+    )
+
+    assert result.status == "INCOMPLETE_BUDGET"
+    assert result.reason is not None
+    assert "stop was requested" in result.reason
+    assert "operator asked to wind down" in result.reason
+    # SPEC 18.4: the months nobody simulated are not published at all.
+    assert (result.monthly_path, result.balances_path, result.times_s) == (None, None, ())
+    # Nothing was booked, nothing was spent, and the worker was never asked to run.
+    assert ledger.record.entries == ()
+    assert ledger.session_totals().forwards == 0
+    assert result.cost.wall_s == 0.0 and result.cost.accepted_steps == 0
+    assert "no job was started" in result.cost.measurement_method
+    assert not (worker.session_dir / "jobs").exists()
+
+
+def test_a_stop_that_names_a_month_the_run_can_still_reach_does_not_refuse_it(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """ "Finish March and stop" is not "start nothing"; the job that reaches March runs."""
+    from so_recon.registry.run import RunContext
+    from so_recon.simulator.contracts import OutputRequest
+    from so_recon.simulator.forward import simulate
+
+    scenario(reply={"status": "INVALID_INPUT", "reason": "the adapter refused this case"})
+    case = _six_month_case_on(project)
+    worker = worker_factory()
+    request_stop_after_chunk(
+        worker.session_dir, reason="after March", after_completed_time_s=case.report_edges_s[3]
+    )
+    ledger = make_ledger(project)
+
+    result = simulate(
+        case,
+        OutputRequest(state_times_s=case.report_edges_s, keep_native_restart=False),
+        worker=worker,
+        ctx=RunContext.start(command="forward", argv=[], cfg=None, paths=project),
+        ledger=ledger,
+    )
+
+    # The job really was submitted: the answer is the fake worker's, not the stop refusal.
+    assert result.status == "INVALID_INPUT"
+    assert result.reason == "the adapter refused this case"
+    assert [entry.job_id for entry in ledger.record.entries] == [result.job_id]
+
+
+def test_a_stop_is_asked_about_where_the_RUN_stands_not_where_its_schedule_starts(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """A continuation's boundary is the checkpoint it resumes from, not time zero.
+
+    `resume` asks this question about `RestartRef.completed_time_s`. "Finish March and
+    stop" is already due for a job continuing from March, and answering it against the
+    start of the horizon would book a forward that Julia stops one month later, having
+    published nothing the continuing command can use.
+    """
+    from so_recon.simulator.forward import stopped_before_booking
+
+    scenario(reply={"status": "INVALID_INPUT", "reason": "the fake worker should never be asked"})
+    case = _six_month_case_on(project)
+    job = write_job_inputs(project, "job-0001")
+    worker = worker_factory()
+    march = float(case.report_edges_s[3])
+    request_stop_after_chunk(worker.session_dir, reason="after March", after_completed_time_s=march)
+
+    # A fresh run has not reached March, so it is booked.
+    assert (
+        stopped_before_booking(job, case, worker, completed_time_s=float(case.report_edges_s[0]))
+        is None
+    )
+    # A continuation resuming FROM March has, so it is not.
+    stopped = stopped_before_booking(job, case, worker, completed_time_s=march)
+    assert stopped is not None
+    assert stopped.status == "INCOMPLETE_BUDGET"
+    assert stopped.reason is not None and "after March" in stopped.reason
+    # And it counts the steps nobody simulated, not the whole schedule's.
+    assert f"{len(case.report_edges_s) - 4} report step(s)" in stopped.reason
+
+
+def test_a_stop_request_reads_back_as_what_the_operator_asked_for(tmp_path: Path) -> None:
+    session = tmp_path / "session"
+    session.mkdir()
+    assert read_stop_request(session) is None
+
+    request_stop_after_chunk(session, reason="wind down")
+    unconditional = read_stop_request(session)
+    assert unconditional is not None
+    assert unconditional.reason == "wind down"
+    assert unconditional.after_completed_time_s is None
+    # "Stop as soon as you can" is due at every boundary, including the one before the first
+    # chunk — which is what stops a new job from being booked at all.
+    assert unconditional.is_due(0.0) and unconditional.is_due(1.0e9)
+
+    request_stop_after_chunk(session, reason="after March", after_completed_time_s=90.0 * 86400.0)
+    timed = read_stop_request(session)
+    assert timed is not None and timed.after_completed_time_s == 90.0 * 86400.0
+    assert not timed.is_due(0.0)
+    assert not timed.is_due(89.0 * 86400.0)
+    assert timed.is_due(90.0 * 86400.0)
+    assert timed.is_due(120.0 * 86400.0)
+
+
+def test_an_unreadable_stop_request_is_the_unconditional_one(tmp_path: Path) -> None:
+    """A stop nobody can parse is still a stop somebody asked for (as Julia reads it too)."""
+    session = tmp_path / "session"
+    session.mkdir()
+    (session / STOP_FILE_NAME).write_text("{ this is not json", encoding="utf-8")
+    stop = read_stop_request(session)
+    assert stop is not None and stop.after_completed_time_s is None
+    assert stop.is_due(0.0)

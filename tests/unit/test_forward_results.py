@@ -1012,3 +1012,99 @@ def test_a_status_the_adapter_may_not_reach_is_a_protocol_failure(tmp_project: P
     # A resource verdict is the transport's to make from a measurement, never the
     # adapter's to claim (SPEC 18.4).
     assert result.status == "PROTOCOL_FAILURE"
+
+
+# ------------------------------------------- the checkpoint is part of "every declared digest"
+
+
+def _with_restart(
+    tmp_project: Path, *, status: str = "COMPLETE"
+) -> tuple[ProjectPaths, Path, Path]:
+    """Publish a result that carries a native checkpoint, and return its manifest too."""
+    from so_recon.simulator.contracts import RestartRef
+
+    paths, case, job = _project(tmp_project)
+    manifest = paths.resolve(job.result_dir) / "checkpoint" / "restart_manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"schema_version": "restart-manifest-1"}), encoding="utf-8")
+    restart = RestartRef(
+        manifest_path=paths.relative(manifest),
+        sha256=sha256_file(manifest),
+        completed_report_step=1,
+        completed_time_s=30.0 * DAY,
+        model_hash=case.model_hash,
+        schedule_prefix_hash="c" * 64,
+        environment_lock_hash="d" * 64,
+    )
+    result = publish_forward_result(
+        job,
+        case,
+        _extraction(),
+        paths,
+        cost=_cost(),
+        solver_metadata={
+            "restart_manifest_path": restart.manifest_path,
+            "restart_manifest_sha256": restart.sha256,
+        },
+        restart=restart,
+    )
+    assert result.status == "COMPLETE", result.reason
+    record = paths.resolve(job.result_dir) / RESULT_FILENAME
+    write_forward_result(result, record)
+    return paths, record, manifest
+
+
+def test_a_result_that_carries_a_checkpoint_reloads_with_it(tmp_project: Path) -> None:
+    paths, record, manifest = _with_restart(tmp_project)
+    result = load_forward_result(record, paths)
+    assert result.restart is not None
+    assert result.restart.sha256 == sha256_file(manifest)
+
+
+def test_a_corrupted_checkpoint_manifest_is_refused_on_read(tmp_project: Path) -> None:
+    """The integrity gate has no silent exception in it: the checkpoint is a declared digest."""
+    paths, record, manifest = _with_restart(tmp_project)
+    manifest.write_text(json.dumps({"schema_version": "restart-manifest-1", "x": 1}), "utf-8")
+    with pytest.raises(ForwardResultIntegrityError, match="restart_manifest.json hashes to"):
+        load_forward_result(record, paths)
+
+
+def test_a_checkpoint_manifest_that_is_gone_is_refused_on_read(tmp_project: Path) -> None:
+    paths, record, manifest = _with_restart(tmp_project)
+    manifest.unlink()
+    with pytest.raises(ForwardResultIntegrityError, match="which does not exist"):
+        load_forward_result(record, paths)
+
+
+def test_a_record_that_says_two_things_about_one_checkpoint_is_refused(
+    tmp_project: Path,
+) -> None:
+    """`RestartRef` is the authority; a convenience copy that disagrees is not a tie-break."""
+    paths, record, _ = _with_restart(tmp_project)
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    payload["solver_metadata"]["restart_manifest_sha256"] = "e" * 64
+    record.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ForwardResultIntegrityError, match="restart_manifest_sha256"):
+        load_forward_result(record, paths)
+
+
+def test_a_stopped_result_has_its_checkpoint_checked_too(tmp_project: Path) -> None:
+    """An INCOMPLETE_BUDGET result returns early — but not before its checkpoint is proved.
+
+    Its checkpoint is the only part of it anybody will use, so a digest that is only checked
+    on the results nobody resumes is not a gate at all.
+    """
+    paths, record, manifest = _with_restart(tmp_project)
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    payload["status"] = "INCOMPLETE_BUDGET"
+    payload["reason"] = "a stop was requested after the chunk ending at 2592000.0 s"
+    payload["monthly_path"] = None
+    payload["connections_path"] = None
+    payload["balances_path"] = None
+    record.write_text(json.dumps(payload), encoding="utf-8")
+    # It loads while the manifest is intact...
+    assert load_forward_result(record, paths).status == "INCOMPLETE_BUDGET"
+    # ...and is refused once it is not.
+    manifest.write_bytes(manifest.read_bytes() + b"\n")
+    with pytest.raises(ForwardResultIntegrityError, match="hashes to"):
+        load_forward_result(record, paths)

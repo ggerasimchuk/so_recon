@@ -389,9 +389,45 @@ def test_a_native_restart_reproduces_the_continuous_run(tmp_project: Path) -> No
     # substep axis of the continuation is the continuous run's, one entry per substep.
     steps = _table(continued.solver_metadata["accepted_steps.parquet.path"], paths)
     assert steps == _table(continuous.solver_metadata["accepted_steps.parquet.path"], paths)
-    assert len(steps) == continued.cost.accepted_steps == continuous.cost.accepted_steps
+    assert len(steps) == continuous.cost.accepted_steps
     assert len({row["start_s"] for row in steps}) == len(steps)
     assert continued.times_s == continuous.times_s
+
+    # And the LEDGER is charged for work, not for coverage. The continuation's published
+    # integrals cover all six months, because it re-extracted the parent's three from the
+    # parent's own `.jld2` files — but the parent's entry already holds those, so charging
+    # them again would make a session's totals larger than the session.
+    assert prefix.cost.accepted_steps > 0
+    assert continued.cost.accepted_steps == len(steps) - prefix.cost.accepted_steps
+    assert continued.cost.nonlinear_iterations == (
+        continuous.cost.nonlinear_iterations - prefix.cost.nonlinear_iterations
+    )
+    assert "re-extracted from the checkpoint it resumed" in continued.cost.measurement_method
+    chain = resumed_ledger.record
+    charged = sum(
+        entry.cost.accepted_steps
+        for entry in (*chain.inherited_entries, *chain.entries)
+        if entry.cost is not None
+    )
+    assert charged == continuous.cost.accepted_steps
+
+    # And the disk it is charged for is the disk it published, not only the worker record
+    # that preceded them: `publish_forward_result` writes `states.h5` and the four tables
+    # into the job's directory, and `BudgetLedger.committed_output_bytes` sums this field.
+    # (The `forward_result.json` that `_reload` wrote above is deliberately not in it: the
+    # driver decides where that record goes, and it goes in after the job has been costed.)
+    worker_record = paths.resolve(continued.solver_metadata["result_path"])
+    published = [
+        paths.resolve(continued.solver_metadata["states_path"]),
+        paths.resolve(str(continued.monthly_path)),
+        paths.resolve(str(continued.connections_path)),
+        paths.resolve(str(continued.balances_path)),
+        paths.resolve(continued.solver_metadata["accepted_steps.parquet.path"]),
+    ]
+    assert continued.cost.output_bytes >= worker_record.stat().st_size + sum(
+        path.stat().st_size for path in published
+    )
+    assert continued.cost.output_bytes > worker_record.stat().st_size
 
     # A continuation whose PAST was rewritten is refused, and refused here rather than by
     # the solver: the digest is of the schedule prefix the checkpoint stopped after.

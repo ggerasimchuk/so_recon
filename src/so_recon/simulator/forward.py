@@ -71,7 +71,11 @@ from so_recon.simulator.contracts import (
     RestartRef,
 )
 from so_recon.simulator.results import publish_forward_result
-from so_recon.simulator.worker import ForwardHandoff, PersistentJuliaWorker
+from so_recon.simulator.worker import (
+    ForwardHandoff,
+    PersistentJuliaWorker,
+    read_stop_request,
+)
 
 log = logging.getLogger(__name__)
 
@@ -616,6 +620,92 @@ def _restart_of(
     return ref
 
 
+#: What a job that never started costs and was measured by. Zeros here are not an unmeasured
+#: guess: no process was launched, so every one of them is the truth, and
+#: `measurement_method` says which of the two kinds of zero this is.
+NOTHING_RAN_COST = CostRecord(
+    wall_s=0.0,
+    cpu_s=0.0,
+    peak_rss_bytes=0,
+    output_bytes=0,
+    accepted_steps=0,
+    cut_steps=0,
+    nonlinear_iterations=0,
+    retry_count=0,
+    measurement_method=(
+        "no job was started: a stop had been requested for this session, so there is nothing "
+        "to measure and every count is zero because nothing ran"
+    ),
+)
+
+NOTHING_RAN_METADATA: dict[str, str] = {"stopped_before_booking": "true"}
+
+
+def stopped_before_booking(
+    job: JobDescriptor,
+    case: CaseBundle,
+    worker: PersistentJuliaWorker,
+    *,
+    completed_time_s: float,
+) -> ForwardResult | None:
+    """The result a job gets when an operator asked this session to stop before it started.
+
+    SPEC §3.3 makes a continuation «отдельная команда»: once a stop has been asked for, the
+    session finishes the work in hand and starts nothing else. Without this check every
+    later `simulate` call still books a job, still spends a forward and still spends the
+    wall time of one chunk, only to be stopped inside Julia after the first month — which
+    is the opposite of what was asked for, and it burns the budget the continuing command
+    will need.
+
+    The question asked is exactly the one Julia asks at a chunk boundary
+    (`StopRequest.is_due`), asked at the boundary before the first chunk: an unconditional
+    stop is due there, and a stop naming a month the run can still reach is not, so a job
+    that was asked to run up to March and stop still runs.
+
+    `completed_time_s` is how far the RUN has already got, and it is what the stop's own
+    question is asked about: the start of the horizon for a fresh case, and the
+    checkpoint's time for a continuation. Asking a continuation's question about time zero
+    would book a job for a "finish March and stop" that March has already reached, and
+    Julia would stop it one month later having published nothing new.
+
+    The refusal is `INCOMPLETE_BUDGET` with no outputs — SPEC §18.4, a month nobody
+    simulated is not published as a month in which nothing flowed — and it charges the
+    ledger nothing, because nothing ran.
+    """
+    # The cheap question first, and it is the worker's own: a session with no stop file
+    # pays one `is_file()` for this check and never opens anything.
+    if not worker.stop_requested:
+        return None
+    stop = read_stop_request(worker.session_dir)
+    if stop is None or not stop.is_due(completed_time_s):
+        return None
+    unsimulated = sum(
+        1 for edge in case.report_edges_s if edge > completed_time_s + TIME_MATCH_TOLERANCE_S
+    )
+    asked = "" if stop.reason is None else f" ({stop.reason})"
+    return ForwardResult(
+        job_id=job.job_id,
+        case_sha256=job.case_sha256,
+        model_hash=case.model_hash,
+        physics_class=case.fluids.kind,
+        status="INCOMPLETE_BUDGET",
+        reason=(
+            f"a stop was requested for this session{asked} before job {job.job_id!r} "
+            f"started, so none of its {unsimulated} report step(s) were simulated and none "
+            "are published; continuing is a separate command (SPEC 3.3)"
+        ),
+        # Nothing, exactly as `results._classified` records every unsuccessful result: what
+        # a continuation's PARENT completed is the parent's entry to carry, and the
+        # checkpoint it resumes from is the authority on where the run stands.
+        completed_time_s=float(case.report_edges_s[0]),
+        times_s=(),
+        states={},
+        solver_metadata=dict(NOTHING_RAN_METADATA),
+        cost=NOTHING_RAN_COST,
+        parent_attempt_ids=(),
+    )
+
+
 def _run_attempt(
     job: JobDescriptor,
     case: CaseBundle,
@@ -690,6 +780,11 @@ def simulate(
         result_dir=f"{worker.paths.relative(ctx.run_dir)}/{_job_id(ctx, attempt=1)}",
         attempt=1,
     )
+    stopped = stopped_before_booking(
+        job, case, worker, completed_time_s=float(case.report_edges_s[0])
+    )
+    if stopped is not None:
+        return stopped
     result = _run_attempt(job, case, worker=worker, ledger=ledger, parent_attempt_ids=())
     if should_retry(result.status, job.attempt - 1):
         log.warning(
@@ -795,6 +890,11 @@ def resume(
         # and what has to match is the static half and the prefix.
         resume_from=restart,
     )
+    stopped = stopped_before_booking(
+        job, resumed, worker, completed_time_s=float(restart.completed_time_s)
+    )
+    if stopped is not None:
+        return stopped
     result = _run_attempt(job, resumed, worker=worker, ledger=ledger, parent_attempt_ids=())
     check_requested_outputs(result, request)
     return result

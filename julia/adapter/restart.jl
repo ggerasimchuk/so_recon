@@ -671,6 +671,11 @@ function run_forward_native(
     payloads = Any[]
     offsets = Int[]
     diagnostics = Any[]
+    # The counters of the chunks this call did NOT simulate. They are re-extracted from the
+    # parent's own `.jld2` files so that the published integrals cover the whole horizon,
+    # and the merged totals below therefore include them — but nobody spent them here. The
+    # ledger sums what was spent, so this is what the Python side subtracts.
+    resumed_accepted, resumed_cut, resumed_iterations = 0, 0, 0
     for range in ranges
         last(range) <= completed || break
         edges = schedule.edges_s[first(range):(last(range) + 1)]
@@ -703,6 +708,11 @@ function run_forward_native(
         )
         push!(payloads, payload)
         push!(offsets, first(range) - 1)
+        if last(range) <= resume_from_step
+            resumed_accepted += Int(payload["solver"]["accepted_steps"])
+            resumed_cut += Int(payload["solver"]["cut_steps"])
+            resumed_iterations += Int(payload["solver"]["nonlinear_iterations"])
+        end
         # The chunk's full substates and reports go out of scope HERE, and the number below
         # is what a later test reads to show that nothing of them was retained.
         states = nothing
@@ -725,6 +735,14 @@ function run_forward_native(
     # description of the model, never a substitute for the outputs beside it.
     merged["model"] = describe_model(physical)
     merged["chunk_diagnostics"] = diagnostics
+    # Always present, zero for a fresh job: a reader that had to guess whether a missing
+    # field meant "nothing was resumed" or "this worker does not report it" would guess
+    # wrong for exactly the job whose counters are double-counted without it.
+    merged["resumed_solver"] = Dict{String,Any}(
+        "accepted_steps" => resumed_accepted,
+        "cut_steps" => resumed_cut,
+        "nonlinear_iterations" => resumed_iterations,
+    )
     merged["completed_report_step"] = completed
     merged["completed_time_s"] = schedule.edges_s[completed + 1]
     merged["report_steps"] = n_steps

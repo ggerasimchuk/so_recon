@@ -347,16 +347,12 @@ function execute_job(request::AbstractDict)
         "physics_class" => physics_class,
         "result_path" => nothing,
         "result_sha256" => nothing,
-        "cost" =>
-            Dict("accepted_steps" => 0, "cut_steps" => 0, "nonlinear_iterations" => 0),
     )
-    if extraction !== nothing && haskey(extraction, "solver")
-        reply["cost"] = Dict(
-            "accepted_steps" => extraction["solver"]["accepted_steps"],
-            "cut_steps" => extraction["solver"]["cut_steps"],
-            "nonlinear_iterations" => extraction["solver"]["nonlinear_iterations"],
-        )
-    end
+    # The solver's counters are deliberately NOT on the wire. They are physics, and physics
+    # travels in the published record whose bytes the other side re-hashes: a number the
+    # transport read off an unverified frame is a number nobody vouched for. They are in
+    # `record["extraction"]["solver"]`, beside the `resumed_solver` counters that say how
+    # much of that total this job did not spend.
     try
         result_path, result_sha = publish_result(
             root, String(job["result_dir"]), record;
