@@ -14,16 +14,18 @@ how every E01 command that needs no inference settings keeps working unchanged.
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
 import numpy as np
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from so_recon.config.inference import InferenceConfig
 from so_recon.config.load import SPEC_4_0_ONLY_FIELDS, ConfigError, load_project_config
 from so_recon.inference.contracts import (
+    IN_SUPPORT_SUFFIX,
     LOG_BIAS_SCALE,
     NU_FIXED,
     OBSERVATION_ROLES,
@@ -52,6 +54,7 @@ from so_recon.inference.contracts import (
     validate_probability_weights,
 )
 from so_recon.registry.artifact import ArtifactRef
+from so_recon.registry.hashing import canonical_json
 
 BASIS = "a" * 64
 OTHER_BASIS = "b" * 64
@@ -558,6 +561,122 @@ def test_process_status_and_science_status_are_not_merged() -> None:
         algorithm_status="EVALUATION_FAILURE", beta=0.2, convergence_status="NOT_ASSESSED"
     )
     assert failed.beta == 0.2
+
+
+# --------------------------------------------------------------------------------------
+# -inf in JSON: null plus a companion support flag
+# --------------------------------------------------------------------------------------
+
+#: The three literals `json.dumps` emits for non-finite floats. None of them is valid JSON,
+#: and `registry.hashing.canonical_json` refuses to write any of them.
+NON_JSON_LITERALS = ("Infinity", "-Infinity", "NaN")
+
+
+def _round_trip[M: BaseModel](model: M) -> M:
+    """The whole contract in one line: write JSON, read it back, get the same record."""
+    return type(model).model_validate_json(model.model_dump_json())
+
+
+def _mixed_state() -> SMCState:
+    particles = (
+        Particle(particle_id=0, ancestor_id=0, evaluation=_evaluation()),
+        Particle(particle_id=1, ancestor_id=0, evaluation=_evaluation(log_l=-math.inf)),
+    )
+    return _state(
+        particles=particles,
+        log_weights=(0.0, -math.inf),
+        log_evidence=-math.inf,
+    )
+
+
+def test_the_support_flag_is_derived_from_the_value() -> None:
+    assert IN_SUPPORT_SUFFIX == "_in_support"
+    inside = LoglikResult(value=-3.0, terms=(-3.0,), n_used=1, observation_hash="d" * 64)
+    assert inside.value_in_support is True
+    assert inside.terms_in_support == (True,)
+    outside = LoglikResult(
+        value=-math.inf, terms=(-math.inf, -1.0), n_used=2, observation_hash="d" * 64
+    )
+    assert outside.value_in_support is False
+    assert outside.terms_in_support == (False, True)
+
+
+def test_a_support_flag_that_contradicts_its_value_is_refused() -> None:
+    with pytest.raises(ValidationError, match="contradicts"):
+        LoglikResult(
+            value=-math.inf,
+            value_in_support=True,
+            terms=(),
+            n_used=0,
+            observation_hash="d" * 64,
+        )
+    with pytest.raises(ValidationError, match="contradicts"):
+        _evaluation(log_l=-1.0, log_l_in_support=False)
+    with pytest.raises(ValidationError, match="contradicts"):
+        _state(log_weights=(0.0,), log_weights_in_support=(False,))
+
+
+def test_a_loglikelihood_round_trips_through_json_outside_the_support() -> None:
+    result = LoglikResult(
+        value=-math.inf, terms=(-math.inf, -2.0), n_used=2, observation_hash="d" * 64
+    )
+    payload = json.loads(result.model_dump_json())
+    assert payload["value"] is None
+    assert payload["value_in_support"] is False
+    assert payload["terms"] == [None, -2.0]
+    assert payload["terms_in_support"] == [False, True]
+    restored = _round_trip(result)
+    assert restored == result
+    assert restored.value == -math.inf
+    assert restored.terms == (-math.inf, -2.0)
+
+
+def test_a_target_evaluation_round_trips_through_json_outside_the_support() -> None:
+    evaluation = _evaluation(log_p0=-1.5, log_l=-math.inf, log_r=-math.inf)
+    payload = json.loads(evaluation.model_dump_json())
+    assert (payload["log_p0"], payload["log_l"], payload["log_r"]) == (-1.5, None, None)
+    assert payload["log_p0_in_support"] is True
+    assert payload["log_l_in_support"] is False
+    restored = _round_trip(evaluation)
+    assert restored == evaluation
+    assert (restored.log_l, restored.log_r) == (-math.inf, -math.inf)
+
+
+def test_an_smc_state_round_trips_through_json_with_a_mixed_weight_array() -> None:
+    """The checkpoint case: one particle has left the support and the run continues."""
+    state = _mixed_state()
+    payload = json.loads(state.model_dump_json())
+    assert payload["log_weights"] == [0.0, None]
+    assert payload["log_weights_in_support"] == [True, False]
+    assert payload["log_evidence"] is None
+    assert payload["log_evidence_in_support"] is False
+    restored = _round_trip(state)
+    assert restored == state
+    assert restored.log_weights == (0.0, -math.inf)
+    assert restored.log_evidence == -math.inf
+    assert restored.particles[1].evaluation.log_l == -math.inf
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        LoglikResult(value=-math.inf, terms=(-math.inf,), n_used=1, observation_hash="d" * 64),
+        _evaluation(log_p0=-math.inf, log_l=-math.inf, log_r=-math.inf),
+        _mixed_state(),
+    ],
+    ids=["loglik", "evaluation", "state"],
+)
+def test_no_record_ever_writes_a_non_json_float_literal(model: BaseModel) -> None:
+    text = json.dumps(model.model_dump(mode="json"))
+    assert not any(literal in text for literal in NON_JSON_LITERALS)
+    # The project's own writer forbids them outright, so this must not raise either.
+    assert canonical_json(model.model_dump(mode="json"))
+
+
+def test_a_pending_threshold_is_a_drawn_number() -> None:
+    """`pending_log_u` is the log of a uniform draw: finite, or absent with its proposal."""
+    with pytest.raises(ValidationError, match="pending_log_u"):
+        _state(pending_proposal=_theta(), pending_log_u=-math.inf)
 
 
 # --------------------------------------------------------------------------------------

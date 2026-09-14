@@ -10,8 +10,11 @@ would otherwise be SILENT are refused at construction:
   `validate_probability_weights` checks the sum to `PROBABILITY_SUM_TOLERANCE` and never
   renormalises: positive weights that do not sum to one are an error at their source.
 * `-inf` is a legal log-density OUTSIDE the support and nowhere else; NaN and `+inf` are
-  refused everywhere. In JSON `-inf` is stored as null beside `in_support=false`, never as
-  an invalid `Infinity` literal.
+  refused everywhere. In JSON `-inf` is written as `null` beside a companion
+  `<field>_in_support` flag, never as the `-Infinity` literal that is not valid JSON —
+  and the flag is what tells «outside the support» from «not recorded». Every record that
+  holds an extended-real log value carries its flag, so a checkpoint written while a
+  particle sits outside the support reloads to the same numbers it was written from.
 * `beta < 1` is an intermediate tempering distribution and never a posterior (SPEC
   §13.4.2), so `PosteriorBundle` refuses the combination rather than trusting a label.
 
@@ -30,7 +33,14 @@ from typing import Annotated, Any, Literal
 
 import numpy as np
 import numpy.typing as npt
-from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from scipy.special import ndtr
 
 from so_recon.config.schema import StrictModel
@@ -154,6 +164,87 @@ def _log_value(value: float, *, label: str) -> float:
             f"NaN and +inf are not log-densities, got {value}"
         )
     return value
+
+
+#: Suffix of the companion flag every extended-real log field carries. The pair is the
+#: whole JSON contract of plan §2: `{"log_l": null, "log_l_in_support": false}` reloads to
+#: `-inf`, and a field that was never recorded is simply absent instead of ambiguous.
+IN_SUPPORT_SUFFIX = "_in_support"
+
+
+def _in_support(value: object) -> bool:
+    """False only for exactly `-inf`.
+
+    A value that is not a number at all is reported as in support, so that the field's own
+    type check is what the caller is told about rather than a confusing missing flag.
+    """
+    try:
+        return float(value) != -math.inf  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return True
+
+
+def _normalise_log_scalar(data: dict[str, Any], field: str) -> None:
+    flag = f"{field}{IN_SUPPORT_SUFFIX}"
+    if field not in data:
+        return
+    if data[field] is None:
+        data[field] = -math.inf
+    derived = _in_support(data[field])
+    declared = data.get(flag)
+    if declared is None:
+        data[flag] = derived
+    elif bool(declared) != derived:
+        raise ValueError(
+            f"{flag}={bool(declared)} contradicts {field}={data[field]}: the flag says "
+            "whether the value is inside the support and is never set independently of it"
+        )
+
+
+def _normalise_log_array(data: dict[str, Any], field: str) -> None:
+    flag = f"{field}{IN_SUPPORT_SUFFIX}"
+    if field not in data or not isinstance(data[field], list | tuple):
+        return
+    values = tuple(-math.inf if item is None else item for item in data[field])
+    data[field] = values
+    derived = tuple(_in_support(item) for item in values)
+    declared = data.get(flag)
+    if declared is None:
+        data[flag] = derived
+    elif (
+        not isinstance(declared, list | tuple) or tuple(bool(item) for item in declared) != derived
+    ):
+        raise ValueError(
+            f"{flag}={declared!r} contradicts {field}={list(values)!r}: one flag per "
+            "entry, saying whether that entry is inside the support"
+        )
+
+
+def _normalise_log_fields(
+    data: Any, *, scalars: tuple[str, ...] = (), arrays: tuple[str, ...] = ()
+) -> Any:
+    """Accept `null` for `-inf` on the way in, and derive the companion flags.
+
+    Runs `mode='before'`, so it sees the raw mapping from `model_validate_json` exactly as
+    it sees the keyword arguments of a direct construction: `LoglikResult(value=-inf, ...)`
+    and the JSON `{"value": null, "value_in_support": false}` produce the same record.
+    """
+    if not isinstance(data, dict):
+        return data
+    out: dict[str, Any] = dict(data)
+    for name in scalars:
+        _normalise_log_scalar(out, name)
+    for name in arrays:
+        _normalise_log_array(out, name)
+    return out
+
+
+def _json_log_scalar(value: float) -> float | None:
+    return None if value == -math.inf else value
+
+
+def _json_log_array(values: tuple[float, ...]) -> list[float | None]:
+    return [_json_log_scalar(value) for value in values]
 
 
 def validate_probability_weights(weights: Sequence[float], *, label: str) -> tuple[float, ...]:
@@ -557,12 +648,30 @@ class LoglikResult(StrictModel):
     An empty observation set gives `L=1`: `value=0`, no terms, nothing used. That is the
     case plan §1 relies on when it says the result at `r=p0` must reproduce the CONDITIONAL
     prior exactly, so it is stated in the type rather than assumed at the call site.
+
+    `value` and each entry of `terms` may be `-inf` — an observation this theta cannot
+    produce at all — and each carries its own support flag so the record survives JSON.
     """
 
     value: float
+    value_in_support: bool
     terms: tuple[float, ...]
+    terms_in_support: tuple[bool, ...]
     n_used: int = Field(ge=0)
     observation_hash: Sha256
+
+    @model_validator(mode="before")
+    @classmethod
+    def _log_values_travel_with_their_support(cls, data: Any) -> Any:
+        return _normalise_log_fields(data, scalars=("value",), arrays=("terms",))
+
+    @field_serializer("value", when_used="json")
+    def _value_as_json(self, value: float) -> float | None:
+        return _json_log_scalar(value)
+
+    @field_serializer("terms", when_used="json")
+    def _terms_as_json(self, terms: tuple[float, ...]) -> list[float | None]:
+        return _json_log_array(terms)
 
     @model_validator(mode="after")
     def _terms_account_for_what_was_used(self) -> LoglikResult:
@@ -572,6 +681,11 @@ class LoglikResult(StrictModel):
         if self.n_used != len(self.terms):
             raise ValueError(
                 f"n_used {self.n_used} does not match the {len(self.terms)} terms recorded"
+            )
+        if len(self.terms_in_support) != len(self.terms):
+            raise ValueError(
+                f"terms_in_support has {len(self.terms_in_support)} flags for "
+                f"{len(self.terms)} terms"
             )
         if self.n_used == 0 and self.value != 0.0:
             raise ValueError(f"no observations means L=1, so value must be 0.0, got {self.value}")
@@ -594,15 +708,27 @@ class TargetEvaluation(StrictModel):
 
     theta: ThetaRecord
     log_p0: float
+    log_p0_in_support: bool
     log_l: float
+    log_l_in_support: bool
     log_r: float
+    log_r_in_support: bool
     forward_ref: ArtifactRef | None
     cache_key: str = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _log_values_travel_with_their_support(cls, data: Any) -> Any:
+        return _normalise_log_fields(data, scalars=("log_p0", "log_l", "log_r"))
 
     @field_validator("log_p0", "log_l", "log_r")
     @classmethod
     def _log_space(cls, value: float, info: ValidationInfo) -> float:
         return _log_value(value, label=str(info.field_name))
+
+    @field_serializer("log_p0", "log_l", "log_r", when_used="json")
+    def _log_as_json(self, value: float) -> float | None:
+        return _json_log_scalar(value)
 
 
 class Particle(StrictModel):
@@ -629,9 +755,11 @@ class SMCState(StrictModel):
 
     particles: tuple[Particle, ...]
     log_weights: tuple[float, ...]
+    log_weights_in_support: tuple[bool, ...]
     beta: float = Field(ge=0.0, le=1.0)
     level: int = Field(ge=0)
     log_evidence: float
+    log_evidence_in_support: bool
     phase: SmcPhase
     cursor: int = Field(ge=0)
     rng_state: dict[str, Any]
@@ -642,12 +770,30 @@ class SMCState(StrictModel):
     algorithm_status: AlgorithmStatus
     diagnostics: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _log_values_travel_with_their_support(cls, data: Any) -> Any:
+        return _normalise_log_fields(data, scalars=("log_evidence",), arrays=("log_weights",))
+
+    @field_serializer("log_evidence", when_used="json")
+    def _log_evidence_as_json(self, value: float) -> float | None:
+        return _json_log_scalar(value)
+
+    @field_serializer("log_weights", when_used="json")
+    def _log_weights_as_json(self, values: tuple[float, ...]) -> list[float | None]:
+        return _json_log_array(values)
+
     @model_validator(mode="after")
     def _state_is_self_consistent(self) -> SMCState:
         if len(self.log_weights) != len(self.particles):
             raise ValueError(
                 f"log_weights has {len(self.log_weights)} entries for "
                 f"{len(self.particles)} particles"
+            )
+        if len(self.log_weights_in_support) != len(self.log_weights):
+            raise ValueError(
+                f"log_weights_in_support has {len(self.log_weights_in_support)} flags for "
+                f"{len(self.log_weights)} weights"
             )
         for index, weight in enumerate(self.log_weights):
             _log_value(weight, label=f"log_weights[{index}]")
@@ -657,8 +803,11 @@ class SMCState(StrictModel):
                 "a pending proposal is stored with the pending log u it is compared "
                 "against; one without the other re-randomises the accept decision"
             )
-        if self.pending_log_u is not None:
-            _log_value(self.pending_log_u, label="pending_log_u")
+        if self.pending_log_u is not None and not math.isfinite(self.pending_log_u):
+            raise ValueError(
+                "pending_log_u is the log of a uniform draw and is finite; None means "
+                f"there is no pending proposal, got {self.pending_log_u}"
+            )
         return self
 
 
@@ -705,6 +854,7 @@ __all__ = [
     "FIXED_NOISE_THETA",
     "F64",
     "I64",
+    "IN_SUPPORT_SUFFIX",
     "LATENT_MEASURE",
     "LOG_BIAS_INDEX",
     "LOG_BIAS_SCALE",
