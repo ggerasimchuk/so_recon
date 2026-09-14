@@ -891,12 +891,45 @@ def test_the_operational_fixtures_mix_crossflow_isolate_and_are_supported(
     _within_spec(extraction_balances(crossflow))
 
     # ---- 10.4 the SAME surface condition with both completions closed --------------------
+    #
+    # READ THE NEXT ASSERTION FOR WHAT IT IS. `outputs.jl` multiplies every published
+    # connection flux by the interval's `PerforationMask`, so on a masked connection the
+    # published number is zero BY CONSTRUCTION — for any model, however broken. It is checked
+    # because the extraction promises it, and it is not on its own evidence that anything was
+    # isolated. The three claims after it are the falsifiable ones, and none of them passes
+    # through a mask.
     isolated = fixtures["crossflow_closed"]["extraction"]
     assert fixtures["crossflow_closed"]["status"] == "COMPLETE"
     for connection_id in (0, 1):
         rows = _connection_rows(isolated, "XF1", connection_id)
         assert rows and all(not row["connection_open"] for row in rows)
         assert max(abs(float(row["total_mass_kg_s"])) for row in rows) <= closed_flux_max
+
+    # (a) THE COMPLETIONS EXIST AND ARE CONDUCTIVE. `PerforationMask` multiplies the assembled
+    # cross-term entries (`facility/cross_terms.jl:111-115` -> `apply_perforation_mask!`,
+    # `facility/wells/wells.jl:657-690`) and never the `WellIndices` PARAMETER that
+    # `cross_term_perforation_get_conn` reads (`cross_terms.jl:46`). So the well index of a
+    # shut completion stays positive, and a zero here would mean a well nobody completed
+    # rather than one that was shut off. It is the same completion in both runs.
+    closed_wi = fixtures["crossflow_closed"]["native"]["well_indices"]["XF1"]
+    open_wi = fixtures["crossflow_open"]["native"]["well_indices"]["XF1"]
+    assert len(closed_wi) == 2 and all(value > 0.0 for value in closed_wi)
+    assert closed_wi == pytest.approx(open_wi, rel=1e-12)
+
+    # (b) THE WELLBORE DID NOT FILL. Both inventories come from `TotalMasses`, which no mask
+    # touches, and their difference is what the wellbores stored. The open well took a tenth
+    # of a cubic metre of water; the isolated one moved a thousandth of that.
+    isolation = report["crossflow_isolation"]
+    open_stored = max(abs(v) for v in isolation["open_wellbore_change_m3_sc"])
+    closed_stored = max(abs(v) for v in isolation["isolated_wellbore_change_m3_sc"])
+    assert open_stored > 0.1
+    assert closed_stored < 1e-3 * open_stored
+    # (c) AND THE RESERVOIR GAVE UP NOTHING through it, by the same unmasked measure.
+    open_reservoir = max(abs(v) for v in isolation["open_reservoir_change_m3_sc"])
+    closed_reservoir = max(abs(v) for v in isolation["isolated_reservoir_change_m3_sc"])
+    assert open_reservoir > 0.1
+    assert closed_reservoir < 1e-3 * open_reservoir
+
     # A well that stopped producing is not a well that was isolated, and the difference is
     # visible in the reservoir: the open wellbore equalised the layers it was shut in across,
     # and the closed one left them where they were put.
@@ -933,6 +966,12 @@ def test_the_operational_fixtures_mix_crossflow_isolate_and_are_supported(
     # ISOLATION AND SHUTDOWN, on the same well at the same instant. The closed completion
     # carries nothing at all; the open one, under the very same shut surface, does not meet
     # the isolation gate — which is precisely why they are not one claim.
+    #
+    # The CONTRAST is what carries this, not the zero. As above, the masked leg is zero by
+    # construction; the open leg is the same well on the same substep with the same shut
+    # surface, and it is not zero. Both completions keep a positive native well index, so the
+    # difference between them is the mask and nothing else.
+    assert all(value > 0.0 for value in roles["native"]["well_indices"]["OPS1"])
     for step in shut_steps:
         closed_row = _connection_rows(roles_extraction, "OPS1", 1)[step]
         open_row = _connection_rows(roles_extraction, "OPS1", 0)[step]
@@ -1220,6 +1259,22 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     )
     # And the field it is symmetric about really varies over half a saturation unit.
     assert check.metrics["five_spot_so_range"] > 0.5
+
+    # THE GATE IS BOUND TO THE FROZEN CONFIG, on both grids. `evaluate_physics` above scores
+    # the 16x16 case, whose shape its registry pins; the 32x32 refinement it cannot score at
+    # all, so without the two lines below that grid's symmetry would be gated only by the
+    # hand-copied constant in `refinement.jl` — and editing `configs/e01_tolerances.yml` would
+    # leave it silently on the old number. The diagnostic exports its copy and it is compared
+    # against the loaded YAML here, and both grids' measured reflections are re-scored against
+    # the loaded value rather than against Julia's.
+    symmetry_gate = tolerances["five_spot_symmetry_abs_max"]
+    assert report["five_spot_symmetry_abs_max"] == symmetry_gate
+    for grid in ("five_spot_16", "five_spot_32"):
+        measured = report["five_spot_symmetry"][grid]
+        assert measured["so_mirror_x_abs"] <= symmetry_gate, grid
+        assert measured["so_mirror_y_abs"] <= symmetry_gate, grid
+        # Not vacuous on either grid: the field really varies across the pattern.
+        assert measured["so_range"] > 0.5, grid
 
     # ---- 10.8 the same continuous problem on a finer grid ---------------------------------
     fine = fixtures["five_spot_32"]

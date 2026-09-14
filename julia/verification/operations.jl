@@ -857,6 +857,34 @@ function surface_mass_rate_kg_s(extraction::AbstractDict, well_id::AbstractStrin
     return sum(Float64(c[step]) for c in components)
 end
 
+"""
+    wellbore_inventory_change_m3_sc(extraction) -> Vector
+
+How much standard volume the WELLBORES gained over the run, per component, m3_sc.
+
+`inventory_m3_sc` is the reservoir AND every well node; `reservoir_inventory_m3_sc` is the
+reservoir alone; the difference between their changes is what the wellbores stored. It is
+built from `TotalMasses` on both sides and NO `PerforationMask` ever touches it — which is
+exactly why the isolation checks below lean on it. `outputs.jl` multiplies every published
+connection flux by the interval's mask, so a closed connection's published flux is zero by
+CONSTRUCTION and cannot on its own be evidence that anything was isolated; a wellbore that
+did not fill, beside one that did, is a measurement of the same claim that the mask cannot
+manufacture.
+"""
+function wellbore_inventory_change_m3_sc(extraction::AbstractDict)
+    total = Float64.(extraction["inventory_m3_sc"][end]) .-
+            Float64.(extraction["inventory_m3_sc"][1])
+    reservoir = Float64.(extraction["reservoir_inventory_m3_sc"][end]) .-
+                Float64.(extraction["reservoir_inventory_m3_sc"][1])
+    return total .- reservoir
+end
+
+"""How much the RESERVOIR gained over the run, per component, m3_sc. Never masked either."""
+function reservoir_inventory_change_m3_sc(extraction::AbstractDict)
+    return Float64.(extraction["reservoir_inventory_m3_sc"][end]) .-
+           Float64.(extraction["reservoir_inventory_m3_sc"][1])
+end
+
 """Standard-volume inventory of one cell's water and oil at one published state, m3_sc."""
 function cell_inventory_m3_sc(states::AbstractDict, time_index::Int, cell::Int)
     pv = Float64(states["pore_volume_m3"][time_index][cell + 1])
@@ -912,10 +940,48 @@ function selftest_operations()
         @test upper[1]["total_mass_kg_s"] > 0.0    # out of the high-potential layer
         @test lower[1]["total_mass_kg_s"] < 0.0    # and into the low-potential one
         # CLOSED: the same surface condition, and nothing crosses either completion.
+        #
+        # The published flux being zero is NOT the evidence. `outputs.jl` multiplies every
+        # connection flux by the interval's mask, so on a masked connection that number is
+        # zero by construction for any model however broken; it is asserted because the
+        # extraction promises it, not because it proves anything. The three claims under it
+        # are the ones a broken model could fail, and none of them passes through a mask:
+        #
+        #  (a) the completions still EXIST and are still conductive — their native well
+        #      indices are positive. `PerforationMask` multiplies the assembled cross-term
+        #      entries (`JutulDarcy 0.3.11 facility/cross_terms.jl:111-115` ->
+        #      `apply_perforation_mask!`, `facility/wells/wells.jl:657-690`) and never the
+        #      `WellIndices` parameter that `cross_term_perforation_get_conn` reads
+        #      (`cross_terms.jl:46`), so a zero here would mean a well that was not completed
+        #      rather than one that was shut off;
+        #  (b) the WELLBORE did not fill: its own standard-volume inventory barely moved,
+        #      against an open wellbore that took a tenth of a cubic metre of water;
+        #  (c) the RESERVOIR did not give anything up through it, and kept its layer
+        #      potentials apart (asserted below).
         for id in (0, 1)
             @test all(!r["connection_open"] for r in connection_series(closed_run, "XF1")[id])
             @test peak_connection_mass_kg_s(closed_run, "XF1", id) == 0.0
         end
+        closed_wi = fixtures["crossflow_closed"]["native"]["well_indices"]["XF1"]
+        @test length(closed_wi) == 2
+        @test all(>(0.0), closed_wi)
+        # And they are the SAME completions as the open case's: one geometry, two masks.
+        @test closed_wi ≈ fixtures["crossflow_open"]["native"]["well_indices"]["XF1"]
+        open_stored = wellbore_inventory_change_m3_sc(open_run)
+        closed_stored = wellbore_inventory_change_m3_sc(closed_run)
+        open_reservoir = reservoir_inventory_change_m3_sc(open_run)
+        closed_reservoir = reservoir_inventory_change_m3_sc(closed_run)
+        @test maximum(abs.(open_stored)) > 0.1
+        @test maximum(abs.(closed_stored)) < 1.0e-3 * maximum(abs.(open_stored))
+        @test maximum(abs.(open_reservoir)) > 0.1
+        @test maximum(abs.(closed_reservoir)) < 1.0e-3 * maximum(abs.(open_reservoir))
+        measured["crossflow_isolation"] = Dict{String,Any}(
+            "closed_well_indices" => closed_wi,
+            "open_wellbore_change_m3_sc" => open_stored,
+            "isolated_wellbore_change_m3_sc" => closed_stored,
+            "open_reservoir_change_m3_sc" => open_reservoir,
+            "isolated_reservoir_change_m3_sc" => closed_reservoir,
+        )
         # The well storage term, on the first substep: what the two connections carry differs
         # by what the wellbore itself is filling with, and that is a small part of either.
         @test abs(upper[1]["total_mass_kg_s"] + lower[1]["total_mass_kg_s"]) <
@@ -947,6 +1013,11 @@ function selftest_operations()
         roles = run_operational(:roles, operational_solver_options())
         @test roles["status"] == "COMPLETE"
         @test roles["extraction"]["control_infeasible_reason"] === nothing
+        # Both of this well's completions are real and conductive on every interval; what
+        # changes between them is the MASK, which never reaches the well index. So the zero
+        # the shut interval publishes on connection 1 is a completion that was shut off, and
+        # not one that was never drilled.
+        @test all(>(0.0), roles["native"]["well_indices"]["OPS1"])
         fixtures["roles"] = roles
 
         for (key, name) in (("bhp_feasible", :bhp_feasible), ("bhp_infeasible", :bhp_infeasible))

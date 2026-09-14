@@ -57,9 +57,16 @@ const FIVE_SPOT_SUPPORT_SIDE = 8
 #: The Buckley-Leverett refinement pair: cells and the divisor applied to the report step.
 const BL_REFINEMENT = ((64, 1), (128, 2))
 
-#: `five_spot_symmetry_abs_max` of `configs/e01_tolerances.yml`, restated on this side so the
-#: diagnostic fails where the number is produced. Julia cannot read the YAML the Python
-#: evaluator is gated on, so `tests/integration/test_e01_physics.py` asserts the two agree.
+#: `five_spot_symmetry_abs_max` of `configs/e01_tolerances.yml`, restated on this side because
+#: this process has no YAML reader and the diagnostic should fail where the number is produced.
+#:
+#: A hand-copied threshold is a threshold that can go stale, and this one carries real weight:
+#: `so_recon.validation.physics` pins its `five_spot` fixture to the 16x16 grid, so the 32x32
+#: refinement's symmetry is gated HERE and nowhere else. It is therefore EXPORTED in the
+#: payload below, and `tests/integration/test_e01_physics.py` asserts it equals the frozen YAML
+#: value and re-scores both grids' measured reflections against that value. Editing the YAML
+#: without editing this line now turns that test red instead of leaving the fine grid on a
+#: stale gate.
 const FIVE_SPOT_SYMMETRY_ABS_MAX = 1.0e-4
 
 """
@@ -134,6 +141,8 @@ function selftest_refinement()
         "gravity_constant" => Jutul.gravity_constant,
         "support_side" => FIVE_SPOT_SUPPORT_SIDE,
         "five_spot_grids" => collect(FIVE_SPOT_GRIDS),
+        # Exported so the Python side can prove this copy is still the frozen one.
+        "five_spot_symmetry_abs_max" => FIVE_SPOT_SYMMETRY_ABS_MAX,
     )
     fixtures = Dict{String,Any}()
     timings = Dict{String,Any}()
