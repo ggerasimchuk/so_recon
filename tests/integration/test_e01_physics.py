@@ -393,6 +393,7 @@ CONTROLS_RATE_M3_DAY = 2.0
 CONTROLS_PRODUCER_BHP_FLOOR_PA = 5.0e6
 CONTROLS_PRODUCER_BHP_TARGET_PA = 1.9e7
 CONTROLS_INJECTOR_BHP_CEILING_PA = 4.0e7
+CONTROLS_INJECTOR_BHP_TARGET_PA = 2.2e7
 
 
 @pytest.mark.julia
@@ -472,13 +473,32 @@ def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: 
         None,
         None,
     ]
+    # The injector's ceiling is recorded while it runs on a rate; a well already ON bhp
+    # carries no limit, for either role.
     assert fixture["recorded_bhp_limits_pa"]["INJ1"] == [
         CONTROLS_INJECTOR_BHP_CEILING_PA,
         CONTROLS_INJECTOR_BHP_CEILING_PA,
         None,
-        CONTROLS_INJECTOR_BHP_CEILING_PA,
+        None,
     ]
     assert "rate_lower" in fixture["native_default_limit_for_bhp_producer"]
+
+    # --- the injected stream, as BUILT on every branch that constructs one ---------------
+    # A wrong mixture or surface density in `InjectorControl` is silent wrong physics, and
+    # the bhp branch builds its own rather than inheriting one: a rate control that later
+    # hits its bhp limit switches through `replace_target`, which copies the mixture and
+    # density across and so could never reveal a mistake in that constructor.
+    assert fixture["injector_targets"] == [
+        "SurfaceWaterRateTarget",
+        "SurfaceWaterRateTarget",
+        "DisabledTarget",
+        "BottomHolePressureTarget",
+    ]
+    # Pure water by mass, water first — on the bhp branch too, not only on the rate one.
+    assert fixture["injector_mixtures"] == [[1.0, 0.0], [1.0, 0.0], None, [1.0, 0.0]]
+    # And the surface density is the fluid's own water density, never Jutul's default 1.0.
+    assert fixture["injector_densities_kg_m3"] == [RHO_W_SC, RHO_W_SC, None, RHO_W_SC]
+    assert RHO_W_SC != 1.0
 
     # --- the native sign convention --------------------------------------------------------
     producer = fixture["evidence"]["PRO1"]
@@ -494,6 +514,10 @@ def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: 
     # Injection is the other direction under the same production-positive convention.
     assert injector[0]["water_rate_m3_day"] == pytest.approx(-CONTROLS_RATE_M3_DAY, rel=1e-12)
     assert producer[3]["bhp_pa"] == pytest.approx(CONTROLS_PRODUCER_BHP_TARGET_PA, rel=1e-12)
+    # The injector's bhp interval really ran, on the bhp its own constructor was given.
+    assert [s["operating_target"] for s in injector] == ["wrat", "wrat", "disabled", "bhp"]
+    assert injector[3]["bhp_pa"] == pytest.approx(CONTROLS_INJECTOR_BHP_TARGET_PA, rel=1e-12)
+    assert injector[3]["water_rate_m3_day"] < 0.0
 
     # --- uptime, and Vo + Vw = q_liquid * uptime ------------------------------------------
     # The uptime Julia used is the open part of each interval; the same number falls out of
@@ -588,7 +612,42 @@ def test_the_native_controls_follow_the_calendar_the_case_declares(tmp_project: 
     isolated = abs(crossflow["isolated"]["well_segment_mass_flux_kg_s"][1])
     assert coupled > 50.0 * isolated
 
-    # --- the refusals name what they refuse -------------------------------------------------
+    # --- the refusals name what they refuse -----------------------------------------------
+    # Every guard in `controls.jl` that stands between a malformed control and silent wrong
+    # physics. The mask-length one matters most: `apply_perforation_mask!` iterates
+    # `eachindex(mask)`, so a short mask would leave the remaining perforations fully open
+    # with no complaint from the backend, and Python cannot catch it — a `ControlSegment`
+    # never sees the model's connection count.
+    refusals = report["refusals"]
+    assert set(refusals) == {
+        "missing_well",
+        "duplicate_well",
+        "unknown_well",
+        "mask_too_short",
+        "mask_too_long",
+        "mask_not_boolean",
+        "producer_phase_rate",
+        "zero_rate",
+        "non_positive_bhp_limit",
+        "unimplemented_boundary",
+        "closed_boundary_with_cells",
+    }
+    assert "1 entries for 2 connections" in refusals["mask_too_short"]
+    assert "3 entries for 2 connections" in refusals["mask_too_long"]
+    assert "not partially open" in refusals["mask_not_boolean"]
+    assert "connection_open[1] is 0.5" in refusals["mask_not_boolean"]
+    assert "two controls on one interval" in refusals["duplicate_well"]
+    assert "GHOST" in refusals["unknown_well"]
+    assert "the model does not have" in refusals["unknown_well"]
+    assert "SPEC 9.1" in refusals["producer_phase_rate"]
+    assert "role='shut'" in refusals["zero_rate"]
+    assert "must be positive when given" in refusals["non_positive_bhp_limit"]
+    assert "Tasks 9-10" in refusals["unimplemented_boundary"]
+    assert "closed boundary names no cells" in refusals["closed_boundary_with_cells"]
+    # Every one of them names the well or the field it is about, never just "invalid".
+    for label in ("missing_well", "duplicate_well", "mask_too_short", "mask_not_boolean"):
+        assert "INJ1" in refusals[label] or "PRO1" in refusals[label], label
+
     hole = report["missing_control_message"]
     assert "INJ1" in hole and "never inherited" in hole
     crossflow_refusal = report["crossflow_refusal_message"]

@@ -192,9 +192,14 @@ const CONTROLS_RATE_M3_DAY = 2.0
 const CONTROLS_PRODUCER_BHP_FLOOR_PA = 5.0e6
 const CONTROLS_INJECTOR_BHP_CEILING_PA = 4.0e7
 
-#: The bhp the producer is put on for the last interval, below the initial pressure so that
-#: it really produces under it.
+#: The bhp both wells are put on for the last interval: the producer below the initial
+#: pressure so that it really produces under it, and the injector above it so that it
+#: really injects. The injector's bhp interval is what builds
+#: `InjectorControl(BottomHolePressureTarget(...), mixture; density)`, a constructor no
+#: rate control reaches — a rate control that later switches onto its bhp limit goes
+#: through `replace_target`, which INHERITS the mixture and the density instead.
 const CONTROLS_PRODUCER_BHP_TARGET_PA = 1.9e7
+const CONTROLS_INJECTOR_BHP_TARGET_PA = 2.2e7
 
 const CONTROLS_INITIAL_PRESSURE_PA = 2.0e7
 
@@ -237,11 +242,11 @@ driven over January and February 2020 by four control intervals:
 | 0 | 0–31 | water rate, both open | liquid rate, both open |
 | 1 | 31–45 | water rate, both open | liquid rate, LOWER completion shut |
 | 2 | 45–52 | shut, isolated | shut, isolated |
-| 3 | 52–60 | water rate, both open | bhp, both open |
+| 3 | 52–60 | bhp, both open | bhp, both open |
 
-Interval 0 is the rate branch, interval 3 the bhp branch, interval 1 a completion event
-inside a month and interval 2 a month with part of its uptime removed. Every interval
-restates the role and the mask of both wells: nothing is inherited.
+Interval 0 is the rate branch, interval 3 the bhp branch for BOTH roles, interval 1 a
+completion event inside a month and interval 2 a month with part of its uptime removed.
+Every interval restates the role and the mask of both wells: nothing is inherited.
 """
 function two_interval_controls_case(nx::Int, nz::Int)
     (nx == DEFAULT_NX && nz == DEFAULT_NZ) || error(
@@ -309,7 +314,17 @@ function two_interval_controls_case(nx::Int, nz::Int)
             injecting(d0, d1, both),
             injecting(d1, d2, both),
             shut(d2, d3, "INJ1"),
-            injecting(d3, d4, both),
+            # The injector's own bhp branch, which no rate control can reach.
+            control_segment(
+                start_day = d3,
+                end_day = d4,
+                well_id = "INJ1",
+                role = "injector",
+                target = "bhp",
+                value = CONTROLS_INJECTOR_BHP_TARGET_PA,
+                bhp_limit_pa = nothing,
+                connection_open = both,
+            ),
             producing(d0, d1, both),
             # The completion event: the lower perforation is closed from day 45, which is
             # inside February and must stay inside February.
@@ -842,17 +857,57 @@ function selftest_controls(adapter::Module)
         # --- limits: only what the case recorded ---------------------------------------
         @test limits_by_interval["PRO1"] ==
               [CONTROLS_PRODUCER_BHP_FLOOR_PA, CONTROLS_PRODUCER_BHP_FLOOR_PA, nothing, nothing]
+        # The injector's ceiling is recorded while it runs on a rate; a well already ON bhp
+        # carries no limit, for either role.
         @test limits_by_interval["INJ1"] == [
             CONTROLS_INJECTOR_BHP_CEILING_PA,
             CONTROLS_INJECTOR_BHP_CEILING_PA,
             nothing,
-            CONTROLS_INJECTOR_BHP_CEILING_PA,
+            nothing,
         ]
         # And the native defaults really were disabled: JutulDarcy WOULD have put a rate
         # floor under the bhp producer of interval 3, and the forces carry no limit at all.
         native_default = JutulDarcy.default_limits(forces[4][:Facility].control[:PRO1])
         @test haskey(native_default, :rate_lower)
         @test forces[4][:Facility].limits[:PRO1] === nothing
+
+        # --- the injected stream, as BUILT on every branch that constructs one ----------
+        # `InjectorControl` carries the surface mixture and the surface density of what is
+        # being injected, and a wrong value there is silent wrong physics rather than an
+        # error. The bhp branch builds its own `InjectorControl` from scratch, so it is
+        # checked here beside the rate branch rather than inherited from it: a rate control
+        # that later hits its bhp limit goes through `replace_target`, which copies the
+        # mixture and density across and could not reveal a mistake in this constructor.
+        injector_targets = String[]
+        injector_mixtures = Any[]
+        injector_densities = Any[]
+        for f in forces
+            c = f[:Facility].control[:INJ1]
+            push!(injector_targets, string(nameof(typeof(c.target))))
+            if c isa InjectorControl
+                push!(injector_mixtures, collect(c.injection_mixture))
+                push!(injector_densities, c.mixture_density)
+            else
+                push!(injector_mixtures, nothing)
+                push!(injector_densities, nothing)
+            end
+        end
+        @test injector_targets == [
+            "SurfaceWaterRateTarget",
+            "SurfaceWaterRateTarget",
+            "DisabledTarget",
+            "BottomHolePressureTarget",
+        ]
+        # Pure water by mass, water first: the phase order `OW_PHASES` fixes, on every
+        # branch including the bhp one.
+        @test injector_mixtures == [[1.0, 0.0], [1.0, 0.0], nothing, [1.0, 0.0]]
+        # And the surface density is the SYSTEM's own water density, not a default of 1.0.
+        rho_w_sc_declared = educational_fluids()["density_sc_kg_m3"][1]
+        @test injector_densities ==
+              [rho_w_sc_declared, rho_w_sc_declared, nothing, rho_w_sc_declared]
+        @test rho_w_sc_declared != 1.0
+        @test forces[4][:Facility].control[:INJ1].target.value ≈
+              CONTROLS_INJECTOR_BHP_TARGET_PA
 
         # --- the native sign convention, on the record ---------------------------------
         pro = evidence["PRO1"]
@@ -867,6 +922,12 @@ function selftest_controls(adapter::Module)
         # an injector comes out negative: the sign is a direction, not an absolute value.
         @test inj[1]["operating_target"] == "wrat"
         @test inj[1]["water_rate_m3_day"] ≈ -CONTROLS_RATE_M3_DAY
+        # The injector's bhp interval runs, and runs on the bhp it was built with: the
+        # constructor is exercised by the solver, not merely constructed and discarded.
+        @test inj[4]["operating_target"] == "bhp"
+        @test inj[4]["bhp_pa"] ≈ CONTROLS_INJECTOR_BHP_TARGET_PA
+        # Still injecting, which is negative under the production-positive convention.
+        @test inj[4]["water_rate_m3_day"] < 0.0
 
         # --- Vo + Vw = q_liquid * uptime, where the rate is actually reached ------------
         uptime = interval_uptime_s(schedule, "PRO1")
@@ -911,6 +972,11 @@ function selftest_controls(adapter::Module)
             "controls" => case["controls"],
             "controls_by_interval" => schedule.controls,
             "control_types" => control_by_interval,
+            # As BUILT, per interval: the injector's target type and the surface stream it
+            # would inject. The bhp interval is the one no rate control can reach.
+            "injector_targets" => injector_targets,
+            "injector_mixtures" => injector_mixtures,
+            "injector_densities_kg_m3" => injector_densities,
             "masks" => mask_by_interval,
             "recorded_bhp_limits_pa" => limits_by_interval,
             "uptime_s" => uptime,
@@ -919,18 +985,157 @@ function selftest_controls(adapter::Module)
             "native_default_limit_for_bhp_producer" => String.(collect(keys(native_default))),
         )
 
-        # --- a hole in the schedule is a refusal, not a well that kept going ------------
-        missing_inj = [c for c in schedule.controls[1] if String(c["well_id"]) != "INJ1"]
-        hole = try
-            adapter.build_forces(fixture_run.physical.model, missing_inj, case["boundary"])
-            nothing
-        catch err
-            err
+        # --- the refusals, which no valid case can reach ---------------------------------
+        # These are the guards that stand between a malformed control and silent wrong
+        # physics, and a guard nobody exercised is a guard nobody knows works. They need no
+        # simulation: the model built above is enough, so the whole block is free.
+        model = fixture_run.physical.model
+        boundary = case["boundary"]
+        interval0 = schedule.controls[1]
+        inj_control = only(c for c in interval0 if String(c["well_id"]) == "INJ1")
+        pro_control = only(c for c in interval0 if String(c["well_id"]) == "PRO1")
+        rho_w_sc = educational_fluids()["density_sc_kg_m3"][1]
+        refusals = Dict{String,String}()
+
+        function expect_refusal!(label::String, thunk)
+            err = try
+                thunk()
+                nothing
+            catch caught
+                caught
+            end
+            @test err isa adapter.InvalidCaseInput
+            message = err === nothing ? "" : sprint(showerror, err)
+            refusals[label] = message
+            return message
         end
-        @test hole isa adapter.InvalidCaseInput
-        hole_message = hole === nothing ? "" : sprint(showerror, hole)
+
+        """A copy of one control segment with some of its fields replaced."""
+        altered(c, changes) = merge(Dict{String,Any}(c), Dict{String,Any}(changes))
+
+        # A hole in the schedule is a refusal, not a well that kept going. `setup_forces`
+        # would otherwise fill the missing well in with DisabledControl().
+        hole_message = expect_refusal!(
+            "missing_well",
+            () -> adapter.build_forces(
+                model,
+                [c for c in interval0 if String(c["well_id"]) != "INJ1"],
+                boundary,
+            ),
+        )
         @test occursin("INJ1", hole_message)
         @test occursin("never inherited", hole_message)
+
+        # Two controls for one well on one interval: which one would have won is not a
+        # question this adapter answers.
+        duplicate_message = expect_refusal!(
+            "duplicate_well",
+            () -> adapter.build_forces(model, [inj_control, pro_control, pro_control], boundary),
+        )
+        @test occursin("PRO1", duplicate_message)
+        @test occursin("two controls on one interval", duplicate_message)
+
+        # A control for a well the model does not have — a renamed or misspelled well would
+        # otherwise leave its real counterpart silently disabled.
+        ghost_message = expect_refusal!(
+            "unknown_well",
+            () -> adapter.build_forces(
+                model,
+                [inj_control, pro_control, altered(pro_control, ("well_id" => "GHOST",))],
+                boundary,
+            ),
+        )
+        @test occursin("GHOST", ghost_message)
+        @test occursin("the model does not have", ghost_message)
+
+        # A mask SHORTER than the well's connections is the dangerous one:
+        # `apply_perforation_mask!` iterates `eachindex(mask)`, so Jutul would apply the
+        # entries it was given and leave every remaining perforation fully open — a
+        # completion event that half-happened, with no complaint from the backend. Python
+        # cannot catch it either, because `ControlSegment` never sees the model's
+        # connection count. This guard is the only place it can be caught.
+        short_message = expect_refusal!(
+            "mask_too_short",
+            () -> adapter.build_forces(
+                model,
+                [inj_control, altered(pro_control, ("connection_open" => Any[true],))],
+                boundary,
+            ),
+        )
+        @test occursin("PRO1", short_message)
+        @test occursin("1 entries for 2 connections", short_message)
+        # And longer, which Jutul would simply ignore the tail of.
+        long_message = expect_refusal!(
+            "mask_too_long",
+            () -> adapter.build_forces(
+                model,
+                [
+                    inj_control,
+                    altered(pro_control, ("connection_open" => Any[true, true, false],)),
+                ],
+                boundary,
+            ),
+        )
+        @test occursin("3 entries for 2 connections", long_message)
+        # A partial-completion multiplier is a real `PerforationMask` feature and NOT part
+        # of the E01 contract: scaling a connection to half strength would be a physical
+        # change nobody declared.
+        fraction_message = expect_refusal!(
+            "mask_not_boolean",
+            () -> adapter.build_forces(
+                model,
+                [inj_control, altered(pro_control, ("connection_open" => Any[true, 0.5],))],
+                boundary,
+            ),
+        )
+        @test occursin("connection_open[1] is 0.5", fraction_message)
+        @test occursin("not partially open", fraction_message)
+
+        # SPEC 9.1 at the native boundary, not only in the Python contract: a producer is
+        # never given a phase rate, and a rate of zero is a shut well.
+        phase_rate_message = expect_refusal!(
+            "producer_phase_rate",
+            () -> adapter.native_control(
+                altered(pro_control, ("target" => "water_rate",)),
+                rho_w_sc,
+            ),
+        )
+        @test occursin("SPEC 9.1", phase_rate_message)
+        zero_rate_message = expect_refusal!(
+            "zero_rate",
+            () -> adapter.native_control(altered(pro_control, ("value" => 0.0,)), rho_w_sc),
+        )
+        @test occursin("role='shut'", zero_rate_message)
+        # A recorded limit that is not a pressure.
+        limit_message = expect_refusal!(
+            "non_positive_bhp_limit",
+            () -> adapter.control_limits(altered(pro_control, ("bhp_limit_pa" => -1.0,))),
+        )
+        @test occursin("must be positive when given", limit_message)
+
+        # A boundary this build does not implement is named, not stubbed; and a closed one
+        # that names cells is a contradiction rather than a closed boundary.
+        boundary_message = expect_refusal!(
+            "unimplemented_boundary",
+            () -> adapter.build_forces(
+                model,
+                interval0,
+                Dict{String,Any}("kind" => "pressure_water", "cells" => Any[0]),
+            ),
+        )
+        @test occursin("pressure_water", boundary_message)
+        @test occursin("Tasks 9-10", boundary_message)
+        closed_message = expect_refusal!(
+            "closed_boundary_with_cells",
+            () -> adapter.build_forces(
+                model,
+                interval0,
+                Dict{String,Any}("kind" => "closed", "cells" => Any[0]),
+            ),
+        )
+        @test occursin("closed boundary names no cells", closed_message)
+
+        measured["refusals"] = refusals
         measured["missing_control_message"] = hole_message
 
         # --- a crossflow declaration the backend cannot honour --------------------------
