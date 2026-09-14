@@ -236,6 +236,28 @@ def test_array_ref_rejects_a_malformed_digest(bad: str) -> None:
         )
 
 
+def test_a_single_cell_grid_may_declare_its_empty_face_list() -> None:
+    """`shape = (1, 1, 1)` has no faces, and the contract has to be able to say so.
+
+    P0_VERIFY's own bounds start at one cell and `GridSpec.n_faces` already computes 0 for
+    that grid, so an `ArrayRef` that refused the empty `(0, 2)` face list would make a case
+    the plan allows inexpressible. A NEGATIVE extent is still not a shape.
+    """
+    ref = ArrayRef(
+        path="artifacts/neighbors.h5",
+        dataset="values",
+        sha256="a" * 64,
+        shape=(0, 2),
+        dtype="int64",
+        unit="1",
+        axis_order=FACE_AXES,
+    )
+    assert ref.shape == (0, 2)
+    assert cartesian_neighbors((1, 1, 1)).shape == (0, 2)
+    with pytest.raises(ValidationError, match="non-negative"):
+        ArrayRef.model_validate(ref.model_dump() | {"shape": (-1, 2)})
+
+
 def test_unknown_unit_is_an_error() -> None:
     with pytest.raises(ValidationError, match="unit"):
         ArrayRef(

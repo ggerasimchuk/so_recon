@@ -32,6 +32,7 @@ include("outputs.jl")
 include("restart.jl")
 
 export build_ow, load_arrays, run_job, InvalidCaseInput
+export failure_status, assert_physical_pvt
 export build_forces, native_control, control_limits, perforation_mask
 export control_evidence, infeasible_controls
 export compile_intervals, extract_interval, run_forward

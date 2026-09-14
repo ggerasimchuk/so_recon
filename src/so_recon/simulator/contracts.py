@@ -130,11 +130,20 @@ class ArrayRef(StrictModel):
 
     @field_validator("shape")
     @classmethod
-    def _positive_dimensions(cls, v: tuple[int, ...]) -> tuple[int, ...]:
+    def _non_negative_dimensions(cls, v: tuple[int, ...]) -> tuple[int, ...]:
+        """A shape is a list of extents; a scalar is not an array and a negative extent is not
+        a shape. A dimension of ZERO is allowed, because one array of this contract can
+        legitimately be empty: the face list of a single-cell grid. `GridSpec.n_faces` already
+        computes 0 for `shape = (1, 1, 1)`, `case_io.cartesian_neighbors` already returns an
+        empty `(0, 2)` array for it, and P0_VERIFY's own bounds start at one cell — so
+        refusing the empty face list here would make a case the plan allows inexpressible.
+        Every other array of the contract is checked against a positive cell count by the
+        record that carries it, so an empty one still cannot get through under another name.
+        """
         if not v:
             raise ValueError("shape must have at least one dimension")
-        if any(n < 1 for n in v):
-            raise ValueError(f"shape dimensions must be positive, got {v}")
+        if any(n < 0 for n in v):
+            raise ValueError(f"shape dimensions must be non-negative, got {v}")
         return v
 
     @field_validator("unit")

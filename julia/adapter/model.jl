@@ -55,6 +55,58 @@ Base.showerror(io::IO, err::InvalidCaseInput) = print(io, err.message)
 
 invalid(message::AbstractString) = throw(InvalidCaseInput(message))
 
+"""
+    failure_status(err) -> String
+
+Which forward status an exception raised inside the adapter becomes.
+
+There is exactly one rule and it lives here, so the worker and the verification fixtures
+classify the same failure the same way. `InvalidCaseInput` is the case being the problem —
+bytes that are not what they claim, a geometry that does not describe its own grid, a fluid
+this adapter does not build — and it is `INVALID_INPUT`. Anything else is `PHYSICALLY_INVALID`:
+the input was well formed and the physics still could not be assembled from it, which is
+exactly what a PVT with a non-positive density is.
+"""
+failure_status(err) = err isa InvalidCaseInput ? "INVALID_INPUT" : "PHYSICALLY_INVALID"
+
+"""
+    assert_physical_pvt(fluid)
+
+Refuse a PVT that cannot describe a fluid, BEFORE a model is assembled from it.
+
+A negative or zero standard density, a non-positive viscosity, a negative compressibility or
+a non-positive reference pressure is not a malformed case: every field is present, of the
+right type and of the right length. It is a case whose physics does not exist, and the
+difference matters because a forward must not discover it as a non-converging Newton loop
+three timesteps in and then be reported as a numerical failure. Refusing here, with a plain
+error rather than an `InvalidCaseInput`, is what makes the job end as `PHYSICALLY_INVALID`
+before the solver is ever entered (plan Task 9.5).
+
+Python's `FluidSpec` refuses the same values when a case is built through the contract; this
+is the other end, for every case that reaches the adapter as JSON.
+"""
+function assert_physical_pvt(fluid::AbstractDict)
+    for (field, rule, predicate) in (
+        ("density_sc_kg_m3", "positive", >(0.0)),
+        ("viscosity_pa_s", "positive", >(0.0)),
+        ("compressibility_pa_inv", "non-negative", >=(0.0)),
+    )
+        values = Float64.(fluid[field])
+        (all(isfinite, values) && all(predicate, values)) && continue
+        error(
+            "build_ow: fluids.$(field) = $(values) is not physical; every entry must be " *
+            "$(rule) and finite. The case is well formed and its physics is not: this is " *
+            "refused at construction, not discovered as a non-converging solve",
+        )
+    end
+    p_sc = Float64(fluid["p_sc_pa"])
+    (isfinite(p_sc) && p_sc > 0.0) || error(
+        "build_ow: fluids.p_sc_pa = $(p_sc) is not a physical reference pressure; it must " *
+        "be positive and finite",
+    )
+    return nothing
+end
+
 #: How far a declared cell centre may sit from the centroid the mesh actually produces. A
 #: micrometre is far below anything with geometric meaning and far above float64 round-off,
 #: which at reservoir depths is a few picometres.
@@ -179,6 +231,10 @@ function build_ow(case::AbstractDict, arrays::AbstractDict)
         "build_ow: this adapter builds the educational oil-water system; the case declares " *
         "fluids.kind $(repr(get(fluid, "kind", nothing)))",
     )
+
+    # A PVT that cannot describe a fluid is refused before anything is built from it, so
+    # the job ends as PHYSICALLY_INVALID at construction and never as a non-converging solve.
+    assert_physical_pvt(fluid)
 
     # Gravity is native, and only native. The adapter promises no gravity keyword: a zero-g
     # analytical limit is a registered analytic fixture that zeroes the reservoir's own
