@@ -126,6 +126,7 @@ from so_recon.validation.e01_report import (
     STAGE_REPORT_RELPATH,
     build_e01_report,
     render_e01_report,
+    write_figure_provenance,
 )
 from so_recon.validation.figure_inputs import figure_inputs
 from so_recon.validation.physics import PhysicsCheck, load_tolerances
@@ -751,6 +752,10 @@ def run_e01_report(
             benchmark_path=inputs["benchmark"],
         )
         command_log.info("drew %d figure(s)", len(drawn))
+        # Which session drew the committed figures, recorded beside them: the PNGs live at
+        # one committed path, so a report that could not draw them would otherwise list an
+        # earlier session's pictures among its own artifacts without saying so.
+        write_figure_provenance(paths, run_id=ctx.run_id, cited=resolved, drawn=drawn)
         report = build_e01_report(tuple(resolved), paths)
         text = render_e01_report(report)
         published = paths.resolve(STAGE_REPORT_RELPATH)

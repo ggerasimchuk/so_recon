@@ -21,7 +21,11 @@ from so_recon.simulator.suite_record import (
     JobOutcome,
     SuiteReport,
 )
-from so_recon.validation.e01_report import build_e01_report, render_e01_report
+from so_recon.validation.e01_report import (
+    build_e01_report,
+    render_e01_report,
+    write_figure_provenance,
+)
 from so_recon.validation.physics import PhysicsCheck
 
 P0_MANDATORY = (
@@ -254,6 +258,32 @@ def test_a_published_p1_manifest_that_accepts_nothing_contradicts_a_passing_p1_w
     text = "\n".join(report.limitations)
     assert "p1_suite_manifest.json" in text, report.limitations
     assert "fully_accepted" in text or "not accepted" in text, report.limitations
+
+
+def test_a_committed_figure_drawn_for_another_run_is_named_as_such(tmp_path: Path) -> None:
+    """The PNGs live at one committed path; a report that drew none must not claim them."""
+    paths = _paths(tmp_path)
+    figures = paths.reports / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    (figures / "e01_true_so.png").write_bytes(b"\x89PNG\r\n")
+    cited = _green_p0(paths)
+    write_figure_provenance(paths, run_id="an-earlier-report", cited=[paths.runs / "old"], drawn=[])
+    report = build_e01_report((cited,), paths)
+    text = "\n".join(report.limitations)
+    assert "reports/figures/e01_true_so.png" in text, report.limitations
+    assert "NOT drawn by this report" in text, report.limitations
+
+
+def test_a_figure_this_report_drew_is_not_a_limitation(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    figures = paths.reports / "figures"
+    figures.mkdir(parents=True, exist_ok=True)
+    drawn = figures / "e01_true_so.png"
+    drawn.write_bytes(b"\x89PNG\r\n")
+    cited = _green_p0(paths)
+    write_figure_provenance(paths, run_id="this-report", cited=[cited], drawn=[drawn])
+    report = build_e01_report((cited,), paths)
+    assert not [item for item in report.limitations if "Figures:" in item], report.limitations
 
 
 # --------------------------------------------------------------------------------------

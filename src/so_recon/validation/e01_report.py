@@ -44,6 +44,7 @@ from so_recon.simulator.suite_record import (
     SuiteReport,
 )
 from so_recon.validation.physics import PhysicsCheck
+from so_recon.validation.plots import FIGURES_RELDIR
 
 STAGE_REPORT_SCHEMA_VERSION: Literal["e01-stage-1"] = "e01-stage-1"
 STAGE_REPORT_RELPATH = "reports/stages/E01.md"
@@ -355,6 +356,71 @@ def _budget(jobs: Sequence[JobOutcome]) -> BudgetForecast:
 
 P1_SUITE_MANIFEST_RELPATH = "reports/p1_suite_manifest.json"
 
+#: Where `e01-report` records which session each committed figure was drawn from.
+FIGURE_PROVENANCE_RELPATH = "reports/figures/e01_figures.json"
+
+
+def write_figure_provenance(
+    paths: ProjectPaths, *, run_id: str, cited: Sequence[Path], drawn: Sequence[Path]
+) -> Path:
+    """Record which session drew the committed figures, and from which runs.
+
+    `reports/figures/*.png` are committed to one set of paths, so a report that could NOT
+    draw them — because the session it cites published no COMPLETE forward to draw from —
+    would otherwise list the PREVIOUS session's pictures among its own artifacts. The page
+    has to be able to tell the difference, and a picture cannot say where it came from.
+    """
+    path = paths.root / FIGURE_PROVENANCE_RELPATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "e01-figures-1",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "run_id": run_id,
+        "cited_runs": sorted(Path(d).name for d in cited),
+        "figures": sorted(paths.relative(f) for f in drawn),
+        "note": (
+            "Written by `so-recon e01-report`. `figures` is what THIS command drew; any other "
+            "PNG under reports/figures is an earlier session's and is named as a limitation."
+        ),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def figure_provenance_limitations(
+    paths: ProjectPaths, cited: Sequence[Path], plots: Sequence[str]
+) -> tuple[str, ...]:
+    """Say so when the committed figures were not drawn from the runs this report cites."""
+    if not plots:
+        return ()
+    payload = _read_json(paths.root / FIGURE_PROVENANCE_RELPATH)
+    cited_ids = sorted(Path(d).name for d in cited)
+    if payload is None:
+        return (
+            f"The figures listed below are committed under `{FIGURES_RELDIR}` and carry no "
+            f"`{FIGURE_PROVENANCE_RELPATH}` record, so which session drew them cannot be "
+            "established from the repository. They are not evidence for this report.",
+        )
+    drew = [str(name) for name in payload.get("figures", [])]
+    stale = [name for name in plots if name not in drew]
+    if not stale and sorted(payload.get("cited_runs", [])) == cited_ids:
+        return ()
+    return (
+        "Figures: this report cites runs "
+        + ", ".join(f"`{name}`" for name in cited_ids)
+        + f", and `{FIGURE_PROVENANCE_RELPATH}` records that the committed figures were drawn "
+        "for runs "
+        + (", ".join(f"`{n}`" for n in payload.get("cited_runs", ())) or "(none)")
+        + ". "
+        + (
+            ", ".join(f"`{name}`" for name in stale)
+            + " were NOT drawn by this report and are an earlier session's pictures"
+            if stale
+            else "Every figure below was drawn by this report"
+        )
+        + ". A figure is illustration, never a gate; the matrix above is the evidence.",
+    )
+
 
 def resource_failures_across_runs(paths: ProjectPaths, cited: Sequence[Path]) -> tuple[str, ...]:
     """Every RESOURCE_FAILURE this repository holds, named by run id, cited or not.
@@ -518,6 +584,7 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
     plots = tuple(
         sorted(paths.relative(p) for p in (paths.reports / "figures").glob("*.png") if p.is_file())
     )
+    limitations.extend(figure_provenance_limitations(paths, run_dirs, plots))
     return StageReport(
         status=status,
         status_reason=reason,
