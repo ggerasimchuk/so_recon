@@ -298,6 +298,12 @@ CONNECTION_MONTHLY_SCHEMA = pa.schema(
 
 BALANCE_SCHEMA = pa.schema(
     [
+        # Which system was closed over and which source it was closed against. A reader who
+        # cites one of these numbers has to be able to say which statement it is, so the
+        # three labels are columns rather than prose in a docstring somewhere.
+        ("balance", pa.string()),
+        ("system", pa.string()),
+        ("source_term", pa.string()),
         ("component", pa.string()),
         ("cumulative_relative", pa.float64()),
         ("median_step_relative", pa.float64()),
@@ -405,10 +411,44 @@ def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float])
     return pa.Table.from_pylist(out, schema=CONNECTION_MONTHLY_SCHEMA)
 
 
-def balance_table(metrics: BalanceMetrics) -> pa.Table:
-    """The balance metrics as the row-per-component table a result publishes."""
-    rows = [
+#: What each published balance closes over and against, in words a reader of the table can
+#: act on without opening this module.
+_BALANCE_LABELS: dict[str, tuple[str, str]] = {
+    "full_system_surface": (
+        "reservoir + wellbores",
+        "surface component flux (q_t * mix)",
+    ),
+    "reservoir_connections": (
+        "reservoir",
+        "reservoir-well connection flux (geometry/state/PVT)",
+    ),
+}
+
+
+def balance_table(balances: Mapping[str, BalanceMetrics]) -> pa.Table:
+    """Every published balance as one row per (balance, component).
+
+    Both statements are in the same table, each labelled with the system it closed over and
+    the source term it closed against, in the order `BALANCE_SYSTEMS` declares them. Plan
+    12.9 has the stage validator read the PUBLISHED results rather than re-run the suite, so
+    a balance that only exists inside a test is invisible to the gate that has to cite it.
+    """
+    rows: list[dict[str, Any]] = []
+    for name, _, _ in BALANCE_SYSTEMS:
+        metrics = balances[name]
+        system, source_term = _BALANCE_LABELS[name]
+        rows.extend(_balance_rows(name, system, source_term, metrics))
+    return pa.Table.from_pylist(rows, schema=BALANCE_SCHEMA)
+
+
+def _balance_rows(
+    balance: str, system: str, source_term: str, metrics: BalanceMetrics
+) -> list[dict[str, Any]]:
+    return [
         {
+            "balance": balance,
+            "system": system,
+            "source_term": source_term,
             "component": name,
             "cumulative_relative": metrics.cumulative_relative[index],
             "median_step_relative": metrics.median_step_relative[index],
@@ -424,7 +464,6 @@ def balance_table(metrics: BalanceMetrics) -> pa.Table:
         }
         for index, name in enumerate(metrics.components)
     ]
-    return pa.Table.from_pylist(rows, schema=BALANCE_SCHEMA)
 
 
 # --------------------------------------------------------------------------------------
@@ -662,22 +701,60 @@ def connection_step_table(payload: Mapping[str, Any]) -> pa.Table:
     )
 
 
-def extraction_balance(payload: Mapping[str, Any]) -> BalanceMetrics:
-    """Evaluate the component balance of an extraction, independently of its own tables.
+#: The two balances a forward publishes, each named by the SYSTEM it closes over and the
+#: SOURCE it closes against. They are two different statements about the same run and are
+#: kept apart in the record: never merged, never averaged, never one reported as the other.
+#:
+#: * `full_system_surface` — reservoir AND wellbores, against the surface component flux
+#:   `q_t·mix` the native facility cross term uses. This is the balance of everything the
+#:   model holds against everything that left it through a wellhead.
+#: * `reservoir_connections` — the reservoir alone, against the reservoir-well cross term
+#:   evaluated from the native geometry (well indices, perforation gravity), state
+#:   (pressures, saturations) and PVT (densities, mobilities). This is the one plan 7.6's
+#:   «проверять независимо по геометрии/state/PVT» describes most directly.
+#:
+#: The two differ by what the wellbores are storing at each instant, which is a real
+#: quantity and not an error; a single number covering both would hide it.
+BALANCE_SYSTEMS: tuple[tuple[str, str, str], ...] = (
+    ("full_system_surface", "inventory_m3_sc", "net_surface_source_m3_sc"),
+    ("reservoir_connections", "reservoir_inventory_m3_sc", "net_connection_source_m3_sc"),
+)
 
-    The inventory is the native component mass of the reservoir AND of every wellbore,
-    divided by the phase's reference density; the source is the surface component flux the
-    native facility cross term uses, integrated over the same accepted substeps. Neither is
-    a difference of the other, which is the whole point (plan 7.6).
-    """
-    inventory = _matrix(payload, "inventory_m3_sc", where="extraction")
-    source = _matrix(payload, "net_surface_source_m3_sc", where="extraction")
+#: Which of them `ForwardResult.solver_metadata` summarises and `balance_within_spec_tolerance`
+#: is about. The whole-model statement is the headline; the other is beside it in the table.
+HEADLINE_BALANCE = BALANCE_SYSTEMS[0][0]
+
+
+def _components_of(payload: Mapping[str, Any]) -> tuple[str, ...]:
     components = payload.get("components")
     if not isinstance(components, list) or [str(c) for c in components] != list(COMPONENTS):
         raise ExtractionError(
             f"the extraction must balance {list(COMPONENTS)} in that order, got {components!r}"
         )
-    return component_balance(inventory, source, components=COMPONENTS)
+    return COMPONENTS
+
+
+def extraction_balances(payload: Mapping[str, Any]) -> dict[str, BalanceMetrics]:
+    """Both component balances of an extraction, keyed by `BALANCE_SYSTEMS`.
+
+    Each inventory is a native component mass divided by the phase's reference density, and
+    each source was computed from quantities that never pass through an inventory — which is
+    what makes a nonzero residual mean something (plan 7.6).
+    """
+    components = _components_of(payload)
+    return {
+        name: component_balance(
+            _matrix(payload, inventory_key, where="extraction"),
+            _matrix(payload, source_key, where="extraction"),
+            components=components,
+        )
+        for name, inventory_key, source_key in BALANCE_SYSTEMS
+    }
+
+
+def extraction_balance(payload: Mapping[str, Any]) -> BalanceMetrics:
+    """The headline balance: the whole model against the surface flux that crossed it."""
+    return extraction_balances(payload)[HEADLINE_BALANCE]
 
 
 # --------------------------------------------------------------------------------------
@@ -784,13 +861,13 @@ def write_forward_outputs(
     monthly = integrate_monthly(steps, month_edges)
     _reject_flow_without_uptime(monthly, schedule)
     connection_months = integrate_connections(connections, month_edges)
-    metrics = extraction_balance(payload)
+    balances = extraction_balances(payload)
 
     written: dict[str, str] = {}
     for filename, table in (
         (MONTHLY_FILENAME, monthly),
         (CONNECTIONS_FILENAME, connection_months),
-        (BALANCES_FILENAME, balance_table(metrics)),
+        (BALANCES_FILENAME, balance_table(balances)),
         (STEPS_FILENAME, accepted_step_table(payload, schedule)),
     ):
         written[filename] = _write_parquet(result_dir / filename, table)
@@ -803,7 +880,7 @@ def write_forward_outputs(
         "states_sha256": sha256_file(states_path),
         "files": {name: paths.relative(result_dir / name) for name in written},
         "digests": written,
-        "balance": metrics,
+        "balances": balances,
         "monthly": monthly,
         "connections": connection_months,
     }
@@ -834,6 +911,44 @@ def _reject_flow_without_uptime(monthly: pa.Table, schedule: Schedule) -> None:
         schedule.reject_flow_without_uptime(well_id, tuple(volumes))
 
 
+def _uncovered_horizon(payload: Mapping[str, Any], schedule: Schedule) -> str | None:
+    """Refuse an extraction that does not span the case's whole reported horizon.
+
+    `_chunk` proves the accepted substeps tile THEIR OWN chunk; it cannot know what that
+    chunk was supposed to be. Nothing else here can either: `integrate_monthly` emits a row
+    for every month whether or not a substep reached it, and
+    `Schedule.reject_flow_without_uptime` refuses flow without uptime, never uptime without
+    flow. So a payload covering only the first month of a two-month case would publish as
+    `COMPLETE` with the second month reading as a physical zero — a truncated forward wearing
+    the shape of a well that produced nothing, which is precisely what SPEC 18.4 forbids
+    («Resource failure и numerical failure не дают физический нулевой likelihood без
+    анализа»).
+
+    The refusal is `INCOMPLETE_BUDGET` rather than a protocol failure because the payload is
+    well formed and self-consistent; what is wrong with it is that it stops early, which is
+    what that status is for. A caller that meant to run in chunks resumes rather than
+    publishes.
+    """
+    chunk = _chunk(payload)
+    expected_start, expected_end = schedule.edges_s[0], schedule.edges_s[-1]
+    problems = []
+    if abs(chunk["horizon_start_s"] - expected_start) > BOUNDARY_TOLERANCE_S:
+        problems.append(
+            f"it starts at {chunk['horizon_start_s']} s, the case's schedule at {expected_start} s"
+        )
+    if abs(chunk["horizon_end_s"] - expected_end) > BOUNDARY_TOLERANCE_S:
+        problems.append(
+            f"it ends at {chunk['horizon_end_s']} s, the case's schedule at {expected_end} s"
+        )
+    if not problems:
+        return None
+    return (
+        "the native extraction does not cover the case's reported horizon: "
+        + "; ".join(problems)
+        + ". A month nobody simulated would be published as a month in which nothing flowed"
+    )
+
+
 def publish_forward_result(
     job: JobDescriptor,
     case: CaseBundle,
@@ -855,7 +970,9 @@ def publish_forward_result(
       instead, is `CONTROL_INFEASIBLE` with the well, the step, what was demanded and what
       it actually ran on;
     * an extraction whose own status is not a completed simulation is passed through with
-      the reason the adapter gave it.
+      the reason the adapter gave it;
+    * an extraction that does not cover the case's whole reported horizon is
+      `INCOMPLETE_BUDGET` — see `_uncovered_horizon`.
 
     Only a result that survives all of that gets its outputs written, and the record is
     written last, after every file has been flushed and hashed.
@@ -904,6 +1021,11 @@ def publish_forward_result(
         return _classified(
             job, case, "CONTROL_INFEASIBLE", infeasible, cost, solver_metadata, parent_attempt_ids
         )
+    uncovered = _uncovered_horizon(payload, schedule)
+    if uncovered is not None:
+        return _classified(
+            job, case, "INCOMPLETE_BUDGET", uncovered, cost, solver_metadata, parent_attempt_ids
+        )
 
     result_dir = paths.resolve(job.result_dir)
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -918,18 +1040,25 @@ def publish_forward_result(
     # The accepted-step diagnostics have no field of their own in `ForwardResult`, so the
     # record names them here; naming them is what makes them checkable on read.
     metadata[f"{STEPS_FILENAME}.path"] = outputs["files"][STEPS_FILENAME]
-    balance: BalanceMetrics = outputs["balance"]
-    metadata["balance_cumulative_relative"] = json.dumps(
-        dict(zip(balance.components, balance.cumulative_relative, strict=True))
-    )
-    metadata["balance_median_step_relative"] = json.dumps(
-        dict(zip(balance.components, balance.median_step_relative, strict=True))
-    )
-    metadata["balance_absolute_residual_m3_sc"] = json.dumps(
-        dict(zip(balance.components, balance.absolute_residual, strict=True))
-    )
-    metadata["balance_within_spec_tolerance"] = str(balance.within_spec_tolerance).lower()
-    metadata["balance_meets_strict_target"] = str(balance.meets_strict_target).lower()
+    balances: dict[str, BalanceMetrics] = outputs["balances"]
+    # Both statements are summarised, each under its own name, and the unprefixed keys stay
+    # the whole-model one so that a reader who does not know there are two is not handed the
+    # reservoir-only number by accident. `balances.parquet` carries all of it in full.
+    for name, metrics in sorted(balances.items()):
+        prefix = "balance" if name == HEADLINE_BALANCE else f"balance.{name}"
+        metadata[f"{prefix}_cumulative_relative"] = json.dumps(
+            dict(zip(metrics.components, metrics.cumulative_relative, strict=True))
+        )
+        metadata[f"{prefix}_median_step_relative"] = json.dumps(
+            dict(zip(metrics.components, metrics.median_step_relative, strict=True))
+        )
+        metadata[f"{prefix}_absolute_residual_m3_sc"] = json.dumps(
+            dict(zip(metrics.components, metrics.absolute_residual, strict=True))
+        )
+        metadata[f"{prefix}_within_spec_tolerance"] = str(metrics.within_spec_tolerance).lower()
+        metadata[f"{prefix}_meets_strict_target"] = str(metrics.meets_strict_target).lower()
+    metadata["balance_headline"] = HEADLINE_BALANCE
+    metadata["balance_systems"] = json.dumps([name for name, _, _ in BALANCE_SYSTEMS])
 
     times = outputs["times_s"]
     return ForwardResult(

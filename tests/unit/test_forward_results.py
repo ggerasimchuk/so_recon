@@ -330,6 +330,10 @@ _WATER_PROD_M3_DAY = 5.0
 _WATER_INJ_M3_DAY = 20.0
 _RHO_SC = (1000.0, 800.0)
 
+#: What the wellbores take up per substep, m³_sc. It is what makes the reservoir-only
+#: balance a DIFFERENT statement from the whole-model one rather than a copy of it.
+_WELL_STORAGE_STEP = (1.0, -0.5)
+
 
 def _extraction() -> dict[str, Any]:
     dt = _SUBSTEP_DAYS * DAY
@@ -374,6 +378,19 @@ def _extraction() -> dict[str, Any]:
     for step in source:
         inventory.append([a + b for a, b in zip(inventory[-1], step, strict=True)])
 
+    # The wellbores are filling, so the reservoir's own inventory and the connection flux
+    # are NOT the full-system pair: they differ by exactly what the wells are storing. The
+    # two published balances must therefore carry different numbers and both close.
+    storage = [[_WELL_STORAGE_STEP[c] * step for c in range(2)] for step in range(len(inventory))]
+    reservoir_inventory = [
+        [total - held for total, held in zip(row, held_row, strict=True)]
+        for row, held_row in zip(inventory, storage, strict=True)
+    ]
+    connection_source = [
+        [value - held for value, held in zip(row, _WELL_STORAGE_STEP, strict=True)]
+        for row in source
+    ]
+
     connections = []
     for step in range(_N_SUBSTEPS):
         for well_id, sign in (("PRO1", 1.0), ("INJ1", -1.0)):
@@ -412,9 +429,9 @@ def _extraction() -> dict[str, Any]:
         "wells": wells,
         "connections": connections,
         "inventory_m3_sc": inventory,
-        "reservoir_inventory_m3_sc": inventory,
+        "reservoir_inventory_m3_sc": reservoir_inventory,
         "net_surface_source_m3_sc": source,
-        "net_connection_source_m3_sc": source,
+        "net_connection_source_m3_sc": connection_source,
         "states": {
             "times_s": times,
             "pressure_pa": [[2.5e7 - 1e5 * index] * N_CELLS for index in range(len(times))],
@@ -631,17 +648,90 @@ def test_a_published_result_is_complete_and_loads_back(tmp_project: Path) -> Non
     assert [row["water_inj_m3_sc"] for row in injector] == pytest.approx([300.0, 300.0])
     assert [row["fw"] for row in injector] == [None, None]
 
-    # The balance closes, and the record says by how much rather than merely that it did.
+    # BOTH balances are published, each saying which system it closed over and against which
+    # source term — plan 12.9 has the stage validator read the published results rather than
+    # re-run the suite, so a balance that lives only in a test cannot be cited.
     balances = pq.read_table(paths.resolve(result.balances_path)).to_pylist()
-    assert [row["component"] for row in balances] == ["water", "oil"]
+    assert [(row["balance"], row["component"]) for row in balances] == [
+        ("full_system_surface", "water"),
+        ("full_system_surface", "oil"),
+        ("reservoir_connections", "water"),
+        ("reservoir_connections", "oil"),
+    ]
+    assert {row["source_term"] for row in balances} == {
+        "surface component flux (q_t * mix)",
+        "reservoir-well connection flux (geometry/state/PVT)",
+    }
+    assert {row["system"] for row in balances} == {"reservoir + wellbores", "reservoir"}
     assert all(row["absolute_residual_m3_sc"] == pytest.approx(0.0) for row in balances)
+    # The unprefixed metadata keys stay the whole-model statement, and the other one is
+    # beside them under its own name rather than replacing it.
+    assert result.solver_metadata["balance_headline"] == "full_system_surface"
+    assert json.loads(result.solver_metadata["balance_systems"]) == [
+        "full_system_surface",
+        "reservoir_connections",
+    ]
     assert result.solver_metadata["balance_within_spec_tolerance"] == "true"
+    assert result.solver_metadata["balance.reservoir_connections_within_spec_tolerance"] == "true"
     assert json.loads(result.solver_metadata["balance_absolute_residual_m3_sc"]) == {
         "water": 0.0,
         "oil": 0.0,
     }
+    assert json.loads(
+        result.solver_metadata["balance.reservoir_connections_absolute_residual_m3_sc"]
+    ) == {"water": 0.0, "oil": 0.0}
     # SPEC 17.1: HDF5 states are not a restart, and this result does not claim one.
     assert result.restart is None
+
+
+def test_the_two_published_balances_are_two_different_statements(tmp_project: Path) -> None:
+    """They differ by what the wellbores are storing, and both are on the record.
+
+    The whole model against the surface flux, and the reservoir alone against the native
+    connection flux. A single number covering both would hide the well storage, which is a
+    real quantity; averaging them would report neither.
+    """
+    payload = _extraction()
+    paths, record = _publish(tmp_project, payload)
+    result = load_forward_result(record, paths)
+    rows = pq.read_table(paths.resolve(str(result.balances_path))).to_pylist()
+    by_balance = {(row["balance"], row["component"]): row for row in rows}
+    full = by_balance[("full_system_surface", "water")]
+    reservoir = by_balance[("reservoir_connections", "water")]
+
+    # Both close exactly on this fixture...
+    assert full["absolute_residual_m3_sc"] == pytest.approx(0.0)
+    assert reservoir["absolute_residual_m3_sc"] == pytest.approx(0.0)
+    # ...and they are nevertheless different numbers, by the storage the wells took up.
+    held = _WELL_STORAGE_STEP[0] * _N_SUBSTEPS
+    assert full["net_source_m3_sc"] - reservoir["net_source_m3_sc"] == pytest.approx(held)
+    assert full["final_inventory_m3_sc"] - reservoir["final_inventory_m3_sc"] == pytest.approx(held)
+    assert full["initial_inventory_m3_sc"] == pytest.approx(reservoir["initial_inventory_m3_sc"])
+    assert held != 0.0
+
+
+def test_a_broken_connection_balance_is_published_rather_than_hidden(
+    tmp_project: Path,
+) -> None:
+    """The reservoir balance is a real check, and the record carries the failure.
+
+    Losing one substep's connection flux leaves the whole-model balance untouched — it uses
+    a different source term — so a result that published only the headline number would look
+    perfect. Plan 12.9 has the stage validator read the published tables, so both have to be
+    there for it to see this at all.
+    """
+    payload = _extraction()
+    payload["net_connection_source_m3_sc"][2] = [0.0, 0.0]
+    paths, record = _publish(tmp_project, payload)
+    result = load_forward_result(record, paths)
+    rows = pq.read_table(paths.resolve(str(result.balances_path))).to_pylist()
+    full = [row for row in rows if row["balance"] == "full_system_surface"]
+    reservoir = [row for row in rows if row["balance"] == "reservoir_connections"]
+
+    assert all(row["absolute_residual_m3_sc"] == pytest.approx(0.0) for row in full)
+    assert any(row["absolute_residual_m3_sc"] > 1.0 for row in reservoir)
+    assert result.solver_metadata["balance_within_spec_tolerance"] == "true"
+    assert result.solver_metadata["balance.reservoir_connections_within_spec_tolerance"] == "false"
 
 
 def test_the_states_file_carries_its_own_axes_and_no_model_geometry(tmp_project: Path) -> None:
@@ -757,6 +847,67 @@ def test_a_case_whose_schedule_cannot_compile_is_invalid_input(tmp_project: Path
         None,
         None,
     )
+
+
+@pytest.mark.parametrize("truncate_at_the_end", [True, False])
+def test_an_extraction_that_stops_short_of_the_horizon_is_refused(
+    tmp_project: Path, truncate_at_the_end: bool
+) -> None:
+    """A month nobody simulated must not be published as a month in which nothing flowed.
+
+    `_chunk` proves the substeps tile THEIR OWN chunk and cannot know what that chunk should
+    have been; `integrate_monthly` emits a row for every month regardless; and
+    `Schedule.reject_flow_without_uptime` refuses flow without uptime, never uptime without
+    flow. So the coverage check is the only thing between a truncated forward and a
+    `COMPLETE` result whose second month reads as a physical zero (SPEC 18.4).
+    """
+    paths, case, job = _project(tmp_project)
+    payload = _extraction()
+    chunk = payload["chunk"]
+    if truncate_at_the_end:
+        # Only the first month of a two-month case.
+        keep = 2
+        for key in ("start_s", "end_s", "dt_s", "interval_index"):
+            chunk[key] = chunk[key][:keep]
+        chunk["horizon_end_s"] = chunk["end_s"][-1]
+        for well in payload["wells"].values():
+            well["surface_water_m3_s"] = well["surface_water_m3_s"][:keep]
+            well["surface_oil_m3_s"] = well["surface_oil_m3_s"][:keep]
+        expected = "it ends at"
+    else:
+        # A chunk that begins a month late: the second half of the same case.
+        drop = 2
+        for key in ("start_s", "end_s", "dt_s", "interval_index"):
+            chunk[key] = chunk[key][drop:]
+        chunk["horizon_start_s"] = chunk["start_s"][0]
+        for well in payload["wells"].values():
+            well["surface_water_m3_s"] = well["surface_water_m3_s"][drop:]
+            well["surface_oil_m3_s"] = well["surface_oil_m3_s"][drop:]
+        expected = "it starts at"
+
+    result = publish_forward_result(job, case, payload, paths, cost=_cost(), solver_metadata={})
+    assert result.status == "INCOMPLETE_BUDGET"
+    assert result.reason is not None
+    assert "does not cover the case's reported horizon" in result.reason
+    assert expected in result.reason
+    assert (result.monthly_path, result.connections_path, result.balances_path) == (
+        None,
+        None,
+        None,
+    )
+    # And nothing was written for it: a truncated forward leaves no outputs behind.
+    assert not paths.resolve(job.result_dir).exists()
+
+
+def test_a_full_horizon_publishes_so_the_coverage_check_is_not_vacuous(
+    tmp_project: Path,
+) -> None:
+    paths, case, job = _project(tmp_project)
+    payload = _extraction()
+    assert payload["chunk"]["horizon_start_s"] == case.report_edges_s[0]
+    assert payload["chunk"]["horizon_end_s"] == case.report_edges_s[-1]
+    result = publish_forward_result(job, case, payload, paths, cost=_cost(), solver_metadata={})
+    assert result.status == "COMPLETE", result.reason
 
 
 def test_an_unhonoured_control_becomes_a_control_infeasible_result(tmp_project: Path) -> None:

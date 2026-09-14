@@ -70,6 +70,7 @@ from so_recon.simulator.results import (
     RESULT_FILENAME,
     connection_step_table,
     extraction_balance,
+    extraction_balances,
     integrate_monthly,
     load_forward_result,
     publish_forward_result,
@@ -383,30 +384,57 @@ def test_accepted_substeps_integrate_into_a_complete_verifiable_forward(
     assert native_change[0] > 100.0
     assert native_change[1] < -100.0
 
-    # --- 7.6 the component balance, against SPEC 23.1 --------------------------------------
-    metrics = extraction_balance(extraction)
-    assert metrics.components == ("water", "oil")
-    assert max(metrics.cumulative_relative) <= CUMULATIVE_RELATIVE_TOLERANCE
-    assert max(metrics.median_step_relative) <= MEDIAN_STEP_RELATIVE_TOLERANCE
-    assert metrics.within_spec_tolerance
+    # --- 7.6 both component balances, against SPEC 23.1 ------------------------------------
+    # The whole model against the surface flux, and the reservoir alone against the native
+    # connection flux built from geometry, state and PVT. Two statements about the same run,
+    # both published so that the stage validator of plan 12.9 can read them off the result
+    # rather than re-run this suite.
+    metrics = extraction_balances(extraction)
+    assert sorted(metrics) == ["full_system_surface", "reservoir_connections"]
+    for name, one in sorted(metrics.items()):
+        assert one.components == ("water", "oil"), name
+        assert max(one.cumulative_relative) <= CUMULATIVE_RELATIVE_TOLERANCE, name
+        assert max(one.median_step_relative) <= MEDIAN_STEP_RELATIVE_TOLERANCE, name
+        assert one.within_spec_tolerance, name
+    assert extraction_balance(extraction) == metrics["full_system_surface"]
     assert reloaded.solver_metadata["balance_within_spec_tolerance"] == "true"
+    assert reloaded.solver_metadata["balance.reservoir_connections_within_spec_tolerance"] == "true"
+    assert reloaded.solver_metadata["balance_headline"] == "full_system_surface"
+
     balances = pq.read_table(paths.resolve(str(reloaded.balances_path))).to_pylist()
-    assert [row["component"] for row in balances] == ["water", "oil"]
+    assert [(row["balance"], row["component"]) for row in balances] == [
+        ("full_system_surface", "water"),
+        ("full_system_surface", "oil"),
+        ("reservoir_connections", "water"),
+        ("reservoir_connections", "oil"),
+    ]
+    assert {row["source_term"] for row in balances} == {
+        "surface component flux (q_t * mix)",
+        "reservoir-well connection flux (geometry/state/PVT)",
+    }
     # The absolute residual and the throughput ratio are on the record beside the relative
     # one, so a large standing inventory cannot hide a small offtake error.
     assert all(row["absolute_residual_m3_sc"] >= 0.0 for row in balances)
     assert all("throughput_relative" in row for row in balances)
 
-    # The reservoir-only balance closes against the CONNECTION flux, which is the other
-    # half: the two differ by what the wellbores are storing at each instant.
-    reservoir = np.asarray(extraction["reservoir_inventory_m3_sc"], dtype=np.float64)
+    # And the two really are different statements on this run, not one number written twice:
+    # the surface flux is NOT the sum of the connection fluxes at every instant, because the
+    # wellbores are filling and emptying.
+    surface_source = np.asarray(extraction["net_surface_source_m3_sc"], dtype=np.float64)
     connection_source = np.asarray(extraction["net_connection_source_m3_sc"], dtype=np.float64)
+    assert np.abs(surface_source - connection_source).max() > 1e-3
+    published = {row["balance"]: row for row in balances if row["component"] == "water"}
+    assert published["full_system_surface"]["net_source_m3_sc"] != pytest.approx(
+        published["reservoir_connections"]["net_source_m3_sc"], rel=1e-9
+    )
+    # The reservoir-only statement, recomputed here from the raw extraction, agrees with the
+    # published one.
+    reservoir = np.asarray(extraction["reservoir_inventory_m3_sc"], dtype=np.float64)
     connection_residual = np.abs(np.diff(reservoir, axis=0) - connection_source)
     assert connection_residual.max() < 1e-2
-    # The surface flux is NOT the sum of the connection fluxes at every instant — that
-    # difference is the well storage, and pretending otherwise would hide it.
-    surface_source = np.asarray(extraction["net_surface_source_m3_sc"], dtype=np.float64)
-    assert np.abs(surface_source - connection_source).max() > 1e-3
+    assert published["reservoir_connections"]["max_step_absolute_m3_sc"] == pytest.approx(
+        connection_residual[:, 0].max(), rel=1e-9
+    )
 
     # --- 7.4 connection diagnostics: the mask, not a kh split ------------------------------
     connections = pq.read_table(paths.resolve(str(reloaded.connections_path))).to_pylist()
@@ -466,8 +494,8 @@ def test_accepted_substeps_integrate_into_a_complete_verifiable_forward(
         producer[0]["liquid_prod_m3_sc"], rel=1e-6
     )
     assert len(cuts["chunk"]["dt_s"]) != len(dt)
-    cut_balance = extraction_balance(cuts)
-    assert cut_balance.within_spec_tolerance
+    for name, one in sorted(extraction_balances(cuts).items()):
+        assert one.within_spec_tolerance, name
 
     # --- 7.8 a control nobody could hold is CONTROL_INFEASIBLE, with the evidence ----------
     assert "requested lrat=100000.0" in report["infeasible_reason"]
