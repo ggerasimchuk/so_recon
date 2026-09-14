@@ -12,11 +12,11 @@ What this asserts that the transport tests cannot:
 * The process is stable across jobs: both pings and both jobs are answered by one pid.
 * Julia re-hashes the bytes it was told to run on. A descriptor whose declared digests are
   wrong is refused with a digest mismatch, by the same code path that accepts a good one.
-* `run` cannot succeed. The adapter builds the model, but this build integrates no time
-  axis, so the answer is an explicit `outputs unavailable` refusal — and it still publishes
-  a record into the job's own directory, whose bytes the Python side verifies against the
-  digest it was sent. What the constructor actually built is checked in
-  `test_e01_physics.py`; this file is about the transport and the identity check.
+* `run` succeeds, and a success crosses the protocol as one. The worker publishes its whole
+  native extraction into the job's own directory, the Python side re-hashes those bytes and
+  hands them to the publisher the hand-off carried, and what comes back is a `COMPLETE`
+  `ForwardResult` with its own verified outputs. A worker given no publisher cannot produce
+  one: a transport must not be able to manufacture a physics result out of a status word.
 * stdout carried protocol frames only: every frame in this session parsed, and the native
   per-job log files were created beside them.
 """
@@ -36,8 +36,10 @@ from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
 from so_recon.simulator.case_io import CASE_MANIFEST_FILENAME, write_case
 from so_recon.simulator.contracts import SECONDS_PER_DAY, JobDescriptor, OutputRequest
+from so_recon.simulator.forward import forward_handoff
 from so_recon.simulator.julia_bridge import JuliaNotFoundError, find_julia
-from so_recon.simulator.worker import PROTOCOL_VERSION, PersistentJuliaWorker
+from so_recon.simulator.results import load_forward_result
+from so_recon.simulator.worker import PROTOCOL_VERSION, ForwardHandoff, PersistentJuliaWorker
 from tests.forward_case import build_case, write_case_arrays
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -155,14 +157,22 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
         good = descriptor(
             "job-e01-0001", case_sha256=sha256_file(case_path), model_hash=case.model_hash
         )
-        result = worker.submit(good, ledger)
+        result = worker.submit(good, ledger, handoff=forward_handoff(good, case, paths))
 
-        # A model was built, but a forward result needs states this build cannot produce,
-        # so the answer names what is missing. The physics class was read out of the
-        # verified case.
-        assert result.status == "INVALID_INPUT"
-        assert result.reason is not None and result.reason.startswith("outputs unavailable")
+        # A success crosses the transport as a success: the whole requested axis, published
+        # outputs and the physics class read out of the verified case.
+        assert result.status == "COMPLETE", result.reason
+        assert result.reason is None
+        assert result.times_s == good.output_request.state_times_s
         assert result.physics_class == "OW"
+        # The solver's own counters reached the cost record rather than three zeros.
+        assert result.cost.accepted_steps >= len(result.times_s)
+        assert result.cost.nonlinear_iterations > 0
+        assert "solver counters from the native simulation report" in result.cost.measurement_method
+        # And the published record survives being read back and re-proved from disk.
+        record_file = paths.resolve(f"{good.result_dir}/forward_result.json")
+        record_file.write_text(json.dumps(result.model_dump(mode="json")), encoding="utf-8")
+        assert load_forward_result(record_file, paths) == result
         assert result.job_id == good.job_id
         assert result.case_sha256 == good.case_sha256
         assert result.model_hash == good.model_hash
@@ -176,7 +186,7 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
         assert record_path.parent == paths.root / good.result_dir
         assert sha256_file(record_path) == result.solver_metadata["result_sha256"]
         record = json.loads(record_path.read_text(encoding="utf-8"))
-        assert record["status"] == "INVALID_INPUT"
+        assert record["status"] == "COMPLETE"
         assert record["checked_inputs"]["case"] == good.case_sha256
         assert record["checked_inputs"]["solver_config"] == good.solver_config_sha256
         # Every array the case references was re-hashed too, not only the manifest.
@@ -192,6 +202,15 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
         assert (session_dir / "logs" / f"{good.job_id}.stderr").is_file()
         assert f"so-recon worker: job {good.job_id}" in job_stdout.read_text(encoding="utf-8")
 
+        # A worker that produced an extraction but was given no publisher cannot claim a
+        # result: the transport refuses rather than inventing the outputs it cannot build.
+        unpublished = descriptor(
+            "job-e01-0003", case_sha256=sha256_file(case_path), model_hash=case.model_hash
+        )
+        without = worker.submit(unpublished, ledger, handoff=ForwardHandoff())
+        assert without.status == "PROTOCOL_FAILURE"
+        assert without.reason is not None and "no publisher" in without.reason
+
         # A descriptor that lies about the bytes is refused by the same path.
         tampered = descriptor("job-e01-0002", case_sha256="c" * 64, model_hash="d" * 64)
         refused = worker.submit(tampered, ledger)
@@ -202,5 +221,9 @@ def test_one_julia_process_serves_pings_and_isolated_jobs(tmp_project: Path) -> 
         assert worker.pid == handshake.pid  # still the same process after four requests
 
     assert worker.returncode == 0, "the worker did not exit cleanly on shutdown"
-    assert [entry.status for entry in ledger.record.entries] == ["INVALID_INPUT"] * 2
-    assert all(entry.state == "FAILED" for entry in ledger.record.entries)
+    assert [entry.status for entry in ledger.record.entries] == [
+        "COMPLETE",
+        "PROTOCOL_FAILURE",
+        "INVALID_INPUT",
+    ]
+    assert [entry.state for entry in ledger.record.entries] == ["COMPLETE", "FAILED", "FAILED"]

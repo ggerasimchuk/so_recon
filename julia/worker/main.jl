@@ -11,7 +11,9 @@
 # Protocol. One JSON object per line on stdin:
 #
 #     {"op":"ping",     "job_id":…, "root":…, "inputs":{name: relative path}}
-#     {"op":"run",      "job_id":…, "root":…, "job_path":…, "stdout_path":…, "stderr_path":…}
+#     {"op":"run",      "job_id":…, "root":…, "job_path":…, "stdout_path":…, "stderr_path":…,
+#                       "native_dir":…, "environment_lock_hash":…, "static_hash":…,
+#                       "schedule_prefix_hashes":[…], "stop_path":…}
 #     {"op":"shutdown"}
 #
 # and one JSON object per line on stdout: a READY frame at start (pid, versions, protocol
@@ -28,11 +30,15 @@
 # stamps what only it knows (the environment lock hash) onto the result.
 #
 # Once those checks pass, `run` hands the job to the JutulDarcy adapter, which builds the
-# model, its parameters and its initial state inside one call and lets them go when that
-# call returns. The adapter cannot answer COMPLETE either: integrating the requested time
-# axis and publishing its outputs is a later stage, so a job is answered with the model it
-# was able to build and an explicit refusal — a transport must not be able to manufacture a
-# successful physics result out of a constructor.
+# model, drives it one calendar month at a time and extracts every chunk, all inside one
+# call whose locals die with it. The extraction travels in the published record; the
+# reply carries only the status, the path and the digest, so a success is a success
+# somebody can read back and re-hash rather than a claim on the wire.
+#
+# A COMPLETE here is a statement about the SIMULATION: the solver reached the end of its
+# schedule and every chunk was extracted. Whether that becomes a COMPLETE forward RESULT is
+# decided on the Python side, which holds the request the job was made from and is the only
+# side that can say whether the axis delivered is the axis that was asked for.
 
 using Jutul, JutulDarcy, JSON, HDF5, SHA
 using LinearAlgebra: BLAS
@@ -42,10 +48,17 @@ using LinearAlgebra: BLAS
 include(joinpath(@__DIR__, "..", "adapter", "SOReconAdapter.jl"))
 using .SOReconAdapter
 
-const PROTOCOL_VERSION = "worker-1"
+const PROTOCOL_VERSION = "worker-2"
 const JOB_SCHEMA_VERSION = "job-1"
-const RESULT_SCHEMA_VERSION = "worker-result-1"
+# worker-result-2: the record gained the two fields the Python side now reads out of it,
+# `extraction` (the whole native extraction a success is published from) and `restart` (the
+# checkpoint the job left behind). Both are load-bearing, so the shape has a new name.
+const RESULT_SCHEMA_VERSION = "worker-result-2"
 const RESULT_FILENAME = "result.json"
+
+#: Where a published result keeps its immutable native checkpoint. It is created inside the
+#: staging directory and renamed into place with the record, so it is never half a snapshot.
+const CHECKPOINT_DIRNAME = "checkpoint"
 
 """Write one protocol frame. Never called while stdout is redirected to a job log."""
 function emit(payload::AbstractDict)
@@ -121,7 +134,12 @@ rather than a result that looks finished. A destination that already exists is r
 `result_dir` is unique per job (plan 3.2), and silently writing into someone else's
 directory would attribute one job's output to another.
 """
-function publish_result(root::AbstractString, result_dir::AbstractString, payload::AbstractDict)
+function publish_result(
+    root::AbstractString,
+    result_dir::AbstractString,
+    payload::AbstractDict;
+    populate = nothing,
+)
     destination = joinpath(root, result_dir)
     if ispath(destination)
         error("result directory $(result_dir) already exists; every job writes its own")
@@ -129,15 +147,47 @@ function publish_result(root::AbstractString, result_dir::AbstractString, payloa
     mkpath(dirname(destination))
     staging = string(destination, ".staging-", getpid(), "-", time_ns())
     mkpath(staging)
-    open(joinpath(staging, RESULT_FILENAME), "w") do io
-        JSON.print(io, payload)
-        print(io, "\n")
+    try
+        # Anything else the result owns — a native checkpoint, say — is built INSIDE the
+        # staging directory, so the whole result appears at once or not at all. A process
+        # killed here leaves staging nobody accepts, never a checkpoint half copied.
+        populate === nothing || populate(staging)
+        open(joinpath(staging, RESULT_FILENAME), "w") do io
+            JSON.print(io, payload)
+            print(io, "\n")
+        end
+        mv(staging, destination)
+    catch
+        rm(staging; force = true, recursive = true)
+        rethrow()
     end
-    mv(staging, destination)
     return (
         joinpath(result_dir, RESULT_FILENAME),
         sha256_of(joinpath(destination, RESULT_FILENAME)),
     )
+end
+
+"""
+Whether an operator's stop request applies at this chunk boundary.
+
+The request is a FILE the control plane wrote and this side only ever reads: an operator
+asking for a stop must not be able to change what a job simulates. A request with no
+`after_completed_time_s` is the unconditional one — finish the chunk in hand and start
+nothing else; one that names a time asks for a particular completed month ("finish March"),
+and is not due until the run has reached it. A file that cannot be parsed is treated as the
+unconditional request: a stop nobody can read is still a stop somebody asked for.
+"""
+function stop_is_due(path::AbstractString, completed_time_s::Float64)
+    isfile(path) || return false
+    request = try
+        JSON.parse(String(copy(read(path))))
+    catch
+        return true
+    end
+    request isa AbstractDict || return true
+    after = get(request, "after_completed_time_s", nothing)
+    after === nothing && return true
+    return completed_time_s >= Float64(after) - 1e-6
 end
 
 """
@@ -214,13 +264,29 @@ function execute_job(request::AbstractDict)
     # model here, inside this scope, and the model is released when this function returns.
     status = "INVALID_INPUT"
     built = nothing
+    extraction = nothing
+    checkpoint = nothing
+    native_dir = String(request["native_dir"])
+    lock_hash = String(request["environment_lock_hash"])
+    stop_path = get(request, "stop_path", nothing)
+    stop_requested = stop_path === nothing ? (_ -> false) :
+                     (completed_time_s -> stop_is_due(String(stop_path), completed_time_s))
     reason = if !isempty(problems)
         string("declared inputs do not match their bytes: ", join(problems, "; "))
     else
         try
-            outcome = SOReconAdapter.run_job(job, root)
+            outcome = SOReconAdapter.run_job(
+                job, root;
+                native_dir = native_dir,
+                environment_lock_hash = lock_hash,
+                static_hash = String(request["static_hash"]),
+                schedule_prefix_hashes = get(request, "schedule_prefix_hashes", Any[]),
+                stop_requested = stop_requested,
+            )
             status = outcome.status
             built = outcome.model
+            extraction = outcome.payload
+            checkpoint = outcome.checkpoint
             outcome.reason
         catch err
             # The adapter's own checks on the case say INVALID_INPUT — a geometry that does
@@ -239,6 +305,16 @@ function execute_job(request::AbstractDict)
         end
     end
 
+    restart_record = checkpoint === nothing ? nothing : Dict{String,Any}(
+        "manifest_path" =>
+            joinpath(String(job["result_dir"]), CHECKPOINT_DIRNAME, RESTART_MANIFEST_FILENAME),
+        "completed_report_step" => checkpoint.completed_report_step,
+        "completed_time_s" => checkpoint.completed_time_s,
+        "model_hash" => checkpoint.model_hash,
+        "schedule_prefix_hash" => checkpoint.schedule_prefix_hash,
+        "environment_lock_hash" => checkpoint.environment_lock_hash,
+        "native_format" => SOReconAdapter.NATIVE_RESTART_FORMAT,
+    )
     record = Dict(
         "schema_version" => RESULT_SCHEMA_VERSION,
         "job_id" => job_id,
@@ -247,6 +323,10 @@ function execute_job(request::AbstractDict)
         "reason" => reason,
         "physics_class" => physics_class,
         "model" => built,
+        # The whole native extraction. It travels in the RECORD rather than in the reply so
+        # that the bytes the Python side publishes from are bytes it re-hashed first.
+        "extraction" => extraction,
+        "restart" => restart_record,
         "case_sha256" => get(job, "case_sha256", nothing),
         "model_hash" => get(job, "model_hash", nothing),
         "solver_config_sha256" => get(job, "solver_config_sha256", nothing),
@@ -270,13 +350,37 @@ function execute_job(request::AbstractDict)
         "cost" =>
             Dict("accepted_steps" => 0, "cut_steps" => 0, "nonlinear_iterations" => 0),
     )
+    if extraction !== nothing && haskey(extraction, "solver")
+        reply["cost"] = Dict(
+            "accepted_steps" => extraction["solver"]["accepted_steps"],
+            "cut_steps" => extraction["solver"]["cut_steps"],
+            "nonlinear_iterations" => extraction["solver"]["nonlinear_iterations"],
+        )
+    end
     try
-        result_path, result_sha = publish_result(root, String(job["result_dir"]), record)
+        result_path, result_sha = publish_result(
+            root, String(job["result_dir"]), record;
+            populate = checkpoint === nothing ? nothing : staging -> SOReconAdapter.write_checkpoint(
+                native_dir,
+                joinpath(staging, CHECKPOINT_DIRNAME);
+                completed_report_step = checkpoint.completed_report_step,
+                completed_time_s = checkpoint.completed_time_s,
+                model_hash = checkpoint.model_hash,
+                static_hash = checkpoint.static_hash,
+                case_sha256 = checkpoint.case_sha256,
+                schedule_prefix_hash = checkpoint.schedule_prefix_hash,
+                environment_lock_hash = checkpoint.environment_lock_hash,
+            ),
+        )
         reply["result_path"] = result_path
         reply["result_sha256"] = result_sha
     catch err
-        reply["reason"] = string(reason, "; the failure record could not be published: ",
+        # A result nobody can read back is not a result. A refusal keeps its own status —
+        # it is still the truth about the physics — but a success that could not be
+        # published becomes a protocol failure rather than an unverifiable claim.
+        reply["reason"] = string(reason, "; the result record could not be published: ",
                                  sprint(showerror, err))
+        status == "COMPLETE" && (reply["status"] = "PROTOCOL_FAILURE")
     end
     return reply
 end

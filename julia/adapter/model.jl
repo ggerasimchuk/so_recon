@@ -36,12 +36,6 @@ const PHASE_COUNT = length(OW_PHASES)
 
 const STANDARD_GRAVITY_M_S2 = 9.80665
 
-#: What a job can be answered with while the output axis is not integrated. It is a refusal,
-#: not a degraded success: a forward that produced no states is not a forward.
-const OUTPUTS_UNAVAILABLE =
-    "outputs unavailable: the model, parameters and initial state were constructed, but " *
-    "this build integrates no time axis and therefore has no states to report"
-
 """
     InvalidCaseInput(message)
 
@@ -418,29 +412,150 @@ end
 # --------------------------------------------------------------------------------------
 
 """
-    run_job(job, root) -> NamedTuple{(:status, :reason, :model)}
+    run_job(job, root; kwarg...) -> NamedTuple
 
-The worker's entry point into physics: build this job's model from the case its descriptor
-names, and describe what was built.
+The worker's entry point into physics: run this job's case to a native extraction.
 
 The descriptor's identity checks have already been made by the worker; this side still
-re-hashes every array it reads, because the adapter does not take a caller's word for which
-bytes it is modelling. The model, its parameters and its initial state are locals of this
-call and are released when it returns.
+re-hashes every array it reads and the solver configuration it is driven by, because the
+adapter does not take a caller's word for which bytes it is modelling. The model, its
+parameters and its initial state are locals of `run_forward_native` and are released when it
+returns, which is what keeps job B's result independent of job A's.
 
-The answer is deliberately NOT `COMPLETE`. A forward result is complete when it carries the
-whole requested time axis and its verified outputs; this build integrates no time axis, so
-it reports the refusal and the model it was able to construct.
+A job that names a `resume_from` checkpoint has every piece of that checkpoint's metadata
+verified and its bytes re-hashed BEFORE a single native state is read, and the verified files
+are copied into this job's own native working directory: the parent's restart bytes are never
+written to. A checkpoint from another model, another environment or another schedule prefix,
+or one whose files moved, is `INVALID_INPUT` — never a numerical retry.
+
+The status describes the SIMULATION. `COMPLETE` means the solver reached the end of the
+schedule and every chunk was extracted; whether that becomes a `COMPLETE` forward RESULT is
+decided where the outputs are published, because a control the well could not hold is a
+question about the record rather than about the solver (plan 3.3).
 """
-function run_job(job::AbstractDict, root::AbstractString)
+function run_job(
+    job::AbstractDict,
+    root::AbstractString;
+    native_dir::AbstractString,
+    environment_lock_hash::AbstractString,
+    static_hash::AbstractString,
+    schedule_prefix_hashes = Any[],
+    stop_requested = _ -> false,
+)
     case_path = joinpath(root, String(job["case_path"]))
     case = JSON.parse(read(case_path, String))
-    physical = build_ow(case, load_arrays(case, root))
-    return (
-        status = "INVALID_INPUT",
-        reason = OUTPUTS_UNAVAILABLE,
-        model = describe_model(physical),
+    arrays = load_arrays(case, root)
+    solver = read_solver_config(joinpath(root, String(job["solver_config_path"])))
+
+    request = get(job, "output_request", Dict{String,Any}())
+    requested_times = haskey(request, "state_times_s") ?
+                      Float64.(collect(request["state_times_s"])) : nothing
+    chunk_months = Int(get(request, "chunk_months", 1))
+    keep_native_restart = Bool(get(request, "keep_native_restart", false))
+
+    resume = get(job, "resume_from", nothing)
+    resume_from_step = 0
+    if resume !== nothing
+        manifest_path = joinpath(root, String(resume["manifest_path"]))
+        manifest = verify_restart(
+            resume, manifest_path, static_hash, schedule_prefix_hashes, environment_lock_hash,
+        )
+        resume_from_step = stage_restart(manifest, manifest_path, native_dir)
+    end
+
+    payload = run_forward_native(
+        case, arrays, native_dir;
+        state_times_s = requested_times,
+        chunk_months = chunk_months,
+        resume_from_step = resume_from_step,
+        stop_requested = stop_requested,
+        max_timestep = solver.max_timestep_days * SECONDS_PER_DAY,
+        max_nonlinear_iterations = solver.max_nonlinear_iterations,
     )
+
+    completed_step = Int(get(payload, "completed_report_step", 0))
+    completed_time = Float64(get(payload, "completed_time_s", 0.0))
+    checkpoint = nothing
+    if keep_native_restart && completed_step >= 1
+        checkpoint = (
+            completed_report_step = completed_step,
+            completed_time_s = completed_time,
+            model_hash = get(case, "model_hash", nothing),
+            static_hash = static_hash,
+            case_sha256 = get(job, "case_sha256", nothing),
+            schedule_prefix_hash =
+                prefix_hash_for(schedule_prefix_hashes, completed_time, native_dir),
+            environment_lock_hash = environment_lock_hash,
+        )
+    end
+    return (
+        status = String(payload["status"]),
+        reason = payload["reason"],
+        model = pop!(payload, "model", nothing),
+        payload = payload,
+        native_dir = native_dir,
+        checkpoint = checkpoint,
+    )
+end
+
+"""
+    prefix_hash_for(hashes, completed_time_s, where) -> String
+
+The digest of the schedule PREFIX this checkpoint stops at.
+
+The Python side canonicalises the case, so it computes one digest per report edge and sends
+them all; this side picks the one for the time it actually reached. A checkpoint whose time
+has no digest is refused rather than published with a placeholder — a restart that could not
+prove its prefix is a restart nobody can safely continue.
+"""
+function prefix_hash_for(hashes, completed_time_s::Float64, where::AbstractString)
+    for entry in hashes
+        abs(Float64(entry["completed_time_s"]) - completed_time_s) <= TIME_MATCH_TOLERANCE_S &&
+            return String(entry["schedule_prefix_hash"])
+    end
+    invalid(
+        "run_job: the job carries no schedule prefix digest for the checkpoint at " *
+        "$(completed_time_s) s reached in $(where); a checkpoint without one cannot be " *
+        "continued from safely",
+    )
+end
+
+"""
+    read_solver_config(path) -> NamedTuple
+
+The two numbers a job may say about how the solver is driven, and nothing else.
+
+`max_timestep_days` and `max_nonlinear_iterations` bound EFFORT. A configuration carrying
+anything else is refused rather than partially honoured: SPEC 3.3 lets a numerical retry
+halve the step and raise the iteration limit «неизменными convergence tolerances и
+физическими входами», and a file this side would silently ignore half of is a file that
+could carry a relaxed tolerance nobody noticed.
+"""
+function read_solver_config(path::AbstractString)
+    isfile(path) ||
+        invalid("read_solver_config: the solver configuration $(path) does not exist")
+    payload = JSON.parse(String(copy(read(path))))
+    payload isa AbstractDict ||
+        invalid("read_solver_config: $(path) is not a JSON object")
+    allowed = Set(["max_timestep_days", "max_nonlinear_iterations"])
+    extra = sort(collect(setdiff(Set(keys(payload)), allowed)))
+    isempty(extra) || invalid(
+        "read_solver_config: $(path) carries $(extra), which this adapter does not apply. A " *
+        "solver configuration states the maximum timestep and the nonlinear-iteration limit " *
+        "and nothing else",
+    )
+    for name in sort(collect(allowed))
+        haskey(payload, name) ||
+            invalid("read_solver_config: $(path) does not state $(name)")
+    end
+    days = Float64(payload["max_timestep_days"])
+    iterations = Int(payload["max_nonlinear_iterations"])
+    days > 0.0 ||
+        invalid("read_solver_config: max_timestep_days must be positive, got $(days)")
+    iterations >= 1 || invalid(
+        "read_solver_config: max_nonlinear_iterations must be at least one, got $(iterations)",
+    )
+    return (max_timestep_days = days, max_nonlinear_iterations = iterations)
 end
 
 """What was actually constructed, in a form a JSON result record can carry."""

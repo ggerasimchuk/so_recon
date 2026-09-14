@@ -43,11 +43,13 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
 from so_recon.simulator.budget import BudgetLedger, BudgetStop, ResourceWatchdog
 from so_recon.simulator.contracts import ForwardStatus, JobDescriptor, OutputRequest
+from so_recon.simulator.results import ExtractionError
 from so_recon.simulator.worker import (
     MAX_PROTOCOL_LINE_CHARS,
     PROTOCOL_VERSION,
     STOP_FILE_NAME,
     WORKER_STATUSES,
+    ForwardHandoff,
     PersistentJuliaWorker,
     WorkerStartupError,
     classify_termination,
@@ -69,6 +71,9 @@ import sys
 import time
 
 scenario = json.loads(os.environ["FAKE_WORKER_SCENARIO"])
+# The protocol the transport itself speaks, injected rather than repeated: a fake that
+# spoke a stale version would fail the handshake for a reason nobody meant to test.
+PROTOCOL = os.environ["FAKE_WORKER_PROTOCOL"]
 
 
 def emit(obj):
@@ -87,7 +92,7 @@ if spawn:
 if scenario.get("ready", True):
     emit({
         "event": "ready",
-        "protocol": scenario.get("protocol", "worker-1"),
+        "protocol": scenario.get("protocol", PROTOCOL),
         "pid": os.getpid(),
         "julia_threads": int(os.environ.get("JULIA_NUM_THREADS", "-1")),
         "blas_threads": int(os.environ.get("OPENBLAS_NUM_THREADS", "-1")),
@@ -139,7 +144,7 @@ while True:
         reply["padding"] = "x" * int(scenario["padding_chars"])
     if op == "ping":
         reply.setdefault("status", "COMPLETE")
-        reply.setdefault("protocol", "worker-1")
+        reply.setdefault("protocol", PROTOCOL)
         reply.setdefault("pid", os.getpid())
         reply.setdefault("inputs", {n: "f" * 64 for n in request.get("inputs", {})})
     emit(reply)
@@ -220,6 +225,7 @@ def fake_executable(tmp_path: Path) -> Path:
 def scenario(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
     def configure(**fields: Any) -> None:
         monkeypatch.setenv("FAKE_WORKER_SCENARIO", json.dumps(fields))
+        monkeypatch.setenv("FAKE_WORKER_PROTOCOL", PROTOCOL_VERSION)
 
     configure()
     return configure
@@ -927,3 +933,115 @@ def test_a_job_id_that_is_not_a_safe_file_name_is_refused_before_it_is_reserved(
         worker.submit(job, ledger)
 
     assert ledger.record.entries == ()
+
+
+# ----------------------------------------- the hand-off: a COMPLETE nobody could fabricate
+
+
+def _extraction_job(paths: ProjectPaths, job_id: str) -> JobDescriptor:
+    """A job whose worker record carries a native extraction, as a real COMPLETE does."""
+    job = write_job_inputs(paths, job_id)
+    record = paths.root / job.result_dir / "result.json"
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(
+        json.dumps({"status": "COMPLETE", "extraction": {"schema_version": "extract-1"}}),
+        encoding="utf-8",
+    )
+    return job
+
+
+def _complete_reply(paths: ProjectPaths, job: JobDescriptor) -> dict[str, Any]:
+    record = paths.root / job.result_dir / "result.json"
+    return {
+        "status": "COMPLETE",
+        "physics_class": "OW",
+        "result_path": f"{job.result_dir}/result.json",
+        "result_sha256": sha256_file(record),
+    }
+
+
+def test_an_extraction_that_cannot_be_published_is_a_classified_failure(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """A malformed payload is a PROTOCOL_FAILURE with a reason, never a raised exception.
+
+    `write_forward_outputs` and everything under it refuse a payload they cannot integrate
+    by raising `ExtractionError`. That refusal has to become a classified result here: a
+    driver that saw the exception instead would lose the job's cost, its ledger entry and
+    the reason the payload was bad.
+    """
+    job = _extraction_job(project, "job-0001")
+    scenario(reply=_complete_reply(project, job))
+
+    def explode(record: Any, cost: Any, metadata: Any) -> Any:
+        raise ExtractionError("the chunk carries 3 substeps for 4 edges")
+
+    worker = worker_factory()
+    ledger = make_ledger(project)
+
+    result = worker.submit(job, ledger, handoff=ForwardHandoff(publish=explode))
+
+    assert result.status == "PROTOCOL_FAILURE"
+    assert result.reason is not None
+    assert "could not be published" in result.reason
+    assert "3 substeps for 4 edges" in result.reason
+    # Paid for and accounted for, like any other failed attempt.
+    assert ledger.record.entries[0].state == "FAILED"
+    assert ledger.record.entries[0].status == "PROTOCOL_FAILURE"
+
+
+def test_a_transport_with_no_publisher_cannot_turn_an_extraction_into_a_success(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """The whole point of the hand-off: COMPLETE is published, never asserted on the wire."""
+    job = _extraction_job(project, "job-0001")
+    scenario(reply=_complete_reply(project, job))
+    worker = worker_factory()
+
+    result = worker.submit(job, make_ledger(project), handoff=ForwardHandoff())
+
+    assert result.status == "PROTOCOL_FAILURE"
+    assert result.reason is not None and "no publisher" in result.reason
+
+
+def test_a_published_result_that_claims_a_different_job_is_refused(
+    project: ProjectPaths,
+    worker_factory: Callable[..., PersistentJuliaWorker],
+    scenario: Callable[..., None],
+) -> None:
+    """The publisher is physics, not authority: what it returns is checked against the job."""
+    job = _extraction_job(project, "job-0001")
+    scenario(reply=_complete_reply(project, job))
+    stranger = write_job_inputs(project, "job-0002")
+
+    def impostor(record: Any, cost: Any, metadata: Any) -> Any:
+        return _forward_result(stranger, cost)
+
+    worker = worker_factory()
+    result = worker.submit(job, make_ledger(project), handoff=ForwardHandoff(publish=impostor))
+
+    assert result.status == "PROTOCOL_FAILURE"
+    assert result.reason is not None and "job-0002" in result.reason
+
+
+def _forward_result(job: JobDescriptor, cost: Any) -> Any:
+    from so_recon.simulator.contracts import ForwardResult
+
+    return ForwardResult(
+        job_id=job.job_id,
+        case_sha256=job.case_sha256,
+        model_hash=job.model_hash,
+        physics_class="OW",
+        status="INVALID_INPUT",
+        reason="published elsewhere",
+        completed_time_s=0.0,
+        times_s=(),
+        states={},
+        solver_metadata={},
+        cost=cost,
+        parent_attempt_ids=(),
+    )

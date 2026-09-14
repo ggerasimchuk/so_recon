@@ -835,11 +835,22 @@ def _job(**overrides: Any) -> JobDescriptor:
 
 def test_job_descriptor_allows_at_most_one_registered_retry() -> None:
     assert _job().schema_version == "job-1"
-    assert _job(attempt=2).attempt == 2
+    assert _job(attempt=2, parent_job_id="job-0000").attempt == 2
     with pytest.raises(ValidationError, match="attempt"):
-        _job(attempt=3)
+        _job(attempt=3, parent_job_id="job-0000")
     with pytest.raises(ValidationError, match="attempt"):
         _job(attempt=0)
+
+
+def test_a_retry_is_registered_against_the_attempt_it_repeats() -> None:
+    """SPEC 3.3 allows one REGISTERED retry; an anonymous second attempt is not one."""
+    assert _job().parent_job_id is None
+    with pytest.raises(ValidationError, match="parent_job_id"):
+        _job(attempt=2)
+    with pytest.raises(ValidationError, match="no parent"):
+        _job(attempt=1, parent_job_id="job-0000")
+    with pytest.raises(ValidationError, match="its own parent"):
+        _job(attempt=2, parent_job_id="job-0001")
 
 
 def _cost() -> CostRecord:

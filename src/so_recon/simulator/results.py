@@ -58,6 +58,7 @@ from so_recon.simulator.contracts import (
     ForwardResult,
     ForwardStatus,
     JobDescriptor,
+    RestartRef,
 )
 from so_recon.simulator.schedule import FLOW_TOLERANCE_M3, Schedule, compile_schedule
 from so_recon.validation.balance import BalanceMetrics, component_balance
@@ -958,6 +959,7 @@ def publish_forward_result(
     cost: CostRecord,
     solver_metadata: Mapping[str, str],
     parent_attempt_ids: tuple[str, ...] = (),
+    restart: RestartRef | None = None,
 ) -> ForwardResult:
     """Turn one native extraction into a published, verifiable `ForwardResult`.
 
@@ -976,6 +978,11 @@ def publish_forward_result(
 
     Only a result that survives all of that gets its outputs written, and the record is
     written last, after every file has been flushed and hashed.
+
+    `restart` is the native checkpoint the job published, if it published one. It travels
+    onto the record whatever the status is: a run stopped after a completed month is
+    `INCOMPLETE_BUDGET` AND resumable, and dropping the checkpoint because the status is not
+    COMPLETE would throw away the only thing that makes the stop recoverable.
     """
     try:
         schedule = compile_schedule(case.report_edges_s, case.controls)
@@ -988,6 +995,7 @@ def publish_forward_result(
             cost,
             solver_metadata,
             parent_attempt_ids,
+            restart,
         )
 
     status = str(payload.get("status", ""))
@@ -1005,6 +1013,7 @@ def publish_forward_result(
             cost,
             solver_metadata,
             parent_attempt_ids,
+            restart,
         )
     if status != "COMPLETE":
         return _classified(
@@ -1015,16 +1024,31 @@ def publish_forward_result(
             cost,
             solver_metadata,
             parent_attempt_ids,
+            restart,
         )
     infeasible = control_infeasibility(payload)
     if infeasible is not None:
         return _classified(
-            job, case, "CONTROL_INFEASIBLE", infeasible, cost, solver_metadata, parent_attempt_ids
+            job,
+            case,
+            "CONTROL_INFEASIBLE",
+            infeasible,
+            cost,
+            solver_metadata,
+            parent_attempt_ids,
+            restart,
         )
     uncovered = _uncovered_horizon(payload, schedule)
     if uncovered is not None:
         return _classified(
-            job, case, "INCOMPLETE_BUDGET", uncovered, cost, solver_metadata, parent_attempt_ids
+            job,
+            case,
+            "INCOMPLETE_BUDGET",
+            uncovered,
+            cost,
+            solver_metadata,
+            parent_attempt_ids,
+            restart,
         )
 
     result_dir = paths.resolve(job.result_dir)
@@ -1074,7 +1098,7 @@ def publish_forward_result(
         monthly_path=outputs["files"][MONTHLY_FILENAME],
         connections_path=outputs["files"][CONNECTIONS_FILENAME],
         balances_path=outputs["files"][BALANCES_FILENAME],
-        restart=None,
+        restart=restart,
         solver_metadata=metadata,
         cost=cost,
         parent_attempt_ids=parent_attempt_ids,
@@ -1145,8 +1169,14 @@ def _classified(
     cost: CostRecord,
     solver_metadata: Mapping[str, str],
     parent_attempt_ids: tuple[str, ...],
+    restart: RestartRef | None = None,
 ) -> ForwardResult:
-    """An unsuccessful result: no output paths, and a reason that says what is missing."""
+    """An unsuccessful result: no output paths, and a reason that says what is missing.
+
+    It may still carry a checkpoint. A stop after a completed month publishes no outputs for
+    the months nobody simulated AND leaves a valid native restart; the two are not in
+    tension, and dropping the second would make the stop unrecoverable.
+    """
     return ForwardResult(
         job_id=job.job_id,
         case_sha256=job.case_sha256,
@@ -1157,6 +1187,7 @@ def _classified(
         completed_time_s=0.0,
         times_s=(),
         states={},
+        restart=restart,
         solver_metadata=dict(solver_metadata),
         cost=cost,
         parent_attempt_ids=parent_attempt_ids,

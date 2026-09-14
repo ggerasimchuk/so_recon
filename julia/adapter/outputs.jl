@@ -531,13 +531,34 @@ function extract_interval(
     )
 end
 
-"""Accepted mini-steps, cut ones and nonlinear iterations, from the solver's own reports."""
+"""
+Accepted mini-steps, cut ones and nonlinear iterations, from the solver's own reports.
+
+A report reaches this function in one of TWO shapes, and reading only the first was worth a
+whole count. A report still in memory carries `:steps`, one entry per nonlinear iteration.
+A report read back from an `output_path` does not: `get_output_report` at the default
+`report_level = 0` (`Jutul 0.4.31 src/simulator/io.jl:35`) deletes `:steps` and puts
+`stats_ministep(...)` in its place, whose `linearizations` field is the count those entries
+were. A chunked or restarted run reads every report back from disk, so taking `:steps`
+alone would publish `nonlinear_iterations = 0` for every one of them — a measurement
+silently replaced by a zero, which is exactly what a cost record must never carry.
+"""
 function solver_counters(sim_result)
     accepted, cut, iterations = 0, 0, 0
     for report in sim_result.reports[eachindex(sim_result.states)]
         for ministep in report[:ministeps]
             ministep[:success] ? (accepted += 1) : (cut += 1)
-            iterations += length(get(ministep, :steps, []))
+            iterations += if haskey(ministep, :steps)
+                length(ministep[:steps])
+            elseif haskey(ministep, :stats)
+                ministep[:stats].linearizations
+            else
+                invalid(
+                    "extract_interval: a mini-step report carries neither :steps nor :stats, " *
+                    "so its nonlinear iterations cannot be counted; a cost record does not " *
+                    "record an unmeasured zero",
+                )
+            end
         end
     end
     return (accepted, cut, iterations)

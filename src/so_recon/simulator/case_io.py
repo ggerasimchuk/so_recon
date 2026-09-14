@@ -90,6 +90,11 @@ MODEL_HASH_FIELDS = (
     "seeds",
 )
 
+#: What `compute_static_hash` leaves out of `MODEL_HASH_FIELDS`: the schedule. Both are
+#: covered by a checkpoint's own schedule-prefix digest instead, which is what lets a
+#: continuation change the future without being refused as a different model.
+STATIC_HASH_EXCLUDED = frozenset({"controls", "report_edges_s"})
+
 _NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
     "float64": np.dtype(np.float64),
     "int64": np.dtype(np.int64),
@@ -477,6 +482,23 @@ def model_hash_payload(case: CaseBundle) -> dict[str, Any]:
 def compute_model_hash(case: CaseBundle) -> str:
     """Canonical JSON of every input that determines F, including the array digests."""
     return sha256_json(model_hash_payload(case))
+
+
+def compute_static_hash(case: CaseBundle) -> str:
+    """Everything that determines F EXCEPT the schedule: the model a continuation shares.
+
+    A continuation may change what happens after its checkpoint — that is what a resume's
+    `future_policy` is for — so its model hash legitimately differs from the one the
+    checkpoint was written under, and comparing the two would refuse every policy change.
+    What it may NOT change is the grid, the rock, the fluids, the wells, the initial state or
+    the boundary: a restart that resumed a different reservoir would be continuing a run that
+    never happened. This digest is that half; the schedule half is proved separately by the
+    checkpoint's prefix digest, which covers the report edges and controls up to it.
+    """
+    dumped = case.model_dump(mode="json")
+    return sha256_json(
+        {name: dumped[name] for name in MODEL_HASH_FIELDS if name not in STATIC_HASH_EXCLUDED}
+    )
 
 
 def write_case(

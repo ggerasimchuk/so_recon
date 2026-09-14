@@ -563,6 +563,18 @@ class CaseBundle(StrictModel):
             raise ValueError(f"report_edges_s must be strictly increasing, got {v}")
         return v
 
+    @field_validator("controls")
+    @classmethod
+    def _canonical_control_order(cls, v: tuple[ControlSegment, ...]) -> tuple[ControlSegment, ...]:
+        """A schedule is a SET of segments, so the order they were listed in is not part of it.
+
+        Two cases that schedule the same thing must hash the same, whichever order they were
+        assembled in — otherwise a continuation that rebuilds its schedule as "the prefix,
+        then the future policy" would be a different model from the case it continues purely
+        because that case happened to list one well's whole history before the other's.
+        """
+        return tuple(sorted(v, key=lambda c: (c.start_s, c.well_id, c.end_s)))
+
     @field_validator("units")
     @classmethod
     def _units_are_known(cls, v: dict[str, str]) -> dict[str, str]:
@@ -722,6 +734,26 @@ class JobDescriptor(StrictModel):
     # SPEC 3.3: the original attempt plus at most one registered numerical retry.
     attempt: int = Field(ge=1, le=MAX_ATTEMPTS)
     resume_from: RestartRef | None = None
+    #: The attempt this one descends from. `job_id` is unique per attempt (plan 3.1), so
+    #: without it a retry is indistinguishable from an unrelated job that happens to share
+    #: a model hash — and SPEC 3.3's "одна зарегистрированная numerical retry" is precisely
+    #: a retry that is REGISTERED against the attempt it repeats.
+    parent_job_id: str | None = None
+
+    @model_validator(mode="after")
+    def _a_retry_names_the_attempt_it_repeats(self) -> JobDescriptor:
+        if self.attempt > 1 and self.parent_job_id is None:
+            raise ValueError(
+                f"attempt {self.attempt} must name the parent_job_id it retries; an "
+                "unregistered retry cannot be told from a second first attempt"
+            )
+        if self.attempt == 1 and self.parent_job_id is not None:
+            raise ValueError(
+                f"a first attempt has no parent, got parent_job_id {self.parent_job_id!r}"
+            )
+        if self.parent_job_id == self.job_id:
+            raise ValueError(f"job {self.job_id!r} cannot be its own parent attempt")
+        return self
 
 
 class CostRecord(StrictModel):

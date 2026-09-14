@@ -17,9 +17,11 @@ independent claims as it can:
   budget; what bounds it is the launcher's timeout.
 * `test_the_worker_reaches_the_adapter_and_rebuilds_every_job` drives one persistent worker
   through jobs A, B and A again, every one of them reserved and resolved on a real
-  `BudgetLedger`. It proves the wiring (a job now reaches the constructor and comes back
-  describing the model that was built), and it proves the isolation the wiring is for: B's
-  model must not change what the second A reports.
+  `BudgetLedger`. It proves the wiring (a job reaches the constructor, runs and comes back
+  with a published result describing the model that was built), and it proves the isolation
+  the wiring is for: B's model must not change what the second A reports. The isolation of
+  the RESULTS — that the second A reproduces the first's states and volumes, not merely its
+  pore volume — is `test_e01_restart.py`'s A -> B -> A.
 * `test_the_native_controls_follow_the_calendar_the_case_declares` runs the controls
   diagnostic (`julia/verification/fixtures.jl --test-controls`) the same way, and compares
   what Julia measured against what `so_recon.simulator.schedule` computes here: the real
@@ -29,10 +31,10 @@ independent claims as it can:
   rates, two isolation runs and two crossflow runs), all inside ONE launcher process bounded
   by the P0_VERIFY job timeout, against a session allowance of 64.
 
-None of these tests claims a COMPLETE forward. This build constructs a model, drives it
-with the schedule's forces and reads the wells back; publishing the requested time axis and
-its outputs is a later stage, and a worker that cannot produce states says so instead of
-reporting success.
+What this file deliberately does NOT test is the forward result itself: the accepted-substep
+integrals are `test_e01_outputs.py`'s subject and the native restart is
+`test_e01_restart.py`'s. Here a completed job is evidence that the constructor was reached
+with the case that was named, and nothing more is read out of it.
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ from so_recon.simulator.contracts import (
     JobDescriptor,
     OutputRequest,
 )
+from so_recon.simulator.forward import forward_handoff
 from so_recon.simulator.julia_bridge import (
     JuliaNotFoundError,
     SubprocessJuliaLauncher,
@@ -330,22 +333,26 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
         paths=paths,
         probe=probe,
     ) as worker:
+
+        def run(job_id: str, case: CaseBundle, case_path: Path) -> ForwardResult:
+            job = descriptor(job_id, case, case_path)
+            return worker.submit(job, ledger, handoff=forward_handoff(job, case, paths))
+
         results = [
-            worker.submit(descriptor("job-e01-a1", case_a, path_a), ledger),
-            worker.submit(descriptor("job-e01-b1", case_b, path_b), ledger),
-            worker.submit(descriptor("job-e01-a2", case_a, path_a), ledger),
+            run("job-e01-a1", case_a, path_a),
+            run("job-e01-b1", case_b, path_b),
+            run("job-e01-a2", case_a, path_a),
         ]
-        displaced = worker.submit(descriptor("job-e01-c1", case_c, path_c), ledger)
+        displaced = run("job-e01-c1", case_c, path_c)
         assert worker.pid == worker.handshake.pid  # one process behind all four jobs
 
     records = [published_record(result) for result in results]
 
     for result, record in zip(results, records, strict=True):
-        # The adapter was reached: the case was built into a model, and the answer names
-        # what is missing rather than claiming a forward nobody integrated.
-        assert result.status == "INVALID_INPUT"
-        assert result.reason is not None
-        assert result.reason.startswith("outputs unavailable")
+        # The adapter was reached, the case was built into a model and the forward ran to
+        # the end of its schedule. What was BUILT is what this test reads; what was
+        # integrated belongs to the output and restart suites.
+        assert result.status == "COMPLETE", result.reason
         assert result.physics_class == "OW"
         assert record["status"] == result.status
         built = record["model"]
@@ -374,15 +381,25 @@ def test_the_worker_reaches_the_adapter_and_rebuilds_every_job(tmp_project: Path
     assert "zero-based cell 5" in displaced.reason and "x axis" in displaced.reason
     assert published_record(displaced)["model"] is None
 
-    # Four attempts, all of them paid for and none of them a success.
+    # Four attempts, all of them paid for.
     assert [entry.job_id for entry in ledger.record.entries] == [
         "job-e01-a1",
         "job-e01-b1",
         "job-e01-a2",
         "job-e01-c1",
     ]
-    assert all(entry.state == "FAILED" for entry in ledger.record.entries)
-    assert {entry.status for entry in ledger.record.entries} == {"INVALID_INPUT"}
+    assert [entry.state for entry in ledger.record.entries] == [
+        "COMPLETE",
+        "COMPLETE",
+        "COMPLETE",
+        "FAILED",
+    ]
+    assert [entry.status for entry in ledger.record.entries] == [
+        "COMPLETE",
+        "COMPLETE",
+        "COMPLETE",
+        "INVALID_INPUT",
+    ]
 
 
 #: The fixture of `verification_case(:two_interval_controls)`: January and the leap

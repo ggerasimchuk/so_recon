@@ -15,6 +15,7 @@ module SOReconAdapter
 
 using Jutul
 using JutulDarcy
+using Dates
 using HDF5
 using JSON
 using SHA
@@ -26,11 +27,16 @@ include("controls.jl")
 # Outputs last: reading a finished result needs both the model it was built from and the
 # forces it was driven with, and refuses through the same `invalid`.
 include("outputs.jl")
+# Restart last: native continuation needs the model, the forces AND the extraction, and it
+# is the only file that owns a checkpoint on disk.
+include("restart.jl")
 
 export build_ow, load_arrays, run_job, InvalidCaseInput
 export build_forces, native_control, control_limits, perforation_mask
 export control_evidence, infeasible_controls
 export compile_intervals, extract_interval, run_forward
 export request_extra_outputs!, evaluated_state
+export run_forward_native, write_checkpoint, verify_restart, stage_restart
+export chunk_ranges, merge_extractions, RESTART_MANIFEST_FILENAME
 
 end # module

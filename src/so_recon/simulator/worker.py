@@ -54,6 +54,7 @@ import logging
 import os
 import queue
 import re
+import shutil
 import signal
 import threading
 import time
@@ -85,7 +86,7 @@ log = logging.getLogger(__name__)
 
 #: Bumped whenever the line protocol changes shape. Both sides state it; a mismatch is a
 #: refusal to start rather than a run that half understands its own worker.
-PROTOCOL_VERSION = "worker-1"
+PROTOCOL_VERSION = "worker-2"
 
 #: The statuses a reply may carry. This IS the contract's set (plan 3.3) rather than a
 #: copy of it, so a status no `ForwardResult` could hold cannot cross the transport.
@@ -106,9 +107,14 @@ SHUTDOWN_GRACE_S = 5.0
 TERMINATE_GRACE_S = 5.0
 
 #: The control-plane request an operator makes to stop after the current unit of work.
-#: It is a file in the session directory and it changes no job input; Task 8 reads it at
-#: native chunk boundaries. `PersistentJuliaWorker.stop_requested` merely recognises it.
+#: It is a file in the session directory and it changes no job input; the worker passes its
+#: path to Julia, which consults it at native chunk boundaries and never writes to it.
 STOP_FILE_NAME = "stop-after-chunk"
+
+#: Where a job's MUTABLE native working directory lives: in the session, never inside a
+#: result. A published checkpoint is a copy of it, staged and renamed into the result
+#: directory; this one is scratch and is removed once the job's record has been read.
+NATIVE_DIRNAME = "native"
 
 #: A job id becomes a file name (the descriptor, the per-job logs), so it is restricted to
 #: characters that cannot escape a directory or surprise a shell.
@@ -205,23 +211,104 @@ def classify_termination(
     )
 
 
+# --------------------------------------------------------------------- solver counters
+
+
+@dataclass(frozen=True)
+class _SolverCounters:
+    """The solver's own step and iteration counts, as the worker reported them."""
+
+    accepted_steps: int
+    cut_steps: int
+    nonlinear_iterations: int
+    note: str
+
+
+_NO_COUNTERS = _SolverCounters(
+    accepted_steps=0,
+    cut_steps=0,
+    nonlinear_iterations=0,
+    note="solver counters unavailable: this job reported none, recorded as 0",
+)
+
+
+def _solver_counters(reported: object) -> _SolverCounters:
+    """Read the counters out of a reply, refusing to invent the ones it did not send."""
+    if not isinstance(reported, Mapping):
+        return _NO_COUNTERS
+    values: dict[str, int] = {}
+    for name in ("accepted_steps", "cut_steps", "nonlinear_iterations"):
+        value = reported.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return _NO_COUNTERS
+        values[name] = value
+    return _SolverCounters(**values, note="solver counters from the native simulation report")
+
+
 # ------------------------------------------------------------------ control plane file
 
 
-def request_stop_after_chunk(session_dir: Path, *, reason: str | None = None) -> Path:
-    """Ask the session to stop after the work in hand. Touches no job input.
+def request_stop_after_chunk(
+    session_dir: Path, *, reason: str | None = None, after_completed_time_s: float | None = None
+) -> Path:
+    """Ask the session to stop after a completed chunk. Touches no job input.
 
     Written atomically, because a half-written request is a request nobody can read. It
     lives beside the session's own bookkeeping and never inside a case, a descriptor or a
     result directory: an immutable input stays immutable, whatever an operator asks for.
+
+    `after_completed_time_s` is the operator saying WHICH completed chunk to stop after —
+    "finish March and stop" rather than "stop as soon as you can". Without it the request is
+    the unconditional one: the chunk in hand finishes and nothing else starts. Either way the
+    stop is only ever noticed at a chunk boundary, so what is published is whole months.
     """
     path = session_dir / STOP_FILE_NAME
-    write_json_atomic(path, {"request": STOP_FILE_NAME, "reason": reason})
+    write_json_atomic(
+        path,
+        {
+            "request": STOP_FILE_NAME,
+            "reason": reason,
+            "after_completed_time_s": after_completed_time_s,
+        },
+    )
     return path
 
 
 def stop_after_chunk_requested(session_dir: Path) -> bool:
     return (session_dir / STOP_FILE_NAME).is_file()
+
+
+# --------------------------------------------------------------- the physics hand-off
+
+
+@dataclass(frozen=True)
+class ForwardHandoff:
+    """What the physics side hands the transport for one job, beyond the descriptor.
+
+    The transport owns a process and a line protocol and knows nothing about cases, axes or
+    balances. Two things nevertheless have to cross it, and both are values rather than
+    knowledge:
+
+    * `schedule_prefix_hashes` — one canonical digest of the schedule prefix per report
+      edge, because a checkpoint has to record WHICH prefix it stops after and only the
+      Python side canonicalises a case. Julia picks the one for the time it reached.
+    * `publish` — how a verified worker record becomes a `ForwardResult`. A COMPLETE reply
+      carries a whole extraction that must be integrated, written and hashed before anything
+      may claim it, and that is `results.publish_forward_result`'s job, not this module's.
+
+    Without a hand-off a worker can still run diagnostics and still classify refusals, but a
+    COMPLETE reply is a protocol failure: a transport must not manufacture a successful
+    physics result out of a status word.
+    """
+
+    #: Everything that determines F except the schedule. A checkpoint records it and a
+    #: continuation must match it: the policy after a checkpoint may change, the reservoir
+    #: it is a policy for may not.
+    static_hash: str = ""
+    schedule_prefix_hashes: tuple[tuple[float, str], ...] = ()
+    publish: Callable[[Mapping[str, Any], CostRecord, Mapping[str, str]], ForwardResult] | None = (
+        None
+    )
 
 
 # -------------------------------------------------------------------- protocol reader
@@ -473,6 +560,22 @@ class PersistentJuliaWorker:
         """Whether an operator has asked this session to stop after the work in hand."""
         return stop_after_chunk_requested(self._session_dir)
 
+    @property
+    def paths(self) -> ProjectPaths:
+        return self._paths
+
+    @property
+    def session_dir(self) -> Path:
+        return self._session_dir
+
+    @property
+    def profile(self) -> ResourceProfile:
+        return self._profile
+
+    @property
+    def environment_lock_hash(self) -> str:
+        return self._environment_lock_hash
+
     def __enter__(self) -> PersistentJuliaWorker:
         return self
 
@@ -588,6 +691,7 @@ class PersistentJuliaWorker:
         job: JobDescriptor,
         ledger: BudgetLedger,
         *,
+        handoff: ForwardHandoff | None = None,
         estimated_s: float | None = None,
         estimated_bytes: int | None = None,
     ) -> ForwardResult:
@@ -622,7 +726,7 @@ class PersistentJuliaWorker:
         # worker nothing else can change it while this job runs.
         committed_bytes = ledger.committed_output_bytes()
         try:
-            result = self._run_job(job, committed_bytes)
+            result = self._run_job(job, committed_bytes, handoff or ForwardHandoff())
         except BaseException:
             # An exception or a Ctrl-C leaves the protocol out of step, and the job's
             # process group still running. End the group; the reservation stays PENDING,
@@ -640,12 +744,15 @@ class PersistentJuliaWorker:
         write_json_atomic(path, job.model_dump(mode="json"))
         return path
 
-    def _run_job(self, job: JobDescriptor, session_output_bytes: int) -> ForwardResult:
+    def _run_job(
+        self, job: JobDescriptor, session_output_bytes: int, handoff: ForwardHandoff
+    ) -> ForwardResult:
         job_path = self._write_descriptor(job)
         log_dir = self._session_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = log_dir / f"{job.job_id}.stdout"
         stderr_path = log_dir / f"{job.job_id}.stderr"
+        native_dir = self._session_dir / NATIVE_DIRNAME / job.job_id
 
         baseline = self._probe()
         watchdog = ResourceWatchdog(self._profile, baseline=baseline)
@@ -659,24 +766,44 @@ class PersistentJuliaWorker:
                     "root": str(self._paths.root),
                     "stdout_path": str(stdout_path),
                     "stderr_path": str(stderr_path),
+                    # The MUTABLE native working directory of this job, and the control-plane
+                    # file Julia consults at chunk boundaries. The stop file is read and
+                    # never written: an operator's request changes no job input.
+                    "native_dir": str(native_dir),
+                    "stop_path": str(self._session_dir / STOP_FILE_NAME),
+                    "environment_lock_hash": self._environment_lock_hash,
+                    "static_hash": handoff.static_hash,
+                    "schedule_prefix_hashes": [
+                        {"completed_time_s": time_s, "schedule_prefix_hash": digest}
+                        for time_s, digest in handoff.schedule_prefix_hashes
+                    ],
                     "protocol": PROTOCOL_VERSION,
                 }
             )
         except WorkerProtocolError as exc:
             return self._classified(job, "PROTOCOL_FAILURE", str(exc), meter.finish(self._probe()))
 
-        frame, decision = self._await_job_frame(watchdog, meter, session_output_bytes)
-        cost_inputs = meter.finish(self._probe())
-        if frame is None:
-            status, reason = classify_termination(returncode=self._proc.poll(), decision=decision)
-            return self._classified(job, status, reason, cost_inputs)
-        if isinstance(frame, ProtocolViolation):
-            return self._classified(job, "PROTOCOL_FAILURE", frame.reason, cost_inputs)
         try:
-            validate_reply(frame, job.job_id)
-        except ValueError as exc:
-            return self._classified(job, "PROTOCOL_FAILURE", str(exc), cost_inputs)
-        return self._result_from_reply(job, frame, cost_inputs)
+            frame, decision = self._await_job_frame(watchdog, meter, session_output_bytes)
+            cost_inputs = meter.finish(self._probe())
+            if frame is None:
+                status, reason = classify_termination(
+                    returncode=self._proc.poll(), decision=decision
+                )
+                return self._classified(job, status, reason, cost_inputs)
+            if isinstance(frame, ProtocolViolation):
+                return self._classified(job, "PROTOCOL_FAILURE", frame.reason, cost_inputs)
+            try:
+                validate_reply(frame, job.job_id)
+            except ValueError as exc:
+                return self._classified(job, "PROTOCOL_FAILURE", str(exc), cost_inputs)
+            return self._result_from_reply(job, frame, cost_inputs, handoff)
+        finally:
+            # Scratch. Whatever of it was worth keeping is already a published checkpoint
+            # inside the result directory, copied and renamed there before the record was
+            # written; leaving the working copy behind would charge the session's disk
+            # budget twice for the same states.
+            shutil.rmtree(native_dir, ignore_errors=True)
 
     def _await_job_frame(
         self, watchdog: ResourceWatchdog, meter: _JobMeter, session_output_bytes: int
@@ -711,7 +838,12 @@ class PersistentJuliaWorker:
     # ----------------------------------------------------------------- result building
 
     def _classified(
-        self, job: JobDescriptor, status: ForwardStatus, reason: str, cost_inputs: _CostInputs
+        self,
+        job: JobDescriptor,
+        status: ForwardStatus,
+        reason: str,
+        cost_inputs: _CostInputs,
+        counters: _SolverCounters = _NO_COUNTERS,
     ) -> ForwardResult:
         return self._build_result(
             job,
@@ -719,15 +851,82 @@ class PersistentJuliaWorker:
             reason=reason,
             physics_class="unknown",
             cost_inputs=cost_inputs,
+            counters=counters,
             extra_metadata={},
         )
 
+    def _read_record(self, path: Path) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _published(
+        self,
+        job: JobDescriptor,
+        record: Mapping[str, Any],
+        cost_inputs: _CostInputs,
+        counters: _SolverCounters,
+        extra_metadata: Mapping[str, str],
+        handoff: ForwardHandoff,
+    ) -> ForwardResult:
+        """Hand a verified record to the physics side, which turns it into a result.
+
+        The transport has proved the bytes: the record is inside this job's own result
+        directory and hashes to what the worker said it does. What those bytes MEAN — a time
+        axis to integrate, volumes to publish, balances to close — is not this module's to
+        decide, and a transport that built a `COMPLETE` out of a status word would be a
+        transport that can manufacture physics.
+        """
+        if handoff.publish is None:
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                "the worker returned a native extraction, but this session gave the transport "
+                "no publisher for it; a forward result is published by the stage that holds "
+                "the case and the request, never by the transport",
+                cost_inputs,
+                counters,
+            )
+        metadata = self._metadata(job, extra_metadata)
+        cost = cost_inputs.to_record(attempt=job.attempt, counters=counters)
+        try:
+            result = handoff.publish(record, cost, metadata)
+        except (ValueError, OSError, ValidationError) as exc:
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the worker's extraction for job {job.job_id!r} could not be published: {exc}",
+                cost_inputs,
+                counters,
+            )
+        if (result.job_id, result.case_sha256, result.model_hash) != (
+            job.job_id,
+            job.case_sha256,
+            job.model_hash,
+        ):
+            return self._classified(
+                job,
+                "PROTOCOL_FAILURE",
+                f"the published result claims job {result.job_id!r} of model "
+                f"{result.model_hash}, but this job is {job.job_id!r} of {job.model_hash}",
+                cost_inputs,
+                counters,
+            )
+        return result
+
     def _result_from_reply(
-        self, job: JobDescriptor, reply: dict[str, Any], cost_inputs: _CostInputs
+        self,
+        job: JobDescriptor,
+        reply: dict[str, Any],
+        cost_inputs: _CostInputs,
+        handoff: ForwardHandoff,
     ) -> ForwardResult:
         status: ForwardStatus = reply["status"]
         raw_reason = reply.get("reason")
         reason = raw_reason if isinstance(raw_reason, str) and raw_reason else None
+        counters = _solver_counters(reply.get("cost"))
         if status != "COMPLETE" and reason is None:
             return self._classified(
                 job,
@@ -773,6 +972,17 @@ class PersistentJuliaWorker:
             metadata["result_path"] = result_path
             metadata["result_sha256"] = digest
             cost_inputs = cost_inputs.with_output_bytes(_directory_bytes(result_dir))
+            record = self._read_record(resolved)
+            if record is None:
+                return self._classified(
+                    job,
+                    "PROTOCOL_FAILURE",
+                    f"the worker's result record at {result_path!r} is not a JSON object",
+                    cost_inputs,
+                    counters,
+                )
+            if isinstance(record.get("extraction"), dict):
+                return self._published(job, record, cost_inputs, counters, metadata, handoff)
         declared = reply.get("physics_class")
         try:
             return self._build_result(
@@ -781,6 +991,7 @@ class PersistentJuliaWorker:
                 reason=reason,
                 physics_class=declared if isinstance(declared, str) and declared else "unknown",
                 cost_inputs=cost_inputs,
+                counters=counters,
                 extra_metadata=metadata,
             )
         except ValidationError as exc:
@@ -797,17 +1008,8 @@ class PersistentJuliaWorker:
                 cost_inputs,
             )
 
-    def _build_result(
-        self,
-        job: JobDescriptor,
-        *,
-        status: ForwardStatus,
-        reason: str | None,
-        physics_class: str,
-        cost_inputs: _CostInputs,
-        extra_metadata: Mapping[str, str],
-    ) -> ForwardResult:
-        metadata = {
+    def _metadata(self, job: JobDescriptor, extra: Mapping[str, str]) -> dict[str, str]:
+        return {
             "protocol_version": PROTOCOL_VERSION,
             # What the result was produced under, beyond the case itself: the locked
             # environment and the solver configuration the descriptor pinned (plan 3.1).
@@ -819,8 +1021,20 @@ class PersistentJuliaWorker:
             "blas_threads": str(self._profile.blas_threads),
             "worker_pid": str(self._proc.pid),
             **{f"version.{name}": value for name, value in self._handshake.versions.items()},
-            **extra_metadata,
+            **extra,
         }
+
+    def _build_result(
+        self,
+        job: JobDescriptor,
+        *,
+        status: ForwardStatus,
+        reason: str | None,
+        physics_class: str,
+        cost_inputs: _CostInputs,
+        counters: _SolverCounters,
+        extra_metadata: Mapping[str, str],
+    ) -> ForwardResult:
         return ForwardResult(
             job_id=job.job_id,
             case_sha256=job.case_sha256,
@@ -831,9 +1045,9 @@ class PersistentJuliaWorker:
             completed_time_s=0.0,
             times_s=(),
             states={},
-            solver_metadata=metadata,
-            cost=cost_inputs.to_record(attempt=job.attempt),
-            parent_attempt_ids=(),
+            solver_metadata=self._metadata(job, extra_metadata),
+            cost=cost_inputs.to_record(attempt=job.attempt, counters=counters),
+            parent_attempt_ids=(() if job.parent_job_id is None else (job.parent_job_id,)),
         )
 
     # ---------------------------------------------------------------- process control
@@ -932,20 +1146,20 @@ class _CostInputs:
             notes=self.notes,
         )
 
-    def to_record(self, *, attempt: int) -> CostRecord:
+    def to_record(self, *, attempt: int, counters: _SolverCounters = _NO_COUNTERS) -> CostRecord:
         return CostRecord(
             wall_s=self.wall_s,
             cpu_s=self.cpu_s,
             peak_rss_bytes=self.peak_rss_bytes,
             output_bytes=self.output_bytes,
-            # Building a model takes no time steps, so there are no solver counters to
-            # report yet; the stage that integrates the schedule fills these from the
-            # simulator's own statistics rather than from a guess made here.
-            accepted_steps=0,
-            cut_steps=0,
-            nonlinear_iterations=0,
+            # The solver's OWN counters, as the worker reported them. A job that never
+            # reached the solver has none, and records three honest zeros rather than a
+            # guess — `measurement_method` says which of the two happened.
+            accepted_steps=counters.accepted_steps,
+            cut_steps=counters.cut_steps,
+            nonlinear_iterations=counters.nonlinear_iterations,
             retry_count=attempt - 1,
-            measurement_method="; ".join(self.notes),
+            measurement_method="; ".join((*self.notes, counters.note)),
         )
 
 
