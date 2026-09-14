@@ -1,43 +1,616 @@
 {
   "derived_view_id": "full36-v1",
-  "fully_accepted": false,
+  "fully_accepted": true,
   "generator_version": "p1-generator-1",
   "n_parents": 5,
   "note": "Every parent of the first P1 set has a row here, whatever its outcome. A row is never removed to make the suite pass (SPEC 18.4)",
   "parent_set_complete": true,
   "rows": [
     {
-      "accepted": false,
+      "accepted": true,
       "context_ref": "artifacts/worlds/p1-base-s0041-9cdc376bedcd/view/full36-v1/context.json",
-      "cost": null,
+      "cost": {
+        "accepted_steps": 239,
+        "cpu_s": 12.381847583999999,
+        "cut_steps": 0,
+        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+        "nonlinear_iterations": 693,
+        "output_bytes": 12576115,
+        "peak_rss_bytes": 1565179904,
+        "retry_count": 0,
+        "wall_s": 5.2923882090253755
+      },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
       "family": "base",
       "gates": {
-        "measured_wall_s": 0.036959624965675175,
-        "reason": "the attempt did not produce a result: working tree was dirty at run start; exception: RuntimeError: this worker was terminated mid-job and cannot be resynchronised; start a new one",
-        "status": "RESOURCE_FAILURE"
+        "balance_absolute_residual_m3_sc": 0.028854738066002028,
+        "balance_cumulative_relative": 1.758574016969318e-06,
+        "balance_max_step_relative": 3.1819946824374237e-07,
+        "balance_step_median_relative": 4.8546897133229025e-09,
+        "equilibrium_preflight": {
+          "balance_absolute_residual_m3_sc": 5.748006515204906e-10,
+          "balance_cumulative_relative": 1.769719988630157e-14,
+          "balance_max_step_relative": 1.769719988630157e-14,
+          "balance_step_median_relative": 0.0,
+          "connection_mass_kg_s": 0.0,
+          "pressure_relative_drift": 2.6207390767893713e-12,
+          "state_saturation_drift": 3.164135620181696e-15,
+          "status": "COMPLETE"
+        },
+        "evidence_identity": {
+          "forward": {
+            "case_sha256": "1291f3d11dc09cbc9a69370c2782ba4391c51f6e3bd43b98c0fcb6ceca03eb82",
+            "job_id": "job-20260914T221231Z-forward-687817da-01-a1",
+            "model_hash": "dfdea6e342c131c18724ebe6596ffecf56e8177455bf209fa291bd0a6b9c4096",
+            "outputs": {
+              "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/balances.parquet": "7e1a77a4ce372d044284189319918384bc513eb47d7bc23f854ee6893a09002b",
+              "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/connections.parquet": "50ced9dafdd095a8a277240c464445eb3503524bd172787ee2b1ede7ea581674",
+              "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/monthly.parquet": "8fad0c849fcb91d857b6329a2b8350791f1dd7340e9074d1610086b9cea02552",
+              "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/states.h5": "db173968b8f208f9821824384c608707c013ce56d430fb26113afe7b87e5a106"
+            },
+            "outputs_sha256": "4f316a39cdc1fe3ea929e2dc85cbde20b0eaffc767e4fc2cc175ff9aa9e872bb",
+            "result_sha256": "92a19868d072a272cc47b64a2702475743b1936d54780b562437e79c416cdd4b"
+          },
+          "parent_world_id": "p1-base-s0041-9cdc376bedcd",
+          "preflight": {
+            "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
+            "job_id": "job-20260914T221210Z-forward-687817da-a1",
+            "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
+            "outputs": {
+              "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/balances.parquet": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
+              "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2"
+            },
+            "outputs_sha256": "3a04dec652af20d4cf8b8004c1498c790c4a21cd67da8b3d4a7f2cf253b04d1d",
+            "result_sha256": "82fea22aa704169691fab357f6469c341c05e9fb27c0015489861a441c37b75b"
+          },
+          "preflight_result": {
+            "balances_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/balances.parquet",
+            "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
+            "completed_time_s": 2678400.0,
+            "connections_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/connections.parquet",
+            "cost": {
+              "accepted_steps": 8,
+              "cpu_s": 21.808567552000007,
+              "cut_steps": 0,
+              "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+              "nonlinear_iterations": 16,
+              "output_bytes": 205708,
+              "peak_rss_bytes": 1492385792,
+              "retry_count": 0,
+              "wall_s": 20.98978200001875
+            },
+            "job_id": "job-20260914T221210Z-forward-687817da-a1",
+            "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
+            "monthly_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/monthly.parquet",
+            "parent_attempt_ids": [],
+            "physics_class": "OW",
+            "reason": null,
+            "restart": null,
+            "schema_version": "forward-1",
+            "solver_metadata": {
+              "accepted_steps.parquet.path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+              "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
+              "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.600907628348802e-16}",
+              "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_meets_strict_target": "true",
+              "balance.reservoir_connections_within_spec_tolerance": "true",
+              "balance_absolute_residual_m3_sc": "{\"water\": 1.1823431123048067e-11, \"oil\": 5.748006515204906e-10}",
+              "balance_cumulative_relative": "{\"water\": 1.4692460651154185e-15, \"oil\": 1.769719988630157e-14}",
+              "balance_headline": "full_system_surface",
+              "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance_meets_strict_target": "true",
+              "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+              "balance_within_spec_tolerance": "true",
+              "balances.parquet.sha256": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
+              "blas_threads": "1",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1315880960, \"retained_bytes\": 93611808}]",
+              "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+              "extract_schema_version": "forward-extract-2",
+              "julia_threads": "4",
+              "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "protocol_version": "worker-2",
+              "resource_profile": "P1_LOOP",
+              "result_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/result.json",
+              "result_sha256": "438adc716b9b22552f364dba42ec099edfdb43c69b12e06f0cf43fe3807ddd38",
+              "solver_config_path": "artifacts/runs/20260914T221210Z-forward-687817da/solver_config.json",
+              "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+              "states_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+              "states_sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+              "version.HDF5": "0.17.3",
+              "version.JSON": "1.8.0",
+              "version.Jutul": "0.4.31",
+              "version.JutulDarcy": "0.3.11",
+              "version.julia": "1.12.7",
+              "worker_pid": "63099"
+            },
+            "states": {
+              "bo": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bo",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "bw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "pore_volume_m3": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pore_volume_m3",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "m3"
+              },
+              "pressure_pa": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pressure_pa",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "Pa"
+              },
+              "so": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "so",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "sw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "sw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              }
+            },
+            "status": "COMPLETE",
+            "times_s": [
+              0.0,
+              2678400.0
+            ]
+          }
+        },
+        "injector_bhp_max_pa": 21198340.53140718,
+        "injector_bhp_min_pa": 15823292.967106912,
+        "measured_wall_s": 5.370395042002201,
+        "p2_lower_completion": {
+          "open": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35
+          ],
+          "shut": [
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ]
+        },
+        "pressure_max_pa": 21225464.66280752,
+        "pressure_min_pa": 15039816.192294713,
+        "producer_bhp_max_pa": 20102472.388735462,
+        "producer_bhp_min_pa": 13817275.140288677,
+        "rate_control_relative": 2.9338538766868653e-16,
+        "restart": {
+          "completed_report_step": 36,
+          "native_format": "Jutul-native"
+        },
+        "saturation_bound_violation": 0.0,
+        "saturation_sum_abs": 2.6645352591003757e-15,
+        "status": "COMPLETE",
+        "sw_max": 0.7953408987441696,
+        "sw_min": 0.1996902854130703,
+        "watercut_signal": {
+          "by_producer": {
+            "P1": {
+              "maximum": 0.8893855426124538,
+              "range": 0.2902496676615567,
+              "valid": true
+            },
+            "P2": {
+              "maximum": 0.9060609525962884,
+              "range": 0.22909842970046035,
+              "valid": true
+            }
+          },
+          "limitation": "Educational observability screen; does not establish inverse identifiability.",
+          "minimum_maximum": 0.05,
+          "minimum_range": 0.02,
+          "month_start": 12,
+          "passed": true,
+          "version": "p1-late-watercut-1"
+        }
       },
       "manifest_path": "artifacts/worlds/p1-base-s0041-9cdc376bedcd/world_manifest.json",
       "model_hash": "dfdea6e342c131c18724ebe6596ffecf56e8177455bf209fa291bd0a6b9c4096",
       "parent_world_id": "p1-base-s0041-9cdc376bedcd",
       "physical_acceptance": {
         "checks": {
-          "balance_cumulative_relative": false,
-          "balance_step_median_relative": false,
-          "complete": false,
-          "complete_evidence": false,
-          "evidence_binding": false,
-          "rate_control_relative": false,
-          "saturation_bound_violation": false,
-          "saturation_sum_abs": false
+          "balance_cumulative_relative": true,
+          "balance_step_median_relative": true,
+          "bhp": true,
+          "complete": true,
+          "completion": true,
+          "evidence_binding": true,
+          "preflight": true,
+          "pressure": true,
+          "rate_control_relative": true,
+          "restart": true,
+          "saturation_bound_violation": true,
+          "saturation_sum_abs": true,
+          "signal": true
         },
         "metrics": {
-          "measured_wall_s": 0.036959624965675175,
-          "reason": "the attempt did not produce a result: working tree was dirty at run start; exception: RuntimeError: this worker was terminated mid-job and cannot be resynchronised; start a new one",
-          "status": "RESOURCE_FAILURE"
+          "balance_absolute_residual_m3_sc": 0.028854738066002028,
+          "balance_cumulative_relative": 1.758574016969318e-06,
+          "balance_max_step_relative": 3.1819946824374237e-07,
+          "balance_step_median_relative": 4.8546897133229025e-09,
+          "equilibrium_preflight": {
+            "balance_absolute_residual_m3_sc": 5.748006515204906e-10,
+            "balance_cumulative_relative": 1.769719988630157e-14,
+            "balance_max_step_relative": 1.769719988630157e-14,
+            "balance_step_median_relative": 0.0,
+            "connection_mass_kg_s": 0.0,
+            "pressure_relative_drift": 2.6207390767893713e-12,
+            "state_saturation_drift": 3.164135620181696e-15,
+            "status": "COMPLETE"
+          },
+          "evidence_identity": {
+            "forward": {
+              "case_sha256": "1291f3d11dc09cbc9a69370c2782ba4391c51f6e3bd43b98c0fcb6ceca03eb82",
+              "job_id": "job-20260914T221231Z-forward-687817da-01-a1",
+              "model_hash": "dfdea6e342c131c18724ebe6596ffecf56e8177455bf209fa291bd0a6b9c4096",
+              "outputs": {
+                "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/balances.parquet": "7e1a77a4ce372d044284189319918384bc513eb47d7bc23f854ee6893a09002b",
+                "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/connections.parquet": "50ced9dafdd095a8a277240c464445eb3503524bd172787ee2b1ede7ea581674",
+                "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/monthly.parquet": "8fad0c849fcb91d857b6329a2b8350791f1dd7340e9074d1610086b9cea02552",
+                "artifacts/runs/20260914T221231Z-forward-687817da-01/job-20260914T221231Z-forward-687817da-01-a1/states.h5": "db173968b8f208f9821824384c608707c013ce56d430fb26113afe7b87e5a106"
+              },
+              "outputs_sha256": "4f316a39cdc1fe3ea929e2dc85cbde20b0eaffc767e4fc2cc175ff9aa9e872bb",
+              "result_sha256": "92a19868d072a272cc47b64a2702475743b1936d54780b562437e79c416cdd4b"
+            },
+            "parent_world_id": "p1-base-s0041-9cdc376bedcd",
+            "preflight": {
+              "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
+              "job_id": "job-20260914T221210Z-forward-687817da-a1",
+              "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
+              "outputs": {
+                "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/balances.parquet": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
+                "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2"
+              },
+              "outputs_sha256": "3a04dec652af20d4cf8b8004c1498c790c4a21cd67da8b3d4a7f2cf253b04d1d",
+              "result_sha256": "82fea22aa704169691fab357f6469c341c05e9fb27c0015489861a441c37b75b"
+            },
+            "preflight_result": {
+              "balances_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/balances.parquet",
+              "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
+              "completed_time_s": 2678400.0,
+              "connections_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/connections.parquet",
+              "cost": {
+                "accepted_steps": 8,
+                "cpu_s": 21.808567552000007,
+                "cut_steps": 0,
+                "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+                "nonlinear_iterations": 16,
+                "output_bytes": 205708,
+                "peak_rss_bytes": 1492385792,
+                "retry_count": 0,
+                "wall_s": 20.98978200001875
+              },
+              "job_id": "job-20260914T221210Z-forward-687817da-a1",
+              "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
+              "monthly_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/monthly.parquet",
+              "parent_attempt_ids": [],
+              "physics_class": "OW",
+              "reason": null,
+              "restart": null,
+              "schema_version": "forward-1",
+              "solver_metadata": {
+                "accepted_steps.parquet.path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+                "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
+                "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.600907628348802e-16}",
+                "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_meets_strict_target": "true",
+                "balance.reservoir_connections_within_spec_tolerance": "true",
+                "balance_absolute_residual_m3_sc": "{\"water\": 1.1823431123048067e-11, \"oil\": 5.748006515204906e-10}",
+                "balance_cumulative_relative": "{\"water\": 1.4692460651154185e-15, \"oil\": 1.769719988630157e-14}",
+                "balance_headline": "full_system_surface",
+                "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance_meets_strict_target": "true",
+                "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+                "balance_within_spec_tolerance": "true",
+                "balances.parquet.sha256": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
+                "blas_threads": "1",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1315880960, \"retained_bytes\": 93611808}]",
+                "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+                "extract_schema_version": "forward-extract-2",
+                "julia_threads": "4",
+                "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "protocol_version": "worker-2",
+                "resource_profile": "P1_LOOP",
+                "result_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/result.json",
+                "result_sha256": "438adc716b9b22552f364dba42ec099edfdb43c69b12e06f0cf43fe3807ddd38",
+                "solver_config_path": "artifacts/runs/20260914T221210Z-forward-687817da/solver_config.json",
+                "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+                "states_path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                "states_sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                "version.HDF5": "0.17.3",
+                "version.JSON": "1.8.0",
+                "version.Jutul": "0.4.31",
+                "version.JutulDarcy": "0.3.11",
+                "version.julia": "1.12.7",
+                "worker_pid": "63099"
+              },
+              "states": {
+                "bo": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bo",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                  "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "bw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                  "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "pore_volume_m3": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pore_volume_m3",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                  "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "m3"
+                },
+                "pressure_pa": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pressure_pa",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                  "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "Pa"
+                },
+                "so": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "so",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                  "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "sw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "sw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221210Z-forward-687817da/job-20260914T221210Z-forward-687817da-a1/states.h5",
+                  "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                }
+              },
+              "status": "COMPLETE",
+              "times_s": [
+                0.0,
+                2678400.0
+              ]
+            }
+          },
+          "injector_bhp_max_pa": 21198340.53140718,
+          "injector_bhp_min_pa": 15823292.967106912,
+          "measured_wall_s": 5.370395042002201,
+          "p2_lower_completion": {
+            "open": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35
+            ],
+            "shut": [
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ]
+          },
+          "pressure_max_pa": 21225464.66280752,
+          "pressure_min_pa": 15039816.192294713,
+          "producer_bhp_max_pa": 20102472.388735462,
+          "producer_bhp_min_pa": 13817275.140288677,
+          "rate_control_relative": 2.9338538766868653e-16,
+          "restart": {
+            "completed_report_step": 36,
+            "native_format": "Jutul-native"
+          },
+          "saturation_bound_violation": 0.0,
+          "saturation_sum_abs": 2.6645352591003757e-15,
+          "status": "COMPLETE",
+          "sw_max": 0.7953408987441696,
+          "sw_min": 0.1996902854130703,
+          "watercut_signal": {
+            "by_producer": {
+              "P1": {
+                "maximum": 0.8893855426124538,
+                "range": 0.2902496676615567,
+                "valid": true
+              },
+              "P2": {
+                "maximum": 0.9060609525962884,
+                "range": 0.22909842970046035,
+                "valid": true
+              }
+            },
+            "limitation": "Educational observability screen; does not establish inverse identifiability.",
+            "minimum_maximum": 0.05,
+            "minimum_range": 0.02,
+            "month_start": 12,
+            "passed": true,
+            "version": "p1-late-watercut-1"
+          }
         },
-        "passed": false,
+        "passed": true,
         "tolerances": {
           "balance_absolute_floor_m3_sc": 1e-06,
           "balance_cumulative_relative_max": 0.001,
@@ -69,51 +642,614 @@
       "reason": null,
       "seed": 41,
       "split": "exploratory",
-      "status": null,
+      "status": "COMPLETE",
       "truth_ref": "artifacts/worlds/p1-base-s0041-9cdc376bedcd/truth/truth_manifest.json"
     },
     {
-      "accepted": false,
+      "accepted": true,
       "context_ref": "artifacts/worlds/p1-base-s0042-ee65c01c07fd/view/full36-v1/context.json",
       "cost": {
-        "accepted_steps": 0,
-        "cpu_s": 0.0,
+        "accepted_steps": 239,
+        "cpu_s": 11.057461312000001,
         "cut_steps": 0,
-        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; solver counters unavailable: this job reported none, recorded as 0",
-        "nonlinear_iterations": 0,
-        "output_bytes": 0,
-        "peak_rss_bytes": 1310785536,
+        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+        "nonlinear_iterations": 652,
+        "output_bytes": 12574222,
+        "peak_rss_bytes": 1635155968,
         "retry_count": 0,
-        "wall_s": 7.164242582977749
+        "wall_s": 3.8608190420200117
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
       "family": "base",
       "gates": {
-        "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-        "measured_wall_s": 14.479586041998118,
-        "status": "RESOURCE_FAILURE"
+        "balance_absolute_residual_m3_sc": 0.11553985445425496,
+        "balance_cumulative_relative": 9.035402100124042e-06,
+        "balance_max_step_relative": 2.8327391488981667e-07,
+        "balance_step_median_relative": 8.945548586651521e-09,
+        "equilibrium_preflight": {
+          "balance_absolute_residual_m3_sc": 5.748006515204906e-10,
+          "balance_cumulative_relative": 1.7922745322528756e-14,
+          "balance_max_step_relative": 1.7922745322528756e-14,
+          "balance_step_median_relative": 0.0,
+          "connection_mass_kg_s": 0.0,
+          "pressure_relative_drift": 2.638842702662462e-12,
+          "state_saturation_drift": 3.219646771412954e-15,
+          "status": "COMPLETE"
+        },
+        "evidence_identity": {
+          "forward": {
+            "case_sha256": "2ccf074cd6b546b87a0118e39425bf5e86ea98bc24c5363b6bbb9a84defd2a7d",
+            "job_id": "job-20260914T221237Z-forward-687817da-04-a1",
+            "model_hash": "f7baebfc2eda99412b74a9bb6026779a99ce04ddbaad0c7688278acb50891720",
+            "outputs": {
+              "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/balances.parquet": "e1f395f3f3ee9addd208ec5bde7e01fb92b34b07f7cc38dab6758c9e16a727cd",
+              "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/connections.parquet": "139faae220e29828a7621b2747f48fb16d2ac9349b32fdc7fba672ea92beb192",
+              "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/monthly.parquet": "c8e777c675e725c5ebc86124f28c29b628b40d257092a0adb88965fd85c37fc4",
+              "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/states.h5": "68c4e71c502ec629658dc5f21adafece68a873fb19434bf2513f160031bb7c4e"
+            },
+            "outputs_sha256": "f80eb0825ef7aafe538e23b30397f02d82710ac54ac166be463f0f207b76dbad",
+            "result_sha256": "f9a2ecdd36db81ef0c65c28a9842c853ce7eaafe371927898a0057f564c1f47e"
+          },
+          "parent_world_id": "p1-base-s0042-ee65c01c07fd",
+          "preflight": {
+            "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
+            "job_id": "job-20260914T221237Z-forward-687817da-02-a1",
+            "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
+            "outputs": {
+              "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/balances.parquet": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
+              "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e"
+            },
+            "outputs_sha256": "b7fb8ec9aa7f8cddbfb7712a83ab167b66ff54b57369100fa5ebeb03aafe5068",
+            "result_sha256": "de55eef5dbe7c3a6e9eb682ba54030cf1871ac4d0eaed553380e8e42510e9777"
+          },
+          "preflight_result": {
+            "balances_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/balances.parquet",
+            "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
+            "completed_time_s": 2678400.0,
+            "connections_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/connections.parquet",
+            "cost": {
+              "accepted_steps": 8,
+              "cpu_s": 0.3097374720000019,
+              "cut_steps": 0,
+              "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+              "nonlinear_iterations": 16,
+              "output_bytes": 205461,
+              "peak_rss_bytes": 1568358400,
+              "retry_count": 0,
+              "wall_s": 0.10833887499757111
+            },
+            "job_id": "job-20260914T221237Z-forward-687817da-02-a1",
+            "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
+            "monthly_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/monthly.parquet",
+            "parent_attempt_ids": [],
+            "physics_class": "OW",
+            "reason": null,
+            "restart": null,
+            "schema_version": "forward-1",
+            "solver_metadata": {
+              "accepted_steps.parquet.path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+              "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
+              "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.67229630909024e-16}",
+              "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_meets_strict_target": "true",
+              "balance.reservoir_connections_within_spec_tolerance": "true",
+              "balance_absolute_residual_m3_sc": "{\"water\": 1.1823431123048067e-11, \"oil\": 5.748006515204906e-10}",
+              "balance_cumulative_relative": "{\"water\": 1.4879641567673934e-15, \"oil\": 1.7922745322528756e-14}",
+              "balance_headline": "full_system_surface",
+              "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance_meets_strict_target": "true",
+              "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+              "balance_within_spec_tolerance": "true",
+              "balances.parquet.sha256": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
+              "blas_threads": "1",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1403060224, \"retained_bytes\": 95732976}]",
+              "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+              "extract_schema_version": "forward-extract-2",
+              "julia_threads": "4",
+              "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "protocol_version": "worker-2",
+              "resource_profile": "P1_LOOP",
+              "result_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/result.json",
+              "result_sha256": "c0211ebcf4c503506324f89353a9f916f358bb54eee6c9db9d1304d60430ef22",
+              "solver_config_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/solver_config.json",
+              "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+              "states_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+              "states_sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+              "version.HDF5": "0.17.3",
+              "version.JSON": "1.8.0",
+              "version.Jutul": "0.4.31",
+              "version.JutulDarcy": "0.3.11",
+              "version.julia": "1.12.7",
+              "worker_pid": "63099"
+            },
+            "states": {
+              "bo": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bo",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "bw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "pore_volume_m3": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pore_volume_m3",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "m3"
+              },
+              "pressure_pa": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pressure_pa",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "Pa"
+              },
+              "so": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "so",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "sw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "sw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              }
+            },
+            "status": "COMPLETE",
+            "times_s": [
+              0.0,
+              2678400.0
+            ]
+          }
+        },
+        "injector_bhp_max_pa": 19420868.445039596,
+        "injector_bhp_min_pa": 15417783.469495986,
+        "measured_wall_s": 3.937778041989077,
+        "p2_lower_completion": {
+          "open": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35
+          ],
+          "shut": [
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ]
+        },
+        "pressure_max_pa": 19516914.727447253,
+        "pressure_min_pa": 15039816.192294713,
+        "producer_bhp_max_pa": 18811682.508889675,
+        "producer_bhp_min_pa": 14358398.67565052,
+        "rate_control_relative": 2.693397995056424e-12,
+        "restart": {
+          "completed_report_step": 36,
+          "native_format": "Jutul-native"
+        },
+        "saturation_bound_violation": 0.0,
+        "saturation_sum_abs": 2.220446049250313e-15,
+        "status": "COMPLETE",
+        "sw_max": 0.7956286795442333,
+        "sw_min": 0.19966895686562322,
+        "watercut_signal": {
+          "by_producer": {
+            "P1": {
+              "maximum": 0.91290169277253,
+              "range": 0.14423149874670682,
+              "valid": true
+            },
+            "P2": {
+              "maximum": 0.9106281664571669,
+              "range": 0.1464369308687533,
+              "valid": true
+            }
+          },
+          "limitation": "Educational observability screen; does not establish inverse identifiability.",
+          "minimum_maximum": 0.05,
+          "minimum_range": 0.02,
+          "month_start": 12,
+          "passed": true,
+          "version": "p1-late-watercut-1"
+        }
       },
       "manifest_path": "artifacts/worlds/p1-base-s0042-ee65c01c07fd/world_manifest.json",
       "model_hash": "f7baebfc2eda99412b74a9bb6026779a99ce04ddbaad0c7688278acb50891720",
       "parent_world_id": "p1-base-s0042-ee65c01c07fd",
       "physical_acceptance": {
         "checks": {
-          "balance_cumulative_relative": false,
-          "balance_step_median_relative": false,
-          "complete": false,
-          "complete_evidence": false,
-          "evidence_binding": false,
-          "rate_control_relative": false,
-          "saturation_bound_violation": false,
-          "saturation_sum_abs": false
+          "balance_cumulative_relative": true,
+          "balance_step_median_relative": true,
+          "bhp": true,
+          "complete": true,
+          "completion": true,
+          "evidence_binding": true,
+          "preflight": true,
+          "pressure": true,
+          "rate_control_relative": true,
+          "restart": true,
+          "saturation_bound_violation": true,
+          "saturation_sum_abs": true,
+          "signal": true
         },
         "metrics": {
-          "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-          "measured_wall_s": 14.479586041998118,
-          "status": "RESOURCE_FAILURE"
+          "balance_absolute_residual_m3_sc": 0.11553985445425496,
+          "balance_cumulative_relative": 9.035402100124042e-06,
+          "balance_max_step_relative": 2.8327391488981667e-07,
+          "balance_step_median_relative": 8.945548586651521e-09,
+          "equilibrium_preflight": {
+            "balance_absolute_residual_m3_sc": 5.748006515204906e-10,
+            "balance_cumulative_relative": 1.7922745322528756e-14,
+            "balance_max_step_relative": 1.7922745322528756e-14,
+            "balance_step_median_relative": 0.0,
+            "connection_mass_kg_s": 0.0,
+            "pressure_relative_drift": 2.638842702662462e-12,
+            "state_saturation_drift": 3.219646771412954e-15,
+            "status": "COMPLETE"
+          },
+          "evidence_identity": {
+            "forward": {
+              "case_sha256": "2ccf074cd6b546b87a0118e39425bf5e86ea98bc24c5363b6bbb9a84defd2a7d",
+              "job_id": "job-20260914T221237Z-forward-687817da-04-a1",
+              "model_hash": "f7baebfc2eda99412b74a9bb6026779a99ce04ddbaad0c7688278acb50891720",
+              "outputs": {
+                "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/balances.parquet": "e1f395f3f3ee9addd208ec5bde7e01fb92b34b07f7cc38dab6758c9e16a727cd",
+                "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/connections.parquet": "139faae220e29828a7621b2747f48fb16d2ac9349b32fdc7fba672ea92beb192",
+                "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/monthly.parquet": "c8e777c675e725c5ebc86124f28c29b628b40d257092a0adb88965fd85c37fc4",
+                "artifacts/runs/20260914T221237Z-forward-687817da-04/job-20260914T221237Z-forward-687817da-04-a1/states.h5": "68c4e71c502ec629658dc5f21adafece68a873fb19434bf2513f160031bb7c4e"
+              },
+              "outputs_sha256": "f80eb0825ef7aafe538e23b30397f02d82710ac54ac166be463f0f207b76dbad",
+              "result_sha256": "f9a2ecdd36db81ef0c65c28a9842c853ce7eaafe371927898a0057f564c1f47e"
+            },
+            "parent_world_id": "p1-base-s0042-ee65c01c07fd",
+            "preflight": {
+              "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
+              "job_id": "job-20260914T221237Z-forward-687817da-02-a1",
+              "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
+              "outputs": {
+                "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/balances.parquet": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
+                "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e"
+              },
+              "outputs_sha256": "b7fb8ec9aa7f8cddbfb7712a83ab167b66ff54b57369100fa5ebeb03aafe5068",
+              "result_sha256": "de55eef5dbe7c3a6e9eb682ba54030cf1871ac4d0eaed553380e8e42510e9777"
+            },
+            "preflight_result": {
+              "balances_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/balances.parquet",
+              "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
+              "completed_time_s": 2678400.0,
+              "connections_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/connections.parquet",
+              "cost": {
+                "accepted_steps": 8,
+                "cpu_s": 0.3097374720000019,
+                "cut_steps": 0,
+                "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+                "nonlinear_iterations": 16,
+                "output_bytes": 205461,
+                "peak_rss_bytes": 1568358400,
+                "retry_count": 0,
+                "wall_s": 0.10833887499757111
+              },
+              "job_id": "job-20260914T221237Z-forward-687817da-02-a1",
+              "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
+              "monthly_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/monthly.parquet",
+              "parent_attempt_ids": [],
+              "physics_class": "OW",
+              "reason": null,
+              "restart": null,
+              "schema_version": "forward-1",
+              "solver_metadata": {
+                "accepted_steps.parquet.path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+                "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
+                "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.67229630909024e-16}",
+                "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_meets_strict_target": "true",
+                "balance.reservoir_connections_within_spec_tolerance": "true",
+                "balance_absolute_residual_m3_sc": "{\"water\": 1.1823431123048067e-11, \"oil\": 5.748006515204906e-10}",
+                "balance_cumulative_relative": "{\"water\": 1.4879641567673934e-15, \"oil\": 1.7922745322528756e-14}",
+                "balance_headline": "full_system_surface",
+                "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance_meets_strict_target": "true",
+                "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+                "balance_within_spec_tolerance": "true",
+                "balances.parquet.sha256": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
+                "blas_threads": "1",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1403060224, \"retained_bytes\": 95732976}]",
+                "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+                "extract_schema_version": "forward-extract-2",
+                "julia_threads": "4",
+                "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "protocol_version": "worker-2",
+                "resource_profile": "P1_LOOP",
+                "result_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/result.json",
+                "result_sha256": "c0211ebcf4c503506324f89353a9f916f358bb54eee6c9db9d1304d60430ef22",
+                "solver_config_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/solver_config.json",
+                "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+                "states_path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                "states_sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                "version.HDF5": "0.17.3",
+                "version.JSON": "1.8.0",
+                "version.Jutul": "0.4.31",
+                "version.JutulDarcy": "0.3.11",
+                "version.julia": "1.12.7",
+                "worker_pid": "63099"
+              },
+              "states": {
+                "bo": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bo",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "bw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "pore_volume_m3": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pore_volume_m3",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "m3"
+                },
+                "pressure_pa": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pressure_pa",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "Pa"
+                },
+                "so": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "so",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "sw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "sw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221237Z-forward-687817da-02/job-20260914T221237Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                }
+              },
+              "status": "COMPLETE",
+              "times_s": [
+                0.0,
+                2678400.0
+              ]
+            }
+          },
+          "injector_bhp_max_pa": 19420868.445039596,
+          "injector_bhp_min_pa": 15417783.469495986,
+          "measured_wall_s": 3.937778041989077,
+          "p2_lower_completion": {
+            "open": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35
+            ],
+            "shut": [
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ]
+          },
+          "pressure_max_pa": 19516914.727447253,
+          "pressure_min_pa": 15039816.192294713,
+          "producer_bhp_max_pa": 18811682.508889675,
+          "producer_bhp_min_pa": 14358398.67565052,
+          "rate_control_relative": 2.693397995056424e-12,
+          "restart": {
+            "completed_report_step": 36,
+            "native_format": "Jutul-native"
+          },
+          "saturation_bound_violation": 0.0,
+          "saturation_sum_abs": 2.220446049250313e-15,
+          "status": "COMPLETE",
+          "sw_max": 0.7956286795442333,
+          "sw_min": 0.19966895686562322,
+          "watercut_signal": {
+            "by_producer": {
+              "P1": {
+                "maximum": 0.91290169277253,
+                "range": 0.14423149874670682,
+                "valid": true
+              },
+              "P2": {
+                "maximum": 0.9106281664571669,
+                "range": 0.1464369308687533,
+                "valid": true
+              }
+            },
+            "limitation": "Educational observability screen; does not establish inverse identifiability.",
+            "minimum_maximum": 0.05,
+            "minimum_range": 0.02,
+            "month_start": 12,
+            "passed": true,
+            "version": "p1-late-watercut-1"
+          }
         },
-        "passed": false,
+        "passed": true,
         "tolerances": {
           "balance_absolute_floor_m3_sc": 1e-06,
           "balance_cumulative_relative_max": 0.001,
@@ -142,54 +1278,617 @@
         },
         "version": "p1-physical-acceptance-1"
       },
-      "reason": "process tree holds 1310785536 bytes, at or above the measured hard cap of 1293942784; the process tree kept growing (1308606464 -> 1310785536 bytes) after being asked to stop",
+      "reason": null,
       "seed": 42,
       "split": "exploratory",
-      "status": "RESOURCE_FAILURE",
+      "status": "COMPLETE",
       "truth_ref": "artifacts/worlds/p1-base-s0042-ee65c01c07fd/truth/truth_manifest.json"
     },
     {
-      "accepted": false,
+      "accepted": true,
       "context_ref": "artifacts/worlds/p1-base-s0043-49154f5de7f5/view/full36-v1/context.json",
       "cost": {
-        "accepted_steps": 0,
-        "cpu_s": 0.0,
+        "accepted_steps": 239,
+        "cpu_s": 11.200677632000009,
         "cut_steps": 0,
-        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; solver counters unavailable: this job reported none, recorded as 0",
-        "nonlinear_iterations": 0,
-        "output_bytes": 0,
-        "peak_rss_bytes": 1326825472,
+        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+        "nonlinear_iterations": 674,
+        "output_bytes": 12574813,
+        "peak_rss_bytes": 1679572992,
         "retry_count": 0,
-        "wall_s": 12.762200083001517
+        "wall_s": 3.8970859999535605
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
       "family": "base",
       "gates": {
-        "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-        "measured_wall_s": 20.16496358398581,
-        "status": "RESOURCE_FAILURE"
+        "balance_absolute_residual_m3_sc": 0.1186263916970347,
+        "balance_cumulative_relative": 7.1356956558000516e-06,
+        "balance_max_step_relative": 3.1814105695839404e-07,
+        "balance_step_median_relative": 5.831594125813135e-09,
+        "equilibrium_preflight": {
+          "balance_absolute_residual_m3_sc": 5.384208634495735e-10,
+          "balance_cumulative_relative": 1.5412080295588212e-14,
+          "balance_max_step_relative": 1.5412080295588212e-14,
+          "balance_step_median_relative": 0.0,
+          "connection_mass_kg_s": 0.0,
+          "pressure_relative_drift": 2.7452059154157743e-12,
+          "state_saturation_drift": 3.3306690738754696e-15,
+          "status": "COMPLETE"
+        },
+        "evidence_identity": {
+          "forward": {
+            "case_sha256": "71e0fc0ea9dad1b4346f9c6d2db80dcc2bd085ee1c552f6b02b15c367d562d10",
+            "job_id": "job-20260914T221241Z-forward-687817da-04-a1",
+            "model_hash": "7f197a160591e780ac52e61578f294211242039418700bb986916d257f901217",
+            "outputs": {
+              "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/balances.parquet": "74fc7b6af61b4f1838497f7bd61d2a85e7ec30dbc018cab8682fd3d4c1bf335e",
+              "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/connections.parquet": "9a6ad5875f4b2b57daf005c387b62a96805bc9e2d29c939932557d036f76b678",
+              "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/monthly.parquet": "754ac0ba5dc789ec7d035afe0cad200f23819eba15efb90360e5c5146a1c5903",
+              "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/states.h5": "92e36fa174d7eda6c3063a10f7a3442385a38d9340437de7b1409f24a3d34d95"
+            },
+            "outputs_sha256": "0b094bbc1af7884d2dc52469b687632ca8a2cc2235fb00059dd8701b8464d025",
+            "result_sha256": "f21b4e14a291432487ba2eae61e68840ebfcefb36c67c0efb0ef6c987dfae6a1"
+          },
+          "parent_world_id": "p1-base-s0043-49154f5de7f5",
+          "preflight": {
+            "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
+            "job_id": "job-20260914T221241Z-forward-687817da-02-a1",
+            "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
+            "outputs": {
+              "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/balances.parquet": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
+              "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043"
+            },
+            "outputs_sha256": "4f10513fff24a7d35f390717af4a9746243119c4f282e493b68e669425ef4ee1",
+            "result_sha256": "60289b4bdb1e13972323eae5f173c009c3f4e517c32e0a76e4dd0e10d3df1913"
+          },
+          "preflight_result": {
+            "balances_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/balances.parquet",
+            "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
+            "completed_time_s": 2678400.0,
+            "connections_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/connections.parquet",
+            "cost": {
+              "accepted_steps": 8,
+              "cpu_s": 0.30110624000000286,
+              "cut_steps": 0,
+              "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+              "nonlinear_iterations": 16,
+              "output_bytes": 205515,
+              "peak_rss_bytes": 1635467264,
+              "retry_count": 0,
+              "wall_s": 0.10639887501019984
+            },
+            "job_id": "job-20260914T221241Z-forward-687817da-02-a1",
+            "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
+            "monthly_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/monthly.parquet",
+            "parent_attempt_ids": [],
+            "physics_class": "OW",
+            "reason": null,
+            "restart": null,
+            "schema_version": "forward-1",
+            "solver_metadata": {
+              "accepted_steps.parquet.path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+              "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
+              "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.1657921610911876e-16}",
+              "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_meets_strict_target": "true",
+              "balance.reservoir_connections_within_spec_tolerance": "true",
+              "balance_absolute_residual_m3_sc": "{\"water\": 1.2732925824820995e-11, \"oil\": 5.384208634495735e-10}",
+              "balance_cumulative_relative": "{\"water\": 1.4710618618440073e-15, \"oil\": 1.5412080295588212e-14}",
+              "balance_headline": "full_system_surface",
+              "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance_meets_strict_target": "true",
+              "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+              "balance_within_spec_tolerance": "true",
+              "balances.parquet.sha256": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
+              "blas_threads": "1",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1469857792, \"retained_bytes\": 95733536}]",
+              "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+              "extract_schema_version": "forward-extract-2",
+              "julia_threads": "4",
+              "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "protocol_version": "worker-2",
+              "resource_profile": "P1_LOOP",
+              "result_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/result.json",
+              "result_sha256": "2ec156f849dea659f37c299d973694b0b7d2403110d9717888c117cda55a43d8",
+              "solver_config_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/solver_config.json",
+              "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+              "states_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+              "states_sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+              "version.HDF5": "0.17.3",
+              "version.JSON": "1.8.0",
+              "version.Jutul": "0.4.31",
+              "version.JutulDarcy": "0.3.11",
+              "version.julia": "1.12.7",
+              "worker_pid": "63099"
+            },
+            "states": {
+              "bo": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bo",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "bw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "pore_volume_m3": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pore_volume_m3",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "m3"
+              },
+              "pressure_pa": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pressure_pa",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "Pa"
+              },
+              "so": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "so",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "sw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "sw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              }
+            },
+            "status": "COMPLETE",
+            "times_s": [
+              0.0,
+              2678400.0
+            ]
+          }
+        },
+        "injector_bhp_max_pa": 20803151.831974417,
+        "injector_bhp_min_pa": 15851302.78753296,
+        "measured_wall_s": 3.9737496669986285,
+        "p2_lower_completion": {
+          "open": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35
+          ],
+          "shut": [
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ]
+        },
+        "pressure_max_pa": 20791800.87044683,
+        "pressure_min_pa": 15039816.192294713,
+        "producer_bhp_max_pa": 20019238.150900755,
+        "producer_bhp_min_pa": 14692497.547972983,
+        "rate_control_relative": 2.4448782305723877e-16,
+        "restart": {
+          "completed_report_step": 36,
+          "native_format": "Jutul-native"
+        },
+        "saturation_bound_violation": 0.0,
+        "saturation_sum_abs": 2.220446049250313e-15,
+        "status": "COMPLETE",
+        "sw_max": 0.7957844980006373,
+        "sw_min": 0.19966701051422014,
+        "watercut_signal": {
+          "by_producer": {
+            "P1": {
+              "maximum": 0.8906368846281373,
+              "range": 0.2361270555797328,
+              "valid": true
+            },
+            "P2": {
+              "maximum": 0.8961045859220556,
+              "range": 0.2728008152381938,
+              "valid": true
+            }
+          },
+          "limitation": "Educational observability screen; does not establish inverse identifiability.",
+          "minimum_maximum": 0.05,
+          "minimum_range": 0.02,
+          "month_start": 12,
+          "passed": true,
+          "version": "p1-late-watercut-1"
+        }
       },
       "manifest_path": "artifacts/worlds/p1-base-s0043-49154f5de7f5/world_manifest.json",
       "model_hash": "7f197a160591e780ac52e61578f294211242039418700bb986916d257f901217",
       "parent_world_id": "p1-base-s0043-49154f5de7f5",
       "physical_acceptance": {
         "checks": {
-          "balance_cumulative_relative": false,
-          "balance_step_median_relative": false,
-          "complete": false,
-          "complete_evidence": false,
-          "evidence_binding": false,
-          "rate_control_relative": false,
-          "saturation_bound_violation": false,
-          "saturation_sum_abs": false
+          "balance_cumulative_relative": true,
+          "balance_step_median_relative": true,
+          "bhp": true,
+          "complete": true,
+          "completion": true,
+          "evidence_binding": true,
+          "preflight": true,
+          "pressure": true,
+          "rate_control_relative": true,
+          "restart": true,
+          "saturation_bound_violation": true,
+          "saturation_sum_abs": true,
+          "signal": true
         },
         "metrics": {
-          "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-          "measured_wall_s": 20.16496358398581,
-          "status": "RESOURCE_FAILURE"
+          "balance_absolute_residual_m3_sc": 0.1186263916970347,
+          "balance_cumulative_relative": 7.1356956558000516e-06,
+          "balance_max_step_relative": 3.1814105695839404e-07,
+          "balance_step_median_relative": 5.831594125813135e-09,
+          "equilibrium_preflight": {
+            "balance_absolute_residual_m3_sc": 5.384208634495735e-10,
+            "balance_cumulative_relative": 1.5412080295588212e-14,
+            "balance_max_step_relative": 1.5412080295588212e-14,
+            "balance_step_median_relative": 0.0,
+            "connection_mass_kg_s": 0.0,
+            "pressure_relative_drift": 2.7452059154157743e-12,
+            "state_saturation_drift": 3.3306690738754696e-15,
+            "status": "COMPLETE"
+          },
+          "evidence_identity": {
+            "forward": {
+              "case_sha256": "71e0fc0ea9dad1b4346f9c6d2db80dcc2bd085ee1c552f6b02b15c367d562d10",
+              "job_id": "job-20260914T221241Z-forward-687817da-04-a1",
+              "model_hash": "7f197a160591e780ac52e61578f294211242039418700bb986916d257f901217",
+              "outputs": {
+                "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/balances.parquet": "74fc7b6af61b4f1838497f7bd61d2a85e7ec30dbc018cab8682fd3d4c1bf335e",
+                "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/connections.parquet": "9a6ad5875f4b2b57daf005c387b62a96805bc9e2d29c939932557d036f76b678",
+                "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/monthly.parquet": "754ac0ba5dc789ec7d035afe0cad200f23819eba15efb90360e5c5146a1c5903",
+                "artifacts/runs/20260914T221241Z-forward-687817da-04/job-20260914T221241Z-forward-687817da-04-a1/states.h5": "92e36fa174d7eda6c3063a10f7a3442385a38d9340437de7b1409f24a3d34d95"
+              },
+              "outputs_sha256": "0b094bbc1af7884d2dc52469b687632ca8a2cc2235fb00059dd8701b8464d025",
+              "result_sha256": "f21b4e14a291432487ba2eae61e68840ebfcefb36c67c0efb0ef6c987dfae6a1"
+            },
+            "parent_world_id": "p1-base-s0043-49154f5de7f5",
+            "preflight": {
+              "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
+              "job_id": "job-20260914T221241Z-forward-687817da-02-a1",
+              "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
+              "outputs": {
+                "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/balances.parquet": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
+                "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043"
+              },
+              "outputs_sha256": "4f10513fff24a7d35f390717af4a9746243119c4f282e493b68e669425ef4ee1",
+              "result_sha256": "60289b4bdb1e13972323eae5f173c009c3f4e517c32e0a76e4dd0e10d3df1913"
+            },
+            "preflight_result": {
+              "balances_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/balances.parquet",
+              "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
+              "completed_time_s": 2678400.0,
+              "connections_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/connections.parquet",
+              "cost": {
+                "accepted_steps": 8,
+                "cpu_s": 0.30110624000000286,
+                "cut_steps": 0,
+                "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+                "nonlinear_iterations": 16,
+                "output_bytes": 205515,
+                "peak_rss_bytes": 1635467264,
+                "retry_count": 0,
+                "wall_s": 0.10639887501019984
+              },
+              "job_id": "job-20260914T221241Z-forward-687817da-02-a1",
+              "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
+              "monthly_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/monthly.parquet",
+              "parent_attempt_ids": [],
+              "physics_class": "OW",
+              "reason": null,
+              "restart": null,
+              "schema_version": "forward-1",
+              "solver_metadata": {
+                "accepted_steps.parquet.path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+                "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
+                "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.1657921610911876e-16}",
+                "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_meets_strict_target": "true",
+                "balance.reservoir_connections_within_spec_tolerance": "true",
+                "balance_absolute_residual_m3_sc": "{\"water\": 1.2732925824820995e-11, \"oil\": 5.384208634495735e-10}",
+                "balance_cumulative_relative": "{\"water\": 1.4710618618440073e-15, \"oil\": 1.5412080295588212e-14}",
+                "balance_headline": "full_system_surface",
+                "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance_meets_strict_target": "true",
+                "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+                "balance_within_spec_tolerance": "true",
+                "balances.parquet.sha256": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
+                "blas_threads": "1",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1469857792, \"retained_bytes\": 95733536}]",
+                "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+                "extract_schema_version": "forward-extract-2",
+                "julia_threads": "4",
+                "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "protocol_version": "worker-2",
+                "resource_profile": "P1_LOOP",
+                "result_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/result.json",
+                "result_sha256": "2ec156f849dea659f37c299d973694b0b7d2403110d9717888c117cda55a43d8",
+                "solver_config_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/solver_config.json",
+                "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+                "states_path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                "states_sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                "version.HDF5": "0.17.3",
+                "version.JSON": "1.8.0",
+                "version.Jutul": "0.4.31",
+                "version.JutulDarcy": "0.3.11",
+                "version.julia": "1.12.7",
+                "worker_pid": "63099"
+              },
+              "states": {
+                "bo": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bo",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "bw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "pore_volume_m3": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pore_volume_m3",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "m3"
+                },
+                "pressure_pa": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pressure_pa",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "Pa"
+                },
+                "so": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "so",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "sw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "sw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221241Z-forward-687817da-02/job-20260914T221241Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                }
+              },
+              "status": "COMPLETE",
+              "times_s": [
+                0.0,
+                2678400.0
+              ]
+            }
+          },
+          "injector_bhp_max_pa": 20803151.831974417,
+          "injector_bhp_min_pa": 15851302.78753296,
+          "measured_wall_s": 3.9737496669986285,
+          "p2_lower_completion": {
+            "open": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35
+            ],
+            "shut": [
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ]
+          },
+          "pressure_max_pa": 20791800.87044683,
+          "pressure_min_pa": 15039816.192294713,
+          "producer_bhp_max_pa": 20019238.150900755,
+          "producer_bhp_min_pa": 14692497.547972983,
+          "rate_control_relative": 2.4448782305723877e-16,
+          "restart": {
+            "completed_report_step": 36,
+            "native_format": "Jutul-native"
+          },
+          "saturation_bound_violation": 0.0,
+          "saturation_sum_abs": 2.220446049250313e-15,
+          "status": "COMPLETE",
+          "sw_max": 0.7957844980006373,
+          "sw_min": 0.19966701051422014,
+          "watercut_signal": {
+            "by_producer": {
+              "P1": {
+                "maximum": 0.8906368846281373,
+                "range": 0.2361270555797328,
+                "valid": true
+              },
+              "P2": {
+                "maximum": 0.8961045859220556,
+                "range": 0.2728008152381938,
+                "valid": true
+              }
+            },
+            "limitation": "Educational observability screen; does not establish inverse identifiability.",
+            "minimum_maximum": 0.05,
+            "minimum_range": 0.02,
+            "month_start": 12,
+            "passed": true,
+            "version": "p1-late-watercut-1"
+          }
         },
-        "passed": false,
+        "passed": true,
         "tolerances": {
           "balance_absolute_floor_m3_sc": 1e-06,
           "balance_cumulative_relative_max": 0.001,
@@ -218,54 +1917,617 @@
         },
         "version": "p1-physical-acceptance-1"
       },
-      "reason": "process tree holds 1326825472 bytes, at or above the measured hard cap of 1000816640; the process tree kept growing (1325203456 -> 1326825472 bytes) after being asked to stop",
+      "reason": null,
       "seed": 43,
       "split": "exploratory",
-      "status": "RESOURCE_FAILURE",
+      "status": "COMPLETE",
       "truth_ref": "artifacts/worlds/p1-base-s0043-49154f5de7f5/truth/truth_manifest.json"
     },
     {
-      "accepted": false,
+      "accepted": true,
       "context_ref": "artifacts/worlds/p1-low_vertical-s0044-6df18cc959fc/view/full36-v1/context.json",
       "cost": {
-        "accepted_steps": 0,
-        "cpu_s": 0.0,
+        "accepted_steps": 239,
+        "cpu_s": 11.383661503999988,
         "cut_steps": 0,
-        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; solver counters unavailable: this job reported none, recorded as 0",
-        "nonlinear_iterations": 0,
-        "output_bytes": 0,
-        "peak_rss_bytes": 1286094848,
+        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+        "nonlinear_iterations": 706,
+        "output_bytes": 12569499,
+        "peak_rss_bytes": 1680064512,
         "retry_count": 0,
-        "wall_s": 7.213066208991222
+        "wall_s": 3.9794679589685984
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
       "family": "low_vertical",
       "gates": {
-        "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-        "measured_wall_s": 14.629559457942378,
-        "status": "RESOURCE_FAILURE"
+        "balance_absolute_residual_m3_sc": 0.014087921932514291,
+        "balance_cumulative_relative": 6.974798197129742e-07,
+        "balance_max_step_relative": 3.278631563699866e-07,
+        "balance_step_median_relative": 2.341875341788964e-09,
+        "equilibrium_preflight": {
+          "balance_absolute_residual_m3_sc": 5.529727786779404e-10,
+          "balance_cumulative_relative": 1.5337758098529715e-14,
+          "balance_max_step_relative": 1.5337758098529715e-14,
+          "balance_step_median_relative": 0.0,
+          "connection_mass_kg_s": 0.0,
+          "pressure_relative_drift": 0.0,
+          "state_saturation_drift": 0.0,
+          "status": "COMPLETE"
+        },
+        "evidence_identity": {
+          "forward": {
+            "case_sha256": "5727bc8ddee3e371a7c5ccc7a774ff4c85d170c4555fa7c2e209cd08e876aec0",
+            "job_id": "job-20260914T221245Z-forward-687817da-04-a1",
+            "model_hash": "155932024faae49f5e6c5da3b7d1fb3a7106c840976d2ea9f32c3d642f71219b",
+            "outputs": {
+              "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/balances.parquet": "4c46898fb9c5a2da69706d4e745747d607cba6533414aada9099dd2c35be4fbb",
+              "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/connections.parquet": "67a236f277b5def04e5667d430ffeb9a2c8debb3ad3c5b11c96ccf5f2a34f51b",
+              "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/monthly.parquet": "6377694696f086c09c0db2ade335814b4c9af1bf330c365c391484c0a8c0ca07",
+              "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/states.h5": "9d24e00c037626083df1be6b4e8dda58f3cf033d08fccfb73dcef9e9e26441ae"
+            },
+            "outputs_sha256": "3e80745d0f06d46042f39eca323badd7683b337d76b2f3ca001356e127c6e20c",
+            "result_sha256": "683d49fdd7b6cb703ea8095b8e447459f5c83fff1e62cf859326b325a5eaf8a9"
+          },
+          "parent_world_id": "p1-low_vertical-s0044-6df18cc959fc",
+          "preflight": {
+            "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
+            "job_id": "job-20260914T221245Z-forward-687817da-02-a1",
+            "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
+            "outputs": {
+              "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/balances.parquet": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
+              "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983"
+            },
+            "outputs_sha256": "1b864441c98a64f4380a20110df85baafb322aafcb4d1fa2e48c157623a2cb5c",
+            "result_sha256": "4c11f997f84957b7437e1304d8b113db35ab59585c4fcbbbcce209f94b0366cb"
+          },
+          "preflight_result": {
+            "balances_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/balances.parquet",
+            "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
+            "completed_time_s": 2678400.0,
+            "connections_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/connections.parquet",
+            "cost": {
+              "accepted_steps": 8,
+              "cpu_s": 0.3007720960000029,
+              "cut_steps": 0,
+              "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+              "nonlinear_iterations": 16,
+              "output_bytes": 190307,
+              "peak_rss_bytes": 1679769600,
+              "retry_count": 0,
+              "wall_s": 0.10713508300250396
+            },
+            "job_id": "job-20260914T221245Z-forward-687817da-02-a1",
+            "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
+            "monthly_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/monthly.parquet",
+            "parent_attempt_ids": [],
+            "physics_class": "OW",
+            "reason": null,
+            "restart": null,
+            "schema_version": "forward-1",
+            "solver_metadata": {
+              "accepted_steps.parquet.path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+              "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_meets_strict_target": "true",
+              "balance.reservoir_connections_within_spec_tolerance": "true",
+              "balance_absolute_residual_m3_sc": "{\"water\": 1.2732925824820995e-11, \"oil\": 5.529727786779404e-10}",
+              "balance_cumulative_relative": "{\"water\": 1.425439134462856e-15, \"oil\": 1.5337758098529715e-14}",
+              "balance_headline": "full_system_surface",
+              "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance_meets_strict_target": "true",
+              "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+              "balance_within_spec_tolerance": "true",
+              "balances.parquet.sha256": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
+              "blas_threads": "1",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1513963520, \"retained_bytes\": 95733568}]",
+              "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+              "extract_schema_version": "forward-extract-2",
+              "julia_threads": "4",
+              "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "protocol_version": "worker-2",
+              "resource_profile": "P1_LOOP",
+              "result_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/result.json",
+              "result_sha256": "a16d56bcbf28b85bf07f3ad08ce4f039bdc775d98488b54d5d2dfcf28e766d13",
+              "solver_config_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/solver_config.json",
+              "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+              "states_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+              "states_sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+              "version.HDF5": "0.17.3",
+              "version.JSON": "1.8.0",
+              "version.Jutul": "0.4.31",
+              "version.JutulDarcy": "0.3.11",
+              "version.julia": "1.12.7",
+              "worker_pid": "63099"
+            },
+            "states": {
+              "bo": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bo",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "bw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "pore_volume_m3": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pore_volume_m3",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "m3"
+              },
+              "pressure_pa": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pressure_pa",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "Pa"
+              },
+              "so": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "so",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "sw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "sw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              }
+            },
+            "status": "COMPLETE",
+            "times_s": [
+              0.0,
+              2678400.0
+            ]
+          }
+        },
+        "injector_bhp_max_pa": 20358679.77444236,
+        "injector_bhp_min_pa": 15316348.226450391,
+        "measured_wall_s": 4.056872583983932,
+        "p2_lower_completion": {
+          "open": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35
+          ],
+          "shut": [
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ]
+        },
+        "pressure_max_pa": 20422215.007699177,
+        "pressure_min_pa": 15039816.192294713,
+        "producer_bhp_max_pa": 19509469.54549925,
+        "producer_bhp_min_pa": 14619849.43335094,
+        "rate_control_relative": 1.8336586729292908e-16,
+        "restart": {
+          "completed_report_step": 36,
+          "native_format": "Jutul-native"
+        },
+        "saturation_bound_violation": 0.0,
+        "saturation_sum_abs": 2.6645352591003757e-15,
+        "status": "COMPLETE",
+        "sw_max": 0.7959154159622925,
+        "sw_min": 0.19959719437142476,
+        "watercut_signal": {
+          "by_producer": {
+            "P1": {
+              "maximum": 0.8426696696284759,
+              "range": 0.07974290204700951,
+              "valid": true
+            },
+            "P2": {
+              "maximum": 0.8783032468281632,
+              "range": 0.33195801824505,
+              "valid": true
+            }
+          },
+          "limitation": "Educational observability screen; does not establish inverse identifiability.",
+          "minimum_maximum": 0.05,
+          "minimum_range": 0.02,
+          "month_start": 12,
+          "passed": true,
+          "version": "p1-late-watercut-1"
+        }
       },
       "manifest_path": "artifacts/worlds/p1-low_vertical-s0044-6df18cc959fc/world_manifest.json",
       "model_hash": "155932024faae49f5e6c5da3b7d1fb3a7106c840976d2ea9f32c3d642f71219b",
       "parent_world_id": "p1-low_vertical-s0044-6df18cc959fc",
       "physical_acceptance": {
         "checks": {
-          "balance_cumulative_relative": false,
-          "balance_step_median_relative": false,
-          "complete": false,
-          "complete_evidence": false,
-          "evidence_binding": false,
-          "rate_control_relative": false,
-          "saturation_bound_violation": false,
-          "saturation_sum_abs": false
+          "balance_cumulative_relative": true,
+          "balance_step_median_relative": true,
+          "bhp": true,
+          "complete": true,
+          "completion": true,
+          "evidence_binding": true,
+          "preflight": true,
+          "pressure": true,
+          "rate_control_relative": true,
+          "restart": true,
+          "saturation_bound_violation": true,
+          "saturation_sum_abs": true,
+          "signal": true
         },
         "metrics": {
-          "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-          "measured_wall_s": 14.629559457942378,
-          "status": "RESOURCE_FAILURE"
+          "balance_absolute_residual_m3_sc": 0.014087921932514291,
+          "balance_cumulative_relative": 6.974798197129742e-07,
+          "balance_max_step_relative": 3.278631563699866e-07,
+          "balance_step_median_relative": 2.341875341788964e-09,
+          "equilibrium_preflight": {
+            "balance_absolute_residual_m3_sc": 5.529727786779404e-10,
+            "balance_cumulative_relative": 1.5337758098529715e-14,
+            "balance_max_step_relative": 1.5337758098529715e-14,
+            "balance_step_median_relative": 0.0,
+            "connection_mass_kg_s": 0.0,
+            "pressure_relative_drift": 0.0,
+            "state_saturation_drift": 0.0,
+            "status": "COMPLETE"
+          },
+          "evidence_identity": {
+            "forward": {
+              "case_sha256": "5727bc8ddee3e371a7c5ccc7a774ff4c85d170c4555fa7c2e209cd08e876aec0",
+              "job_id": "job-20260914T221245Z-forward-687817da-04-a1",
+              "model_hash": "155932024faae49f5e6c5da3b7d1fb3a7106c840976d2ea9f32c3d642f71219b",
+              "outputs": {
+                "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/balances.parquet": "4c46898fb9c5a2da69706d4e745747d607cba6533414aada9099dd2c35be4fbb",
+                "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/connections.parquet": "67a236f277b5def04e5667d430ffeb9a2c8debb3ad3c5b11c96ccf5f2a34f51b",
+                "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/monthly.parquet": "6377694696f086c09c0db2ade335814b4c9af1bf330c365c391484c0a8c0ca07",
+                "artifacts/runs/20260914T221245Z-forward-687817da-04/job-20260914T221245Z-forward-687817da-04-a1/states.h5": "9d24e00c037626083df1be6b4e8dda58f3cf033d08fccfb73dcef9e9e26441ae"
+              },
+              "outputs_sha256": "3e80745d0f06d46042f39eca323badd7683b337d76b2f3ca001356e127c6e20c",
+              "result_sha256": "683d49fdd7b6cb703ea8095b8e447459f5c83fff1e62cf859326b325a5eaf8a9"
+            },
+            "parent_world_id": "p1-low_vertical-s0044-6df18cc959fc",
+            "preflight": {
+              "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
+              "job_id": "job-20260914T221245Z-forward-687817da-02-a1",
+              "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
+              "outputs": {
+                "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/balances.parquet": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
+                "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983"
+              },
+              "outputs_sha256": "1b864441c98a64f4380a20110df85baafb322aafcb4d1fa2e48c157623a2cb5c",
+              "result_sha256": "4c11f997f84957b7437e1304d8b113db35ab59585c4fcbbbcce209f94b0366cb"
+            },
+            "preflight_result": {
+              "balances_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/balances.parquet",
+              "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
+              "completed_time_s": 2678400.0,
+              "connections_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/connections.parquet",
+              "cost": {
+                "accepted_steps": 8,
+                "cpu_s": 0.3007720960000029,
+                "cut_steps": 0,
+                "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+                "nonlinear_iterations": 16,
+                "output_bytes": 190307,
+                "peak_rss_bytes": 1679769600,
+                "retry_count": 0,
+                "wall_s": 0.10713508300250396
+              },
+              "job_id": "job-20260914T221245Z-forward-687817da-02-a1",
+              "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
+              "monthly_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/monthly.parquet",
+              "parent_attempt_ids": [],
+              "physics_class": "OW",
+              "reason": null,
+              "restart": null,
+              "schema_version": "forward-1",
+              "solver_metadata": {
+                "accepted_steps.parquet.path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+                "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_meets_strict_target": "true",
+                "balance.reservoir_connections_within_spec_tolerance": "true",
+                "balance_absolute_residual_m3_sc": "{\"water\": 1.2732925824820995e-11, \"oil\": 5.529727786779404e-10}",
+                "balance_cumulative_relative": "{\"water\": 1.425439134462856e-15, \"oil\": 1.5337758098529715e-14}",
+                "balance_headline": "full_system_surface",
+                "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance_meets_strict_target": "true",
+                "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+                "balance_within_spec_tolerance": "true",
+                "balances.parquet.sha256": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
+                "blas_threads": "1",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1513963520, \"retained_bytes\": 95733568}]",
+                "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+                "extract_schema_version": "forward-extract-2",
+                "julia_threads": "4",
+                "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "protocol_version": "worker-2",
+                "resource_profile": "P1_LOOP",
+                "result_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/result.json",
+                "result_sha256": "a16d56bcbf28b85bf07f3ad08ce4f039bdc775d98488b54d5d2dfcf28e766d13",
+                "solver_config_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/solver_config.json",
+                "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+                "states_path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                "states_sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                "version.HDF5": "0.17.3",
+                "version.JSON": "1.8.0",
+                "version.Jutul": "0.4.31",
+                "version.JutulDarcy": "0.3.11",
+                "version.julia": "1.12.7",
+                "worker_pid": "63099"
+              },
+              "states": {
+                "bo": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bo",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "bw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "pore_volume_m3": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pore_volume_m3",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "m3"
+                },
+                "pressure_pa": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pressure_pa",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "Pa"
+                },
+                "so": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "so",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "sw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "sw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221245Z-forward-687817da-02/job-20260914T221245Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                }
+              },
+              "status": "COMPLETE",
+              "times_s": [
+                0.0,
+                2678400.0
+              ]
+            }
+          },
+          "injector_bhp_max_pa": 20358679.77444236,
+          "injector_bhp_min_pa": 15316348.226450391,
+          "measured_wall_s": 4.056872583983932,
+          "p2_lower_completion": {
+            "open": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35
+            ],
+            "shut": [
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ]
+          },
+          "pressure_max_pa": 20422215.007699177,
+          "pressure_min_pa": 15039816.192294713,
+          "producer_bhp_max_pa": 19509469.54549925,
+          "producer_bhp_min_pa": 14619849.43335094,
+          "rate_control_relative": 1.8336586729292908e-16,
+          "restart": {
+            "completed_report_step": 36,
+            "native_format": "Jutul-native"
+          },
+          "saturation_bound_violation": 0.0,
+          "saturation_sum_abs": 2.6645352591003757e-15,
+          "status": "COMPLETE",
+          "sw_max": 0.7959154159622925,
+          "sw_min": 0.19959719437142476,
+          "watercut_signal": {
+            "by_producer": {
+              "P1": {
+                "maximum": 0.8426696696284759,
+                "range": 0.07974290204700951,
+                "valid": true
+              },
+              "P2": {
+                "maximum": 0.8783032468281632,
+                "range": 0.33195801824505,
+                "valid": true
+              }
+            },
+            "limitation": "Educational observability screen; does not establish inverse identifiability.",
+            "minimum_maximum": 0.05,
+            "minimum_range": 0.02,
+            "month_start": 12,
+            "passed": true,
+            "version": "p1-late-watercut-1"
+          }
         },
-        "passed": false,
+        "passed": true,
         "tolerances": {
           "balance_absolute_floor_m3_sc": 1e-06,
           "balance_cumulative_relative_max": 0.001,
@@ -294,54 +2556,617 @@
         },
         "version": "p1-physical-acceptance-1"
       },
-      "reason": "process tree holds 1286094848 bytes, at or above the measured hard cap of 1035354112; the process tree kept growing (1284096000 -> 1286094848 bytes) after being asked to stop",
+      "reason": null,
       "seed": 44,
       "split": "exploratory",
-      "status": "RESOURCE_FAILURE",
+      "status": "COMPLETE",
       "truth_ref": "artifacts/worlds/p1-low_vertical-s0044-6df18cc959fc/truth/truth_manifest.json"
     },
     {
-      "accepted": false,
+      "accepted": true,
       "context_ref": "artifacts/worlds/p1-high_contrast-s0045-26e1b8109b42/view/full36-v1/context.json",
       "cost": {
-        "accepted_steps": 0,
-        "cpu_s": 0.0,
+        "accepted_steps": 239,
+        "cpu_s": 11.280662528000008,
         "cut_steps": 0,
-        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; solver counters unavailable: this job reported none, recorded as 0",
-        "nonlinear_iterations": 0,
-        "output_bytes": 0,
-        "peak_rss_bytes": 1300086784,
+        "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+        "nonlinear_iterations": 691,
+        "output_bytes": 12572396,
+        "peak_rss_bytes": 1680130048,
         "retry_count": 0,
-        "wall_s": 2.643459874961991
+        "wall_s": 3.943740166956559
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
       "family": "high_contrast",
       "gates": {
-        "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-        "measured_wall_s": 10.040870500029996,
-        "status": "RESOURCE_FAILURE"
+        "balance_absolute_residual_m3_sc": 0.027430534280938446,
+        "balance_cumulative_relative": 1.8133774088912191e-06,
+        "balance_max_step_relative": 3.131400522894929e-07,
+        "balance_step_median_relative": 4.125704485393949e-09,
+        "equilibrium_preflight": {
+          "balance_absolute_residual_m3_sc": 5.711626727133989e-10,
+          "balance_cumulative_relative": 1.766605522245489e-14,
+          "balance_max_step_relative": 1.766605522245489e-14,
+          "balance_step_median_relative": 0.0,
+          "connection_mass_kg_s": 0.0,
+          "pressure_relative_drift": 2.525626248706029e-12,
+          "state_saturation_drift": 3.1086244689504383e-15,
+          "status": "COMPLETE"
+        },
+        "evidence_identity": {
+          "forward": {
+            "case_sha256": "7315457859cec64b83442776df3f2b7e2e4247874f675ec20c99bb4324b911aa",
+            "job_id": "job-20260914T221250Z-forward-687817da-01-a1",
+            "model_hash": "a592f6ec42b00f31dc67b1495a45ec182c26bc899ecc6dc6fa596a426c0b112f",
+            "outputs": {
+              "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/balances.parquet": "cbe12024bb4a31b705b99cda82f07f250da96d13854dc02820a11ac5bb27ee92",
+              "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/connections.parquet": "ad53955ff689895a9cdf54746503cd5b4c9626342e90c0ab5270e13d398f20f2",
+              "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/monthly.parquet": "a031f445376d225ba6c0785c85e9175829a6e7e7e2df1ec96a4b506357175597",
+              "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/states.h5": "3da202d64a0785d0a178942a5a56f40b370d9bf21a6dc974d18231a6cfd3f05a"
+            },
+            "outputs_sha256": "bdab90eaa8da6bc72afdd9b145b7d69cd39e5667797b00c802debb7fede4910e",
+            "result_sha256": "57aed829aa65ebdc4c997da1813289ff27a8545bad217754ba009b6e7e390997"
+          },
+          "parent_world_id": "p1-high_contrast-s0045-26e1b8109b42",
+          "preflight": {
+            "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
+            "job_id": "job-20260914T221249Z-forward-687817da-02-a1",
+            "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
+            "outputs": {
+              "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/balances.parquet": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
+              "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3"
+            },
+            "outputs_sha256": "72a8c45d4a6ec09041ffcbc76757cba32c214dc0dc270a67fdedd1fbd0d3c8a5",
+            "result_sha256": "354570aa1a893ca77b9af407f46b258a1652209628a1cff34fc8d1fe716e645a"
+          },
+          "preflight_result": {
+            "balances_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/balances.parquet",
+            "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
+            "completed_time_s": 2678400.0,
+            "connections_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/connections.parquet",
+            "cost": {
+              "accepted_steps": 8,
+              "cpu_s": 0.30276659199998335,
+              "cut_steps": 0,
+              "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+              "nonlinear_iterations": 16,
+              "output_bytes": 205387,
+              "peak_rss_bytes": 1679982592,
+              "retry_count": 0,
+              "wall_s": 0.10727987496647984
+            },
+            "job_id": "job-20260914T221249Z-forward-687817da-02-a1",
+            "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
+            "monthly_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/monthly.parquet",
+            "parent_attempt_ids": [],
+            "physics_class": "OW",
+            "reason": null,
+            "restart": null,
+            "schema_version": "forward-1",
+            "solver_metadata": {
+              "accepted_steps.parquet.path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+              "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
+              "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.501332016352526e-16}",
+              "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance.reservoir_connections_meets_strict_target": "true",
+              "balance.reservoir_connections_within_spec_tolerance": "true",
+              "balance_absolute_residual_m3_sc": "{\"water\": 1.1823431123048067e-11, \"oil\": 5.711626727133989e-10}",
+              "balance_cumulative_relative": "{\"water\": 1.4759998760306844e-15, \"oil\": 1.766605522245489e-14}",
+              "balance_headline": "full_system_surface",
+              "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+              "balance_meets_strict_target": "true",
+              "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+              "balance_within_spec_tolerance": "true",
+              "balances.parquet.sha256": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
+              "blas_threads": "1",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1514061824, \"retained_bytes\": 95732752}]",
+              "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+              "extract_schema_version": "forward-extract-2",
+              "julia_threads": "4",
+              "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "protocol_version": "worker-2",
+              "resource_profile": "P1_LOOP",
+              "result_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/result.json",
+              "result_sha256": "efa014bbfdf07d723664c1fe1001842970bb942694bd32016c28f2c6a445b5d6",
+              "solver_config_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/solver_config.json",
+              "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+              "states_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+              "states_sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+              "version.HDF5": "0.17.3",
+              "version.JSON": "1.8.0",
+              "version.Jutul": "0.4.31",
+              "version.JutulDarcy": "0.3.11",
+              "version.julia": "1.12.7",
+              "worker_pid": "63099"
+            },
+            "states": {
+              "bo": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bo",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "bw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "bw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "pore_volume_m3": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pore_volume_m3",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "m3"
+              },
+              "pressure_pa": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "pressure_pa",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "Pa"
+              },
+              "so": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "so",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              },
+              "sw": {
+                "axis_order": [
+                  "time",
+                  "cell"
+                ],
+                "dataset": "sw",
+                "dtype": "float64",
+                "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "shape": [
+                  2,
+                  512
+                ],
+                "unit": "1"
+              }
+            },
+            "status": "COMPLETE",
+            "times_s": [
+              0.0,
+              2678400.0
+            ]
+          }
+        },
+        "injector_bhp_max_pa": 20708958.77015683,
+        "injector_bhp_min_pa": 15591550.807815714,
+        "measured_wall_s": 4.026296459021978,
+        "p2_lower_completion": {
+          "open": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35
+          ],
+          "shut": [
+            18,
+            19,
+            20,
+            21,
+            22,
+            23
+          ]
+        },
+        "pressure_max_pa": 20751770.000101574,
+        "pressure_min_pa": 15039816.192294713,
+        "producer_bhp_max_pa": 19193311.8874263,
+        "producer_bhp_min_pa": 10671347.396822326,
+        "rate_control_relative": 2.9338538766868653e-16,
+        "restart": {
+          "completed_report_step": 36,
+          "native_format": "Jutul-native"
+        },
+        "saturation_bound_violation": 0.0,
+        "saturation_sum_abs": 2.3314683517128287e-15,
+        "status": "COMPLETE",
+        "sw_max": 0.7955995555442587,
+        "sw_min": 0.1996079631364175,
+        "watercut_signal": {
+          "by_producer": {
+            "P1": {
+              "maximum": 0.9202796144608798,
+              "range": 0.26915133369871114,
+              "valid": true
+            },
+            "P2": {
+              "maximum": 0.8766368438698322,
+              "range": 0.13826744533904278,
+              "valid": true
+            }
+          },
+          "limitation": "Educational observability screen; does not establish inverse identifiability.",
+          "minimum_maximum": 0.05,
+          "minimum_range": 0.02,
+          "month_start": 12,
+          "passed": true,
+          "version": "p1-late-watercut-1"
+        }
       },
       "manifest_path": "artifacts/worlds/p1-high_contrast-s0045-26e1b8109b42/world_manifest.json",
       "model_hash": "a592f6ec42b00f31dc67b1495a45ec182c26bc899ecc6dc6fa596a426c0b112f",
       "parent_world_id": "p1-high_contrast-s0045-26e1b8109b42",
       "physical_acceptance": {
         "checks": {
-          "balance_cumulative_relative": false,
-          "balance_step_median_relative": false,
-          "complete": false,
-          "complete_evidence": false,
-          "evidence_binding": false,
-          "rate_control_relative": false,
-          "saturation_bound_violation": false,
-          "saturation_sum_abs": false
+          "balance_cumulative_relative": true,
+          "balance_step_median_relative": true,
+          "bhp": true,
+          "complete": true,
+          "completion": true,
+          "evidence_binding": true,
+          "preflight": true,
+          "pressure": true,
+          "rate_control_relative": true,
+          "restart": true,
+          "saturation_bound_violation": true,
+          "saturation_sum_abs": true,
+          "signal": true
         },
         "metrics": {
-          "evidence_error": "ValueError: physical evidence is not bound to this world's forward and preflight",
-          "measured_wall_s": 10.040870500029996,
-          "status": "RESOURCE_FAILURE"
+          "balance_absolute_residual_m3_sc": 0.027430534280938446,
+          "balance_cumulative_relative": 1.8133774088912191e-06,
+          "balance_max_step_relative": 3.131400522894929e-07,
+          "balance_step_median_relative": 4.125704485393949e-09,
+          "equilibrium_preflight": {
+            "balance_absolute_residual_m3_sc": 5.711626727133989e-10,
+            "balance_cumulative_relative": 1.766605522245489e-14,
+            "balance_max_step_relative": 1.766605522245489e-14,
+            "balance_step_median_relative": 0.0,
+            "connection_mass_kg_s": 0.0,
+            "pressure_relative_drift": 2.525626248706029e-12,
+            "state_saturation_drift": 3.1086244689504383e-15,
+            "status": "COMPLETE"
+          },
+          "evidence_identity": {
+            "forward": {
+              "case_sha256": "7315457859cec64b83442776df3f2b7e2e4247874f675ec20c99bb4324b911aa",
+              "job_id": "job-20260914T221250Z-forward-687817da-01-a1",
+              "model_hash": "a592f6ec42b00f31dc67b1495a45ec182c26bc899ecc6dc6fa596a426c0b112f",
+              "outputs": {
+                "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/balances.parquet": "cbe12024bb4a31b705b99cda82f07f250da96d13854dc02820a11ac5bb27ee92",
+                "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/connections.parquet": "ad53955ff689895a9cdf54746503cd5b4c9626342e90c0ab5270e13d398f20f2",
+                "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/monthly.parquet": "a031f445376d225ba6c0785c85e9175829a6e7e7e2df1ec96a4b506357175597",
+                "artifacts/runs/20260914T221250Z-forward-687817da-01/job-20260914T221250Z-forward-687817da-01-a1/states.h5": "3da202d64a0785d0a178942a5a56f40b370d9bf21a6dc974d18231a6cfd3f05a"
+              },
+              "outputs_sha256": "bdab90eaa8da6bc72afdd9b145b7d69cd39e5667797b00c802debb7fede4910e",
+              "result_sha256": "57aed829aa65ebdc4c997da1813289ff27a8545bad217754ba009b6e7e390997"
+            },
+            "parent_world_id": "p1-high_contrast-s0045-26e1b8109b42",
+            "preflight": {
+              "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
+              "job_id": "job-20260914T221249Z-forward-687817da-02-a1",
+              "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
+              "outputs": {
+                "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/balances.parquet": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
+                "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3"
+              },
+              "outputs_sha256": "72a8c45d4a6ec09041ffcbc76757cba32c214dc0dc270a67fdedd1fbd0d3c8a5",
+              "result_sha256": "354570aa1a893ca77b9af407f46b258a1652209628a1cff34fc8d1fe716e645a"
+            },
+            "preflight_result": {
+              "balances_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/balances.parquet",
+              "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
+              "completed_time_s": 2678400.0,
+              "connections_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/connections.parquet",
+              "cost": {
+                "accepted_steps": 8,
+                "cpu_s": 0.30276659199998335,
+                "cut_steps": 0,
+                "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
+                "nonlinear_iterations": 16,
+                "output_bytes": 205387,
+                "peak_rss_bytes": 1679982592,
+                "retry_count": 0,
+                "wall_s": 0.10727987496647984
+              },
+              "job_id": "job-20260914T221249Z-forward-687817da-02-a1",
+              "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
+              "monthly_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/monthly.parquet",
+              "parent_attempt_ids": [],
+              "physics_class": "OW",
+              "reason": null,
+              "restart": null,
+              "schema_version": "forward-1",
+              "solver_metadata": {
+                "accepted_steps.parquet.path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
+                "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
+                "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.501332016352526e-16}",
+                "balance.reservoir_connections_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance.reservoir_connections_meets_strict_target": "true",
+                "balance.reservoir_connections_within_spec_tolerance": "true",
+                "balance_absolute_residual_m3_sc": "{\"water\": 1.1823431123048067e-11, \"oil\": 5.711626727133989e-10}",
+                "balance_cumulative_relative": "{\"water\": 1.4759998760306844e-15, \"oil\": 1.766605522245489e-14}",
+                "balance_headline": "full_system_surface",
+                "balance_median_step_relative": "{\"water\": 0.0, \"oil\": 0.0}",
+                "balance_meets_strict_target": "true",
+                "balance_systems": "[\"full_system_surface\", \"reservoir_connections\"]",
+                "balance_within_spec_tolerance": "true",
+                "balances.parquet.sha256": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
+                "blas_threads": "1",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1514061824, \"retained_bytes\": 95732752}]",
+                "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "environment_lock_hash": "bcd77c49fb201b1efc7573a81b77e073f45b1b36ad7dc3644d66a055cff820ad",
+                "extract_schema_version": "forward-extract-2",
+                "julia_threads": "4",
+                "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "protocol_version": "worker-2",
+                "resource_profile": "P1_LOOP",
+                "result_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/result.json",
+                "result_sha256": "efa014bbfdf07d723664c1fe1001842970bb942694bd32016c28f2c6a445b5d6",
+                "solver_config_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/solver_config.json",
+                "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
+                "states_path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                "states_sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                "version.HDF5": "0.17.3",
+                "version.JSON": "1.8.0",
+                "version.Jutul": "0.4.31",
+                "version.JutulDarcy": "0.3.11",
+                "version.julia": "1.12.7",
+                "worker_pid": "63099"
+              },
+              "states": {
+                "bo": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bo",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "bw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "bw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "pore_volume_m3": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pore_volume_m3",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "m3"
+                },
+                "pressure_pa": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "pressure_pa",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "Pa"
+                },
+                "so": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "so",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                },
+                "sw": {
+                  "axis_order": [
+                    "time",
+                    "cell"
+                  ],
+                  "dataset": "sw",
+                  "dtype": "float64",
+                  "path": "artifacts/runs/20260914T221249Z-forward-687817da-02/job-20260914T221249Z-forward-687817da-02-a1/states.h5",
+                  "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
+                  "shape": [
+                    2,
+                    512
+                  ],
+                  "unit": "1"
+                }
+              },
+              "status": "COMPLETE",
+              "times_s": [
+                0.0,
+                2678400.0
+              ]
+            }
+          },
+          "injector_bhp_max_pa": 20708958.77015683,
+          "injector_bhp_min_pa": 15591550.807815714,
+          "measured_wall_s": 4.026296459021978,
+          "p2_lower_completion": {
+            "open": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35
+            ],
+            "shut": [
+              18,
+              19,
+              20,
+              21,
+              22,
+              23
+            ]
+          },
+          "pressure_max_pa": 20751770.000101574,
+          "pressure_min_pa": 15039816.192294713,
+          "producer_bhp_max_pa": 19193311.8874263,
+          "producer_bhp_min_pa": 10671347.396822326,
+          "rate_control_relative": 2.9338538766868653e-16,
+          "restart": {
+            "completed_report_step": 36,
+            "native_format": "Jutul-native"
+          },
+          "saturation_bound_violation": 0.0,
+          "saturation_sum_abs": 2.3314683517128287e-15,
+          "status": "COMPLETE",
+          "sw_max": 0.7955995555442587,
+          "sw_min": 0.1996079631364175,
+          "watercut_signal": {
+            "by_producer": {
+              "P1": {
+                "maximum": 0.9202796144608798,
+                "range": 0.26915133369871114,
+                "valid": true
+              },
+              "P2": {
+                "maximum": 0.8766368438698322,
+                "range": 0.13826744533904278,
+                "valid": true
+              }
+            },
+            "limitation": "Educational observability screen; does not establish inverse identifiability.",
+            "minimum_maximum": 0.05,
+            "minimum_range": 0.02,
+            "month_start": 12,
+            "passed": true,
+            "version": "p1-late-watercut-1"
+          }
         },
-        "passed": false,
+        "passed": true,
         "tolerances": {
           "balance_absolute_floor_m3_sc": 1e-06,
           "balance_cumulative_relative_max": 0.001,
@@ -370,10 +3195,10 @@
         },
         "version": "p1-physical-acceptance-1"
       },
-      "reason": "process tree holds 1300086784 bytes, at or above the measured hard cap of 1051918336; the process tree kept growing (1297711104 -> 1300086784 bytes) after being asked to stop",
+      "reason": null,
       "seed": 45,
       "split": "exploratory",
-      "status": "RESOURCE_FAILURE",
+      "status": "COMPLETE",
       "truth_ref": "artifacts/worlds/p1-high_contrast-s0045-26e1b8109b42/truth/truth_manifest.json"
     }
   ],
