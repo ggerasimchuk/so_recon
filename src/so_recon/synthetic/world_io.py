@@ -6,6 +6,7 @@ file layout, not of anyone's discipline:
 
     artifacts/worlds/<parent_world_id>/
         grid.h5                          geometry: public
+        truth/case.json                  the CaseBundle the solver was given
         truth/geology.h5                 full-field porosity, permeability, latent field
         truth/initial.h5                 the initial pressure and saturation
         truth/theta.json                 the generator's parameters
@@ -17,7 +18,12 @@ file layout, not of anyone's discipline:
         world_manifest.json
 
 The `CaseBundle` the solver is given references `truth/geology.h5` and `truth/initial.h5`,
-because a forward operator cannot run without the full rock and the full initial state.
+because a forward operator cannot run without the full rock and the full initial state. It
+is published as `truth/case.json` and named by the world manifest's `case_ref`, so a world
+always says which input it was run from — and the result's `model_hash` and `case_sha256`
+are checked against that case before anything is written, so a manifest cannot attest a
+forward that belongs to another world.
+
 That bundle is never handed to an encoder. What an encoder is handed is `context.json`, and
 `context_payload` is the ONLY way its content is produced: it is an allowlist projection of
 the world manifest, so a field that is not in `CONTEXT_ALLOWLIST` cannot reach the file
@@ -58,7 +64,9 @@ from so_recon.registry.run import RunContext
 from so_recon.simulator.case_io import (
     CASE_MANIFEST_FILENAME,
     cartesian_neighbors,
+    case_array_refs,
     compute_model_hash,
+    register_array,
     validate_case,
     write_arrays,
 )
@@ -150,13 +158,20 @@ class FileRef(StrictModel):
     size_bytes: int = Field(ge=0)
 
 
-class WorldManifest(StrictModel):
+class WorldRecord(StrictModel):
     """One world's identity, its references and the outcome of its forward.
 
     Everything above `provenance` is determined by `(generator version, design, seed)` and
     by what the forward published. `provenance` is the run: a run id, a wall-clock stamp and
     the library versions. Plan §3.1 keeps time, RAM and hostname out of a model hash, and
     they are kept out of the identity here for the same reason.
+
+    This is the record the CONTEXT is projected out of, and it is deliberately a separate
+    class from the manifest that is written: `context.json` carries the digest of nothing
+    but the files it names, and the manifest carries the digest of `context.json` itself, so
+    the projection has to be taken before that digest exists. Splitting the two makes the
+    order structural — there is no moment at which a `WorldManifest` exists without a real
+    `context_ref`, and therefore no placeholder digest to forget to replace.
     """
 
     schema_version: Literal["world-1"] = WORLD_SCHEMA_VERSION
@@ -175,7 +190,11 @@ class WorldManifest(StrictModel):
     observation_ref: FileRef
     control_ref: FileRef
     truth_ref: FileRef
-    case_ref: FileRef | None
+    #: The case the solver was given, as published bytes. Never null: `write_world` builds
+    #: the case itself and publishes it under `truth/`, so a world always names the input it
+    #: was run from, and `_refuse_a_foreign_forward` proves those bytes are the ones the
+    #: forward read.
+    case_ref: FileRef
     observation_masks: dict[str, Any]
     forward_status: ForwardStatus | None
     forward_reason: str | None
@@ -189,6 +208,18 @@ class WorldManifest(StrictModel):
     provenance: dict[str, Any]
 
 
+class WorldManifest(WorldRecord):
+    """The record as it is WRITTEN: everything above, plus the context it published.
+
+    `context_ref` is the world's index into the inverse problem's input. It is what a
+    consumer — plan 11.7's E02 data loader, which receives the context path and nothing else
+    — must be handed, and it is deliberately NOT in `CONTEXT_ALLOWLIST`: a context file
+    cannot carry the digest of itself, and it has no need to name its own location.
+    """
+
+    context_ref: FileRef
+
+
 class WorldLocations:
     """Where one world's files live. Constructed from the project paths and the parent id."""
 
@@ -199,6 +230,10 @@ class WorldLocations:
         self.grid_file = self.root / GRID_FILENAME
         self.geology_file = self.truth / GEOLOGY_FILENAME
         self.initial_file = self.truth / INITIAL_FILENAME
+        #: The solver's own input. It is under `truth/` because it CARRIES the truth — the
+        #: full rock and the full initial state — and so is on the side of the boundary that
+        #: is never handed to an encoder.
+        self.case_file = self.truth / CASE_MANIFEST_FILENAME
         self.theta_file = self.truth / THETA_FILENAME
         self.support_truth_file = self.truth / SUPPORT_TRUTH_FILENAME
         self.truth_manifest_file = self.truth / TRUTH_MANIFEST_FILENAME
@@ -541,6 +576,93 @@ def _refuse_truth_reference(payload: Mapping[str, Any], world: RenderedWorld) ->
         )
 
 
+def _publish_case_manifest(
+    case: CaseBundle,
+    loc: WorldLocations,
+    paths: ProjectPaths,
+    ctx: RunContext,
+    *,
+    key: str,
+    now: datetime,
+) -> FileRef:
+    """Publish the solver's case as a file OF THE WORLD, and return the digest of its bytes.
+
+    `case_io.write_case` publishes into a run directory, one case per run. That is the right
+    rule for a run that executes one forward and the wrong shape for a publisher that writes
+    a whole parent set from a single run, so the case is written here instead, beside the
+    world's other deterministic files and through the same content-addressed writer: a
+    repeat of the same seed and design reuses the bytes, and a different case cannot claim
+    the name. The lineage `write_case` records is recorded too — every array the case depends
+    on is registered in the run before the manifest that names it.
+
+    The bytes are the ones `write_case` would have written, because both serialise
+    `CaseBundle.model_dump(mode='json')` through the one JSON artifact writer. That is not an
+    assumption: it is what makes `ForwardResult.case_sha256` — `sha256_file` of the case
+    `simulate` published in its own run — comparable with the digest returned here, and
+    `test_the_world_manifest_links_the_case_the_forward_ran` pins the two together.
+    """
+    registered = [
+        register_array(ref, paths, ctx, key=f"{key}.{label}", now=now)
+        for label, ref in sorted(case_array_refs(case).items())
+    ]
+    ref = write_json_artifact(
+        loc.case_file,
+        case.model_dump(mode="json"),
+        paths,
+        schema_version=case.schema_version,
+        producer_run_id=ctx.run_id,
+        parent_artifact_ids=sorted({artifact.artifact_id for artifact in registered}),
+        now=now,
+    )
+    ctx.add_output(key, ref)
+    return FileRef(path=ref.path, sha256=ref.sha256, size_bytes=ref.size_bytes)
+
+
+def _refuse_a_foreign_forward(
+    world: RenderedWorld, case: CaseBundle, case_ref: FileRef, forward: ForwardResult | None
+) -> None:
+    """Refuse a result that was not produced from THIS world's case.
+
+    The manifest attests one pair — a model and the outcome of running it — and until this
+    check existed nothing tied the two halves together: `model_hash` came from the case
+    `write_world` rebuilds, while `forward_status`, `cost` and `forward_outputs` came from
+    whatever `ForwardResult` the caller passed. A retry against a patched case, or a
+    copy-paste between two worlds in a suite loop, would have been published as this world's
+    outcome, and `truth_manifest.json` would have carried the same mismatched pair as the
+    evaluator's entry point.
+
+    Both halves of the identity a result carries are checked, and they are different claims:
+
+    * `model_hash` is the PHYSICS — every input that influences F. Two cases with the same
+      model hash are the same forward problem.
+    * `case_sha256` is the BYTES the solver actually read. It is comparable here because a
+      case manifest is a deterministic function of the case: `write_case` serialises
+      `CaseBundle.model_dump(mode='json')` through the one JSON writer, and every reference
+      inside it is content-addressed, so the case this module publishes from a rendered
+      world has the same digest as the case `simulate` published in its own run directory.
+      That equality is what `test_the_world_manifest_links_the_case_the_forward_ran` pins.
+
+    Checking the digest as well as the hash catches what the hash cannot: `MODEL_HASH_FIELDS`
+    is a subset of the case, so two cases can agree on the physics and still differ in what
+    was handed to the solver.
+    """
+    if forward is None:
+        return
+    if forward.model_hash != case.model_hash:
+        raise ValueError(
+            f"{world.parent_world_id}: the forward result {forward.job_id!r} carries "
+            f"model_hash {forward.model_hash}, and this world's case {case.case_id} is "
+            f"{case.model_hash}; a result of another model is not this world's outcome"
+        )
+    if forward.case_sha256 != case_ref.sha256:
+        raise ValueError(
+            f"{world.parent_world_id}: the forward result {forward.job_id!r} carries "
+            f"case_sha256 {forward.case_sha256}, and the case published at {case_ref.path} "
+            f"hashes to {case_ref.sha256}; the solver read different bytes from the ones "
+            "this world publishes"
+        )
+
+
 def write_world(
     world: RenderedWorld,
     forward: ForwardResult | None,
@@ -554,6 +676,12 @@ def write_world(
     reason go on the manifest and the row is kept, because a world that failed is an outcome
     and deleting it would make the suite look better than it is (SPEC §18.4, plan 11.9).
 
+    The case is PUBLISHED here rather than looked for, as a file of the world, so the
+    world → case link exists whoever publishes the world and whether or not this run is the
+    one that ran the forward. A result that was run elsewhere is still tied to these exact
+    bytes, because `_refuse_a_foreign_forward` compares its `case_sha256` with the digest
+    published here.
+
     The manifest is written LAST, after every file it names, so a process lost half-way
     leaves unfinished staging rather than a world that claims to be complete.
     """
@@ -561,6 +689,8 @@ def write_world(
     loc = world_locations(paths, world.parent_world_id)
     case = build_p1_case(world, paths, ctx)
     key = f"world.{world.parent_world_id}"
+    case_ref = _publish_case_manifest(case, loc, paths, ctx, key=f"{key}.case", now=now)
+    _refuse_a_foreign_forward(world, case, case_ref, forward)
 
     _, theta_ref = _publish_json(
         loc.theta_file,
@@ -615,7 +745,7 @@ def write_world(
         if forward is None or forward.monthly_path is None
         else _file_ref(paths.resolve(forward.monthly_path).parent / RESULT_FILENAME, paths)
     )
-    manifest = WorldManifest(
+    record = WorldRecord(
         generator_version=GENERATOR_VERSION,
         parent_world_id=world.parent_world_id,
         design_id=world.design.design_id,
@@ -630,7 +760,7 @@ def write_world(
         observation_ref=observation_ref,
         control_ref=control_ref,
         truth_ref=truth_ref,
-        case_ref=_file_ref(ctx.run_dir / CASE_MANIFEST_FILENAME, paths),
+        case_ref=case_ref,
         observation_masks=observation_masks(world.design),
         forward_status=None if forward is None else forward.status,
         forward_reason=None if forward is None else forward.reason,
@@ -645,10 +775,9 @@ def write_world(
             "pyarrow_version": pa.__version__,
         },
     )
-    payload = manifest.model_dump(mode="json")
-    context = context_payload(payload)
+    context = context_payload(record.model_dump(mode="json"))
     _refuse_truth_reference(context, world)
-    _publish_json(
+    _, context_ref = _publish_json(
         loc.context_file,
         context,
         paths,
@@ -657,6 +786,18 @@ def write_world(
         schema_version=CONTEXT_SCHEMA_VERSION,
         now=now,
     )
+    manifest = WorldManifest.model_validate(
+        {**record.model_dump(mode="json"), "context_ref": context_ref.model_dump(mode="json")}
+    )
+    payload = manifest.model_dump(mode="json")
+    # The written record still projects onto the bytes that were published, so the manifest
+    # and the context can never drift apart — `context_ref` is the ONE field the manifest
+    # gained after the projection was taken, and it is not an allowlisted one.
+    if context_payload(payload) != context:
+        raise ValueError(
+            f"the manifest of {world.parent_world_id} no longer projects onto the context "
+            f"published at {context_ref.path}"
+        )
     ref, _ = _publish_run_record(
         loc.manifest_file,
         payload,
@@ -703,7 +844,11 @@ def world_row(
         "cost": None if forward is None else forward.cost.model_dump(mode="json"),
         "manifest_path": manifest_path,
         "truth_ref": manifest["truth_ref"]["path"],
-        "context_ref": manifest["observation_ref"]["path"],
+        # The INVERSE problem's whole input, and the only path plan 11.7 lets an E02 data
+        # loader be given. The observations table is one of the files this names; handing a
+        # loader that table instead would give it the sparse G without the masks, the
+        # controls or the cutoff.
+        "context_ref": manifest["context_ref"]["path"],
         "gates": dict(gates) if gates is not None else None,
     }
 

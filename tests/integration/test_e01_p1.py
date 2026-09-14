@@ -45,9 +45,10 @@ from numpy.typing import NDArray
 from so_recon.config.resources import P1_LOOP_PROFILE
 from so_recon.environment.resources import ResourceSnapshot, probe_resources
 from so_recon.paths import ProjectPaths
+from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
-from so_recon.simulator.case_io import read_array
+from so_recon.simulator.case_io import load_case, read_array
 from so_recon.simulator.contracts import (
     SECONDS_PER_DAY,
     CaseBundle,
@@ -453,6 +454,24 @@ def test_the_first_p1_parent_set_runs_and_every_outcome_is_recorded(tmp_project:
             "observation_masks",
             "cutoff",
         }
+
+    # ---- the published links, on worlds a REAL forward produced --------------------------
+    # `write_world` refuses a result whose `model_hash` or `case_sha256` is not the case it
+    # publishes, so the five worlds above having been written at all is the proof that each
+    # manifest attests the pair that actually ran together.
+    for row in suite["rows"]:
+        name = row["parent_world_id"]
+        loc = world_locations(paths, name)
+        manifest = json.loads(paths.resolve(row["manifest_path"]).read_text(encoding="utf-8"))
+        case_ref = manifest["case_ref"]
+        assert case_ref is not None, f"{name}: the world -> case link went null"
+        assert paths.resolve(case_ref["path"]) == loc.case_file
+        assert sha256_file(loc.case_file) == case_ref["sha256"], name
+        assert load_case(loc.case_file, paths).model_hash == row["model_hash"], name
+        # Plan 11.7: the E02 loader is handed this path and nothing else.
+        assert row["context_ref"] == manifest["context_ref"]["path"], name
+        assert paths.resolve(row["context_ref"]) == loc.context_file, name
+        assert sha256_file(loc.context_file) == manifest["context_ref"]["sha256"], name
 
     # ---- what the session cost -----------------------------------------------------------
     totals = ledger.session_totals()

@@ -35,6 +35,7 @@ from numpy.typing import NDArray
 from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import RunContext
+from so_recon.simulator.case_io import load_case, write_case
 from so_recon.simulator.contracts import (
     MILLIDARCY_M2,
     SECONDS_PER_DAY,
@@ -66,6 +67,7 @@ from so_recon.synthetic.p1 import (
 )
 from so_recon.synthetic.world_io import (
     CONTEXT_ALLOWLIST,
+    CONTEXT_FILENAME,
     DERIVED_VIEW_ID,
     SPLIT,
     build_p1_case,
@@ -667,6 +669,7 @@ def test_the_deterministic_files_of_a_world_are_written_once(tmp_project: Path) 
         loc.grid_file,
         loc.geology_file,
         loc.initial_file,
+        loc.case_file,
         loc.theta_file,
         loc.support_truth_file,
         loc.observations_file,
@@ -717,6 +720,127 @@ def test_the_world_manifest_carries_the_identity_and_the_truth_reference(
 
 
 # --------------------------------------------------------------------------------------
+# the published links: world -> case, world -> context, and the forward that belongs to it
+# --------------------------------------------------------------------------------------
+
+
+def _forward_case_digest(world: RenderedWorld, paths: ProjectPaths) -> str:
+    """The `case_sha256` a real forward of this world would record.
+
+    `simulate` publishes the case into ITS OWN run directory and puts `sha256_file` of that
+    manifest on the result. This reproduces exactly that, through the same publication
+    routine and in a run of its own, so a test can hold the digest a forward would carry
+    without running one.
+    """
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    return write_case(build_p1_case(world, paths, ctx), paths, ctx).sha256
+
+
+def test_the_world_manifest_links_the_case_the_forward_ran(tmp_project: Path) -> None:
+    """The world -> case link is published, and it is byte-for-byte the solver's own case.
+
+    A `RunContext` that has not itself run a forward is the shape the suite publishes with,
+    and it is the shape under which `case_ref` silently went null for every parent.
+    """
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    world = render_p1(41, P1Design())
+    forward_digest = _forward_case_digest(world, paths)
+
+    publisher = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    ref = write_world(world, None, paths, publisher)
+    manifest = json.loads(paths.resolve(ref.path).read_text(encoding="utf-8"))
+
+    case_ref = manifest["case_ref"]
+    assert case_ref is not None, "the world -> case link went null again"
+    target = paths.resolve(case_ref["path"])
+    assert sha256_file(target) == case_ref["sha256"]
+    assert target == world_locations(paths, world.parent_world_id).case_file
+    # A case carries the full rock and the full initial state, so it lives on the side of
+    # the boundary that is never handed to an encoder.
+    assert "/truth/" in case_ref["path"]
+    # The case a forward published in ANOTHER run has the same bytes. That is what makes
+    # `ForwardResult.case_sha256` comparable with this reference at all.
+    assert case_ref["sha256"] == forward_digest
+    assert load_case(target, paths).model_hash == manifest["model_hash"]
+
+
+def test_a_suite_publisher_may_write_every_world_from_one_run(tmp_project: Path) -> None:
+    """The case belongs to the WORLD, so one run can publish a parent set without collision.
+
+    `case_io.write_case` puts one case in a run directory and refuses a second, which is the
+    right rule for a run that executes a forward. A publisher is not that run.
+    """
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    refs = [
+        write_world(render_p1(seed, P1Design(family=family)), None, paths, ctx)
+        for seed, family in P1_PARENTS[:3]
+    ]
+    cases = [
+        json.loads(paths.resolve(ref.path).read_text(encoding="utf-8"))["case_ref"] for ref in refs
+    ]
+    assert len({case["path"] for case in cases}) == 3
+    assert len({case["sha256"] for case in cases}) == 3
+
+
+def test_the_suite_row_hands_a_loader_the_context_and_not_the_observations(
+    tmp_project: Path,
+) -> None:
+    """Plan 11.7: an E02 data loader receives ONLY the context path, so the row must name it.
+
+    The observations table alone is the sparse G without the masks, the controls or the
+    cutoff — a loader that followed it would be reading half an input and would not know it.
+    """
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    world = render_p1(41, P1Design())
+    ref = write_world(
+        world, None, paths, RunContext.start(command="f", argv=[], cfg=None, paths=paths)
+    )
+    manifest = json.loads(paths.resolve(ref.path).read_text(encoding="utf-8"))
+    row = world_row(world, None, manifest)
+
+    assert row["context_ref"] == manifest["context_ref"]["path"]
+    assert row["context_ref"].endswith(f"{DERIVED_VIEW_ID}/{CONTEXT_FILENAME}")
+    assert row["context_ref"] != manifest["observation_ref"]["path"]
+    target = paths.resolve(row["context_ref"])
+    assert sha256_file(target) == manifest["context_ref"]["sha256"]
+    assert set(json.loads(target.read_text(encoding="utf-8"))) == set(CONTEXT_ALLOWLIST)
+
+
+def test_a_forward_of_another_case_is_refused(tmp_project: Path) -> None:
+    """A result carrying a different model may not be published as this world's outcome."""
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    world = render_p1(41, P1Design())
+    other = render_p1(42, P1Design())
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    other_hash = build_p1_case(other, paths, ctx).model_hash
+    foreign = _failed_result(other_hash, _forward_case_digest(world, paths))
+    assert other_hash != build_p1_case(world, paths, ctx).model_hash
+    with pytest.raises(ValueError, match="model_hash"):
+        write_world(
+            world, foreign, paths, RunContext.start(command="f", argv=[], cfg=None, paths=paths)
+        )
+
+
+def test_a_forward_of_different_case_bytes_is_refused(tmp_project: Path) -> None:
+    """The model hash is the physics; the case digest is the bytes the solver actually read."""
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    world = render_p1(41, P1Design())
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    case = build_p1_case(world, paths, ctx)
+    stale = _failed_result(case.model_hash, "b" * 64)
+    with pytest.raises(ValueError, match="case_sha256"):
+        write_world(
+            world, stale, paths, RunContext.start(command="f", argv=[], cfg=None, paths=paths)
+        )
+
+
+# --------------------------------------------------------------------------------------
 # 11.8 / 11.9 the parent set and the outcome rows
 # --------------------------------------------------------------------------------------
 
@@ -731,10 +855,10 @@ def test_the_first_parent_set_is_exactly_the_five_the_plan_names() -> None:
     )
 
 
-def _failed_result(model_hash: str) -> ForwardResult:
+def _failed_result(model_hash: str, case_sha256: str) -> ForwardResult:
     return ForwardResult(
         job_id="job-x-a1",
-        case_sha256="b" * 64,
+        case_sha256=case_sha256,
         model_hash=model_hash,
         physics_class="OW",
         status="CONTROL_INFEASIBLE",
@@ -764,13 +888,16 @@ def test_a_failed_forward_is_kept_as_an_outcome_row(tmp_project: Path) -> None:
     ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
     world = render_p1(45, P1Design(family="high_contrast"))
     case = build_p1_case(world, paths, ctx)
-    failed = _failed_result(case.model_hash)
+    failed = _failed_result(case.model_hash, write_case(case, paths, ctx).sha256)
     ref = write_world(world, failed, paths, ctx)
     manifest = json.loads(paths.resolve(ref.path).read_text(encoding="utf-8"))
     assert manifest["forward_status"] == "CONTROL_INFEASIBLE"
     assert "5 MPa floor" in manifest["forward_reason"]
     assert manifest["accepted"] is False
     assert manifest["cost"]["wall_s"] == 12.0
+    # A world that failed still publishes the case it failed ON (plan 3.2: nothing that is
+    # present is nulled, and the absence of a RESULT is not the absence of an input).
+    assert manifest["case_ref"]["sha256"] == failed.case_sha256
     row = world_row(world, failed, manifest)
     assert row["status"] == "CONTROL_INFEASIBLE"
     assert row["accepted"] is False
