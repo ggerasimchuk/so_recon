@@ -89,14 +89,23 @@ check_frozen() {
 
 # Run one step, remember whether it failed, and return its code so the caller can decide
 # whether to go on.
+#
+# The status is captured from the command ITSELF and never from an `if` around it. An `if`
+# whose condition fails and which has no `else` has exit status 0, so `local code=$?` after
+# `fi` read 0 for every failing step: the log said "exited 0", the FAILURES entry said
+# "exit 0", and every `step ... || return` below was inert. Reproduced on this host
+# (bash 3.2.57) and pinned by
+# `tests/unit/test_e01_gate.py::test_step_returns_the_command_s_real_exit_code`, which
+# executes THIS function out of THIS file rather than grepping it.
 step() {
   local label="$1"
   shift
   echo "-- ${label} --"
-  if "$@"; then
+  "$@"
+  local code=$?
+  if [ "$code" -eq 0 ]; then
     return 0
   fi
-  local code=$?
   echo "e01 gate: step '${label}' exited ${code}" >&2
   FAILURES+=("${label} (exit ${code})")
   return "$code"
@@ -125,28 +134,30 @@ print(" ".join(latest[name] for name in sorted(latest)))
 PY
 }
 
-finish() {
-  local code=$?
-  echo "-- frozen inputs (checked on every exit, including a failed one) --"
+report_outcome() {
+  local steps_rc="$1"
+  echo "-- frozen inputs (checked whatever happened above, including a failed step) --"
   if ! check_frozen; then
     FAILURES+=("frozen inputs changed during the gate")
-    code=1
   fi
-  if [ "${#FAILURES[@]}" -gt 0 ]; then
+  if [ "$steps_rc" -ne 0 ] || [ "${#FAILURES[@]}" -gt 0 ]; then
     echo "== e01 gate FAIL $(date -u +%Y-%m-%dT%H:%M:%SZ) ==" >&2
-    printf 'failed step: %s\n' "${FAILURES[@]}" >&2
-    exit 1
+    if [ "${#FAILURES[@]}" -gt 0 ]; then
+      printf 'failed step: %s\n' "${FAILURES[@]}" >&2
+    fi
+    return 1
   fi
   echo "== e01 gate PASS $(date -u +%Y-%m-%dT%H:%M:%SZ) =="
-  exit "$code"
+  return 0
 }
 
 main() {
-  trap finish EXIT
   echo "== e01 gate start $(date -u +%Y-%m-%dT%H:%M:%SZ) =="
   FROZEN_BEFORE="$(frozen_digests)"
 
-  # Fail fast: nothing below a broken environment or a broken regression means anything.
+  # Fail fast: nothing below a broken environment or a broken regression means anything,
+  # and launching the P0 and P1 physics suites on top of one is the expensive mistake this
+  # ordering exists to avoid.
   step "1/8 locked python environment (no .venv deletion)" "$UV" sync --frozen || return
   step "2/8 regression: unit suite and the absolute-path guard" \
     "$UV" run pytest tests/unit tests/test_no_absolute_paths.py -q || return
@@ -174,13 +185,25 @@ main() {
   if [ -z "$report_runs" ]; then
     echo "e01 gate: no published E01 suite record under artifacts/runs" >&2
     FAILURES+=("no suite record to build the stage report from")
-  else
-    echo "citing: $report_runs"
-    # Unquoted on purpose: one word per run directory.
-    # shellcheck disable=SC2086
-    step "8/8 stage report rebuilt from those artifacts" \
-      "$UV" run so-recon --config "$CONFIG" e01-report --runs $report_runs
+    return 1
   fi
+  echo "citing: $report_runs"
+  # Unquoted on purpose: one word per run directory.
+  # shellcheck disable=SC2086
+  step "8/8 stage report rebuilt from those artifacts" \
+    "$UV" run so-recon --config "$CONFIG" e01-report --runs $report_runs
+  return 0
 }
 
-main 2>&1 | tee "$LOG_FILE"
+# One subshell for the whole run, and no EXIT trap. `main` used to set `trap finish EXIT`
+# and then run as the left side of a pipeline: on bash 3.2.57 — the shell this host has —
+# an EXIT trap set inside a pipeline's subshell does not fire, so `check_frozen` never ran
+# and the gate's status was `tee`'s. Here `main` RETURNS, `report_outcome` runs
+# unconditionally after it whatever that return was, and the status of the group itself is
+# taken from `PIPESTATUS` rather than from the pipe's last stage.
+{
+  main
+  main_rc=$?
+  report_outcome "$main_rc"
+} 2>&1 | tee "$LOG_FILE"
+exit "${PIPESTATUS[0]}"

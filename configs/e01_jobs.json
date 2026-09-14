@@ -813,14 +813,14 @@
           "group": "benchmark",
           "kind": "benchmark",
           "profile": "P1_LOOP",
-          "expected_outcome": "COMPLETE",
+          "expected_outcome": "NOT_RUN",
           "output_request": "states+monthly+balances+connections",
           "julia_threads": 1,
           "cache_bypass": true,
           "accounting": "ledger",
           "native_source": "julia/worker/main.jl",
           "scored_as": "benchmark_threads",
-          "note": "Its own sequentially started worker; never more than one active worker. The first run of a thread setting is COLD and is never compared against another setting's warm run.",
+          "note": "NOT_RUN is the outcome this job can actually have, and it is declared rather than discovered. It runs under the approved preset P1_LOOP, whose julia_threads is 4, and `require_resource_profile` matches an approved preset byte-strict — so a worker at julia_threads=1 needs a NEW approved preset, which is a COMPUTE §5 change and not an implementer's choice. Declaring COMPLETE here claimed an outcome no configuration this stage may write can produce, and made `evaluate_suite` score the row as an attempt that missed its expectation. The job stays in the declared 17: its cost is zero and its absence is a stated limitation (`benchmark_threads`), not a deletion. Plan 12.4's threads4 default therefore stands without the measured basis these four jobs were for. Its own sequentially started worker; never more than one active worker. The first run of a thread setting is COLD and is never compared against another setting's warm run.",
           "declared_by_plan": true,
           "parent_job_id": null,
           "deferred_to": null
@@ -830,7 +830,7 @@
           "group": "benchmark",
           "kind": "benchmark",
           "profile": "P1_LOOP",
-          "expected_outcome": "COMPLETE",
+          "expected_outcome": "NOT_RUN",
           "output_request": "states+monthly+balances+connections",
           "julia_threads": 1,
           "cache_bypass": true,
@@ -839,7 +839,7 @@
           "scored_as": "benchmark_threads",
           "declared_by_plan": true,
           "parent_job_id": null,
-          "note": null,
+          "note": "NOT_RUN is the outcome this job can actually have, and it is declared rather than discovered. It runs under the approved preset P1_LOOP, whose julia_threads is 4, and `require_resource_profile` matches an approved preset byte-strict — so a worker at julia_threads=1 needs a NEW approved preset, which is a COMPUTE §5 change and not an implementer's choice. Declaring COMPLETE here claimed an outcome no configuration this stage may write can produce, and made `evaluate_suite` score the row as an attempt that missed its expectation. The job stays in the declared 17: its cost is zero and its absence is a stated limitation (`benchmark_threads`), not a deletion. Plan 12.4's threads4 default therefore stands without the measured basis these four jobs were for.",
           "deferred_to": null
         },
         {
@@ -847,7 +847,7 @@
           "group": "benchmark",
           "kind": "benchmark",
           "profile": "P1_LOOP",
-          "expected_outcome": "COMPLETE",
+          "expected_outcome": "NOT_RUN",
           "output_request": "states+monthly+balances+connections",
           "julia_threads": 2,
           "cache_bypass": true,
@@ -856,7 +856,7 @@
           "scored_as": "benchmark_threads",
           "declared_by_plan": true,
           "parent_job_id": null,
-          "note": null,
+          "note": "NOT_RUN is the outcome this job can actually have, and it is declared rather than discovered. It runs under the approved preset P1_LOOP, whose julia_threads is 4, and `require_resource_profile` matches an approved preset byte-strict — so a worker at julia_threads=2 needs a NEW approved preset, which is a COMPUTE §5 change and not an implementer's choice. Declaring COMPLETE here claimed an outcome no configuration this stage may write can produce, and made `evaluate_suite` score the row as an attempt that missed its expectation. The job stays in the declared 17: its cost is zero and its absence is a stated limitation (`benchmark_threads`), not a deletion. Plan 12.4's threads4 default therefore stands without the measured basis these four jobs were for. Its own sequentially started worker; never more than one active worker. The first run of a thread setting is COLD and is never compared against another setting's warm run.",
           "deferred_to": null
         },
         {
@@ -864,7 +864,7 @@
           "group": "benchmark",
           "kind": "benchmark",
           "profile": "P1_LOOP",
-          "expected_outcome": "COMPLETE",
+          "expected_outcome": "NOT_RUN",
           "output_request": "states+monthly+balances+connections",
           "julia_threads": 2,
           "cache_bypass": true,
@@ -873,7 +873,7 @@
           "scored_as": "benchmark_threads",
           "declared_by_plan": true,
           "parent_job_id": null,
-          "note": null,
+          "note": "NOT_RUN is the outcome this job can actually have, and it is declared rather than discovered. It runs under the approved preset P1_LOOP, whose julia_threads is 4, and `require_resource_profile` matches an approved preset byte-strict — so a worker at julia_threads=2 needs a NEW approved preset, which is a COMPUTE §5 change and not an implementer's choice. Declaring COMPLETE here claimed an outcome no configuration this stage may write can produce, and made `evaluate_suite` score the row as an attempt that missed its expectation. The job stays in the declared 17: its cost is zero and its absence is a stated limitation (`benchmark_threads`), not a deletion. Plan 12.4's threads4 default therefore stands without the measured basis these four jobs were for.",
           "deferred_to": null
         }
       ]
