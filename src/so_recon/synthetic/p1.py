@@ -761,20 +761,28 @@ def _theta(seed: int, design: P1Design, coefficients: NDArray[np.float64]) -> di
     }
 
 
-def render_p1(seed: int, design: P1Design) -> RenderedWorld:
-    """Render one world: its geology, its initial state, its policy and its sparse G.
+def render_coefficients(
+    coefficients: Sequence[Sequence[float]] | NDArray[np.float64], design: P1Design
+) -> dict[str, NDArray[np.float64]]:
+    """The deterministic half of `render_p1`: twelve coefficients and a design to arrays.
 
-    Deterministic in `(GENERATOR_VERSION, design, seed)` and in nothing else. No clock, no
-    hostname and no measurement enters any array, any identity or `theta`.
+    Nothing random happens here. `render_p1` draws the coefficients from the world's geology
+    stream and hands them straight to this function, and E02 hands it the coefficients of a
+    latent point instead — the same rock from the same numbers, with no second definition
+    of what a coefficient means.
     """
-    geology_stream, static_stream, _control_stream = streams(seed)
-    coefficients = np.random.default_rng(geology_stream).standard_normal((N_LAYERS, N_MODES))
+    values = np.asarray(coefficients, dtype=np.float64)
+    if values.shape != (N_LAYERS, N_MODES):
+        raise ValueError(
+            f"coefficients: this generator renders {N_LAYERS} x {N_MODES} coefficients, "
+            f"got shape {values.shape}"
+        )
 
     k_md_layers: list[NDArray[np.float64]] = []
     phi_layers: list[NDArray[np.float64]] = []
     field_layers: list[NDArray[np.float64]] = []
     for layer in range(N_LAYERS):
-        k_md, phi = layer_geology(coefficients[layer], design, layer)
+        k_md, phi = layer_geology(values[layer], design, layer)
         k_md_layers.append(k_md.ravel(order="F"))
         phi_layers.append(phi.ravel(order="F"))
         # The latent field the two rock fields share, recovered from the kernel's own output
@@ -800,9 +808,21 @@ def render_p1(seed: int, design: P1Design) -> RenderedWorld:
         "pressure_pa": pressure,
         "sw": sw,
     }
-    for name, values in arrays.items():
-        if not np.isfinite(values).all():
+    for name, rendered in arrays.items():
+        if not np.isfinite(rendered).all():
             raise ValueError(f"{name}: the rendered world holds nonfinite values")
+    return arrays
+
+
+def render_p1(seed: int, design: P1Design) -> RenderedWorld:
+    """Render one world: its geology, its initial state, its policy and its sparse G.
+
+    Deterministic in `(GENERATOR_VERSION, design, seed)` and in nothing else. No clock, no
+    hostname and no measurement enters any array, any identity or `theta`.
+    """
+    geology_stream, static_stream, _control_stream = streams(seed)
+    coefficients = np.random.default_rng(geology_stream).standard_normal((N_LAYERS, N_MODES))
+    arrays = render_coefficients(coefficients, design)
 
     theta = _theta(seed, design, coefficients)
     return RenderedWorld(
