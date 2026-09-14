@@ -13,8 +13,12 @@ would otherwise be SILENT are refused at construction:
   refused everywhere. In JSON `-inf` is written as `null` beside a companion
   `<field>_in_support` flag, never as the `-Infinity` literal that is not valid JSON —
   and the flag is what tells «outside the support» from «not recorded». Every record that
-  holds an extended-real log value carries its flag, so a checkpoint written while a
-  particle sits outside the support reloads to the same numbers it was written from.
+  holds an extended-real log value carries its flag — scalars, arrays element by element,
+  and the particle's diagnostic parts by name — so a checkpoint written while a particle
+  sits outside the support reloads to the same numbers it was written from. The flags are
+  derived from whatever container the caller passed, `F64` included. Service data
+  (`rng_state`, `diagnostics`) carries no densities and simply may not hold a non-finite
+  number at all.
 * `beta < 1` is an intermediate tempering distribution and never a posterior (SPEC
   §13.4.2), so `PosteriorBundle` refuses the combination rather than trusting a label.
 
@@ -28,7 +32,7 @@ a confident one. They deliberately have no public common base class.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Annotated, Any, Literal
 
 import numpy as np
@@ -172,24 +176,32 @@ def _log_value(value: float, *, label: str) -> float:
 IN_SUPPORT_SUFFIX = "_in_support"
 
 
+def _as_number(value: object) -> object:
+    """A plain float when the value is a number, and the value itself otherwise.
+
+    Numpy scalars become floats here, which keeps a record's own error messages readable
+    and leaves a genuinely wrong type for the field's own check to report.
+    """
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return value
+
+
 def _in_support(value: object) -> bool:
     """False only for exactly `-inf`.
 
     A value that is not a number at all is reported as in support, so that the field's own
     type check is what the caller is told about rather than a confusing missing flag.
     """
-    try:
-        return float(value) != -math.inf  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return True
+    return _as_number(value) != -math.inf
 
 
 def _normalise_log_scalar(data: dict[str, Any], field: str) -> None:
     flag = f"{field}{IN_SUPPORT_SUFFIX}"
     if field not in data:
         return
-    if data[field] is None:
-        data[field] = -math.inf
+    data[field] = -math.inf if data[field] is None else _as_number(data[field])
     derived = _in_support(data[field])
     declared = data.get(flag)
     if declared is None:
@@ -201,27 +213,102 @@ def _normalise_log_scalar(data: dict[str, Any], field: str) -> None:
         )
 
 
+def _entries(value: object, *, label: str) -> tuple[Any, ...]:
+    """The entries of an array-valued field, whatever container carried them.
+
+    `F64` — a numpy array — is this project's own array type, and the plan hands these
+    fields numpy arrays (`normalize_log_weights(logw: F64)`, `log_date_mixture(log_terms:
+    F64, ...)`), so the contract may not depend on the container being a list or a tuple.
+    Anything that is not a sequence of values — a string, a mapping, a scalar — is refused
+    BY NAME rather than skipped: skipping would drop the support derivation silently and
+    leave the caller reading a "Field required" about a flag they never heard of.
+    """
+    if isinstance(value, str | bytes | Mapping) or not isinstance(value, Iterable):
+        raise ValueError(f"{label} is a sequence of log values, got {type(value).__name__}")
+    return tuple(value)
+
+
 def _normalise_log_array(data: dict[str, Any], field: str) -> None:
     flag = f"{field}{IN_SUPPORT_SUFFIX}"
-    if field not in data or not isinstance(data[field], list | tuple):
+    if field not in data:
         return
-    values = tuple(-math.inf if item is None else item for item in data[field])
+    values = tuple(
+        -math.inf if item is None else _as_number(item)
+        for item in _entries(data[field], label=field)
+    )
     data[field] = values
     derived = tuple(_in_support(item) for item in values)
     declared = data.get(flag)
     if declared is None:
         data[flag] = derived
-    elif (
-        not isinstance(declared, list | tuple) or tuple(bool(item) for item in declared) != derived
-    ):
+    elif tuple(bool(item) for item in _entries(declared, label=flag)) != derived:
         raise ValueError(
             f"{flag}={declared!r} contradicts {field}={list(values)!r}: one flag per "
             "entry, saying whether that entry is inside the support"
         )
 
 
+def _normalise_log_mapping(data: dict[str, Any], field: str) -> None:
+    """The same rule for a map of NAMED log values, such as the prior's diagnostic parts."""
+    flag = f"{field}{IN_SUPPORT_SUFFIX}"
+    if field not in data:
+        return
+    raw = data[field]
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{field} is a mapping of named log values, got {type(raw).__name__}")
+    values = {
+        str(key): (-math.inf if item is None else _as_number(item)) for key, item in raw.items()
+    }
+    data[field] = values
+    derived = {key: _in_support(item) for key, item in values.items()}
+    declared = data.get(flag)
+    if declared is None:
+        data[flag] = derived
+    elif (
+        not isinstance(declared, Mapping)
+        or {str(key): bool(item) for key, item in declared.items()} != derived
+    ):
+        raise ValueError(
+            f"{flag}={declared!r} contradicts {field}={values!r}: one flag per named part, "
+            "saying whether that part is inside the support"
+        )
+
+
+def _reject_nonfinite(value: object, *, label: str) -> None:
+    """Refuse a non-finite float anywhere inside SERVICE data.
+
+    `rng_state` and `diagnostics` carry no log densities: they are written to a checkpoint
+    exactly as they stand, and `registry.hashing.canonical_json` forbids NaN and infinities
+    outright. A resumable checkpoint therefore needs every number in them to be finite —
+    flagging them would be inventing a support for data that has none.
+    """
+    if value is None or isinstance(value, str | bytes | bool):
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_nonfinite(item, label=f"{label}[{key!r}]")
+        return
+    if isinstance(value, Iterable):
+        for index, item in enumerate(value):
+            _reject_nonfinite(item, label=f"{label}[{index}]")
+        return
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(number):
+        raise ValueError(
+            f"{label} must be finite, got {number}: this is service data written to a "
+            "checkpoint as it stands, and a non-finite number there is not valid JSON"
+        )
+
+
 def _normalise_log_fields(
-    data: Any, *, scalars: tuple[str, ...] = (), arrays: tuple[str, ...] = ()
+    data: Any,
+    *,
+    scalars: tuple[str, ...] = (),
+    arrays: tuple[str, ...] = (),
+    mappings: tuple[str, ...] = (),
 ) -> Any:
     """Accept `null` for `-inf` on the way in, and derive the companion flags.
 
@@ -236,6 +323,8 @@ def _normalise_log_fields(
         _normalise_log_scalar(out, name)
     for name in arrays:
         _normalise_log_array(out, name)
+    for name in mappings:
+        _normalise_log_mapping(out, name)
     return out
 
 
@@ -245,6 +334,10 @@ def _json_log_scalar(value: float) -> float | None:
 
 def _json_log_array(values: tuple[float, ...]) -> list[float | None]:
     return [_json_log_scalar(value) for value in values]
+
+
+def _json_log_mapping(values: dict[str, float]) -> dict[str, float | None]:
+    return {key: _json_log_scalar(value) for key, value in values.items()}
 
 
 def validate_probability_weights(weights: Sequence[float], *, label: str) -> tuple[float, ...]:
@@ -737,12 +830,39 @@ class Particle(StrictModel):
     `log_prior_parts` is DIAGNOSTIC: the parts a renderer reports for inspection, which
     plan §2 keeps checkable rather than trusted. The number the algorithm uses is
     `evaluation.log_p0`, and nothing here sums the parts into it.
+
+    A particle outside the support has `-inf` parts, so the map is an extended-real field
+    like the others and carries its own per-name support flags. `Particle` is nested inside
+    `SMCState`, which is what a checkpoint persists: an unflagged `-inf` in here would make
+    the whole state unreadable.
     """
 
     particle_id: int = Field(ge=0)
     ancestor_id: int = Field(ge=0)
     evaluation: TargetEvaluation
     log_prior_parts: dict[str, float] = Field(default_factory=dict)
+    log_prior_parts_in_support: dict[str, bool] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _log_values_travel_with_their_support(cls, data: Any) -> Any:
+        return _normalise_log_fields(data, mappings=("log_prior_parts",))
+
+    @field_serializer("log_prior_parts", when_used="json")
+    def _log_prior_parts_as_json(self, parts: dict[str, float]) -> dict[str, float | None]:
+        return _json_log_mapping(parts)
+
+    @model_validator(mode="after")
+    def _every_part_states_its_support(self) -> Particle:
+        for name, part in self.log_prior_parts.items():
+            _log_value(part, label=f"log_prior_parts[{name!r}]")
+        if set(self.log_prior_parts_in_support) != set(self.log_prior_parts):
+            raise ValueError(
+                f"log_prior_parts_in_support names "
+                f"{sorted(self.log_prior_parts_in_support)} for the parts "
+                f"{sorted(self.log_prior_parts)}: one flag per named part"
+            )
+        return self
 
 
 class SMCState(StrictModel):
@@ -785,6 +905,8 @@ class SMCState(StrictModel):
 
     @model_validator(mode="after")
     def _state_is_self_consistent(self) -> SMCState:
+        _reject_nonfinite(self.rng_state, label="rng_state")
+        _reject_nonfinite(self.diagnostics, label="diagnostics")
         if len(self.log_weights) != len(self.particles):
             raise ValueError(
                 f"log_weights has {len(self.log_weights)} entries for "

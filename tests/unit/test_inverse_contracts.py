@@ -680,6 +680,101 @@ def test_a_pending_threshold_is_a_drawn_number() -> None:
 
 
 # --------------------------------------------------------------------------------------
+# the same contract through every container the plan hands these fields
+# --------------------------------------------------------------------------------------
+
+
+def _particle(**over: object) -> Particle:
+    base: dict[str, object] = {
+        "particle_id": 0,
+        "ancestor_id": 0,
+        "evaluation": _evaluation(),
+    }
+    base.update(over)
+    return Particle(**base)  # type: ignore[arg-type]
+
+
+def test_a_numpy_log_array_is_normalised_like_any_other_sequence() -> None:
+    """`F64` is the project's own array type; the contract may not depend on the container."""
+    result = LoglikResult(
+        value=-math.inf,
+        terms=np.array([-math.inf, -2.0]),
+        n_used=2,
+        observation_hash="d" * 64,
+    )
+    assert result.terms == (-math.inf, -2.0)
+    assert result.terms_in_support == (False, True)
+    assert _round_trip(result) == result
+
+    state = _state(log_weights=np.array([-math.inf]))
+    assert state.log_weights == (-math.inf,)
+    assert state.log_weights_in_support == (False,)
+    assert _round_trip(state) == state
+
+
+def test_a_numpy_log_array_with_a_contradicting_flag_is_refused() -> None:
+    """The defect this guards: a record that writes JSON it cannot read back."""
+    with pytest.raises(ValidationError, match="contradicts"):
+        LoglikResult(
+            value=-math.inf,
+            value_in_support=False,
+            terms=np.array([-math.inf, -2.0]),
+            terms_in_support=(True, True),
+            n_used=2,
+            observation_hash="d" * 64,
+        )
+    with pytest.raises(ValidationError, match="contradicts"):
+        _state(log_weights=np.array([-math.inf]), log_weights_in_support=np.array([True]))
+
+
+def test_a_log_array_that_is_not_a_sequence_is_refused_by_name() -> None:
+    for bad in ("oops", {"a": 1.0}, 3.0):
+        with pytest.raises(ValidationError, match="sequence of log values"):
+            LoglikResult(value=0.0, terms=bad, n_used=0, observation_hash="d" * 64)
+
+
+def test_a_diagnostic_prior_part_outside_the_support_survives_a_checkpoint() -> None:
+    """`Particle` is nested inside the state Task 9 persists, diagnostics included."""
+    particle = _particle(log_prior_parts={"geology": -math.inf, "nuisance": -0.5})
+    assert particle.log_prior_parts_in_support == {"geology": False, "nuisance": True}
+    state = _state(particles=(particle,))
+    payload = json.loads(state.model_dump_json())
+    parts = payload["particles"][0]
+    assert parts["log_prior_parts"] == {"geology": None, "nuisance": -0.5}
+    assert parts["log_prior_parts_in_support"] == {"geology": False, "nuisance": True}
+    restored = _round_trip(state)
+    assert restored == state
+    assert restored.particles[0].log_prior_parts["geology"] == -math.inf
+    text = json.dumps(state.model_dump(mode="json"))
+    assert not any(literal in text for literal in NON_JSON_LITERALS)
+    assert canonical_json(state.model_dump(mode="json"))
+
+
+def test_a_diagnostic_prior_part_is_still_a_log_value() -> None:
+    with pytest.raises(ValidationError, match="log_prior_parts"):
+        _particle(log_prior_parts={"geology": math.nan})
+    with pytest.raises(ValidationError, match="log_prior_parts"):
+        _particle(log_prior_parts={"geology": math.inf})
+    with pytest.raises(ValidationError, match="contradicts|one flag per named part"):
+        _particle(
+            log_prior_parts={"geology": -math.inf},
+            log_prior_parts_in_support={"geology": True},
+        )
+    with pytest.raises(ValidationError, match="one flag per named part"):
+        _particle(log_prior_parts_in_support={"geology": True})
+
+
+def test_service_data_in_a_checkpoint_stays_writable_as_json() -> None:
+    """`rng_state` and `diagnostics` carry no densities, so every number in them is finite."""
+    with pytest.raises(ValidationError, match="rng_state"):
+        _state(rng_state={"bit_generator": "PCG64", "state": {"inc": math.nan}})
+    with pytest.raises(ValidationError, match="diagnostics"):
+        _state(diagnostics={"ess": [1.0, -math.inf]})
+    ok = _state(rng_state={"bit_generator": "PCG64", "state": {"inc": 3}}, diagnostics={"ess": 2.0})
+    assert canonical_json(ok.model_dump(mode="json"))
+
+
+# --------------------------------------------------------------------------------------
 # the refusals
 # --------------------------------------------------------------------------------------
 
