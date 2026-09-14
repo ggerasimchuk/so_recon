@@ -810,6 +810,20 @@ def test_boundary_fractional_flow_must_sum_to_one() -> None:
         )
 
 
+@pytest.mark.parametrize("fractional_flow", [(0.0, 1.0), (0.5, 0.5), (1.0 - 1e-12, 1e-12)])
+def test_pressure_water_boundary_rejects_any_oil_fraction(
+    fractional_flow: tuple[float, float],
+) -> None:
+    with pytest.raises(ValidationError, match="pressure_water.*pure water"):
+        BoundarySpec(
+            kind="pressure_water",
+            cells=(1,),
+            pressure_pa=2.5e7,
+            trans_flow=1e-12,
+            fractional_flow=fractional_flow,
+        )
+
+
 def test_an_empty_observations_table_is_allowed() -> None:
     obs = ObservationSpec(dynamic_channels=(), pressure_available=False)
     assert obs.table_path is None and obs.sha256 is None

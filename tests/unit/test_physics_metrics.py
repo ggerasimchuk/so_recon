@@ -72,8 +72,8 @@ from so_recon.validation.physics import (
 ROOT = Path(__file__).resolve().parents[2]
 TOLERANCES_PATH = ROOT / DEFAULT_TOLERANCES_RELPATH
 
-#: The plan's Task 9.1 block, restated here so the config is compared against the plan and
-#: not against itself. A change to `configs/e01_tolerances.yml` that nobody decided fails
+#: Task 9.1 plus the explicit v2 (2026-09-14) near-zero 1 ml phase tolerance; compare
+#: against this independent list. A change to `configs/e01_tolerances.yml` that nobody decided fails
 #: this test, which is the whole point of fixing the tolerances before the first scoring run.
 PLAN_TOLERANCES: dict[str, float] = {
     "balance_cumulative_relative_max": 1.0e-3,
@@ -99,6 +99,7 @@ PLAN_TOLERANCES: dict[str, float] = {
     "refinement_so_pv_mae_max": 0.02,
     "refinement_inventory_relative_max": 0.01,
     "refinement_monthly_volume_relative_max": 0.02,
+    "refinement_monthly_volume_absolute_max_m3_sc": 1.0e-6,
 }
 
 
@@ -138,9 +139,9 @@ def test_an_unknown_tolerance_is_a_refusal(tmp_path: Path) -> None:
 
 def test_a_config_from_another_schema_is_a_refusal(tmp_path: Path) -> None:
     payload = _valid_payload()
-    payload["schema_version"] = "e01-tolerances-2"
+    payload["schema_version"] = "e01-tolerances-1"
     path = _write_tolerances(tmp_path / "t.yml", payload)
-    with pytest.raises(ValueError, match="e01-tolerances-2"):
+    with pytest.raises(ValueError, match="e01-tolerances-1"):
         load_tolerances(path)
 
 
@@ -1129,3 +1130,79 @@ def test_a_fixture_that_is_not_a_refinement_pair_is_refused_by_compare_refinemen
             support,
             tolerances,
         )
+
+
+def test_minor_phase_disagreement_is_not_diluted_by_total_throughput(
+    tolerances: dict[str, float], paths: ProjectPaths
+) -> None:
+    coarse = _refinement_side(paths, label="phase-c", nx=16)
+    fine = _refinement_side(paths, label="phase-f", nx=32)
+    rows = pq.read_table(fine["monthly"]).to_pylist()
+    for row in rows:
+        row["water_prod_m3_sc"] = 30.0
+        row["oil_prod_m3_sc"] = 980.0
+    pq.write_table(pa.Table.from_pylist(rows, schema=MONTHLY_SCHEMA), fine["monthly"])
+    check = compare_refinement(coarse, fine, _support(), tolerances)
+    assert check.status == "FAIL"
+    assert check.metrics["monthly_volume_relative"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("fine_water, expected", [(5e-7, "PASS"), (2e-6, "FAIL")])
+def test_near_zero_phase_uses_explicit_absolute_tolerance(
+    tolerances: dict[str, float], paths: ProjectPaths, fine_water: float, expected: str
+) -> None:
+    coarse = _refinement_side(paths, label="zero-c", nx=16)
+    fine = _refinement_side(paths, label="zero-f", nx=32)
+    for side, water in ((coarse, 0.0), (fine, fine_water)):
+        rows = pq.read_table(side["monthly"]).to_pylist()
+        for row in rows:
+            row["water_prod_m3_sc"] = water
+        pq.write_table(pa.Table.from_pylist(rows, schema=MONTHLY_SCHEMA), side["monthly"])
+    check = compare_refinement(coarse, fine, _support(), tolerances)
+    assert check.status == expected
+    assert check.metrics["monthly_volume_near_zero_absolute_m3_sc"] == fine_water
+
+
+@pytest.mark.parametrize("value", [0.0, float("inf"), float("nan")])
+@pytest.mark.parametrize("via_file", [False, True])
+def test_tolerance_limits_must_be_finite_and_positive(
+    tmp_path: Path, value: float, via_file: bool
+) -> None:
+    from so_recon.validation.physics import require_tolerances
+
+    payload = _valid_payload()
+    payload["refinement_monthly_volume_relative_max"] = value
+    with pytest.raises(ValueError, match="refinement_monthly_volume_relative_max"):
+        if via_file:
+            load_tolerances(_write_tolerances(tmp_path / "invalid-limit.yml", payload))
+        else:
+            del payload["schema_version"]
+            require_tolerances(payload)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0, None])
+def test_invalid_monthly_phase_volume_is_unreadable(
+    tolerances: dict[str, float], paths: ProjectPaths, value: float | None
+) -> None:
+    coarse = _refinement_side(paths, label="bad-volume-c", nx=16)
+    fine = _refinement_side(paths, label="bad-volume-f", nx=32)
+    rows = pq.read_table(fine["monthly"]).to_pylist()
+    rows[0]["water_prod_m3_sc"] = value
+    pq.write_table(pa.Table.from_pylist(rows), fine["monthly"])
+    check = compare_refinement(coarse, fine, _support(), tolerances)
+    assert check.status == "NOT_RUN"
+    assert check.reason is not None and "water_prod_m3_sc" in check.reason
+
+
+@pytest.mark.parametrize("value", [-1, 0.5, float("nan"), float("inf"), None, 5])
+def test_invalid_month_index_is_unreadable(
+    tolerances: dict[str, float], paths: ProjectPaths, value: int | float | None
+) -> None:
+    coarse = _refinement_side(paths, label="bad-month-c", nx=16)
+    fine = _refinement_side(paths, label="bad-month-f", nx=32)
+    rows = pq.read_table(fine["monthly"]).to_pylist()
+    rows[0]["month_index"] = value
+    pq.write_table(pa.Table.from_pylist(rows), fine["monthly"])
+    check = compare_refinement(coarse, fine, _support(), tolerances)
+    assert check.status == "NOT_RUN"
+    assert check.reason is not None and "month_index" in check.reason

@@ -1,9 +1,55 @@
+"""Shared fixtures, and the option that keeps the E01 stage validators off a unit cycle.
+
+`--run-e01-physics` gates every test marked `e01_physics`. Those tests read the artifacts a
+real `so-recon verify-physics` session published — they do not launch Julia and they do not
+re-run a suite (plan 12.9: the validator reads the actual native results) — but they are
+meaningless without a session to read, and a plain `pytest` must never be the thing that
+starts seventeen P1 trajectories. Without the option they SKIP, saying so.
+"""
+
 import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+E01_PHYSICS_OPTION = "--run-e01-physics"
+E01_PHYSICS_MARKER = "e01_physics"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        E01_PHYSICS_OPTION,
+        action="store_true",
+        default=False,
+        help=(
+            "run the E01 stage validators against the artifacts a previous "
+            "`so-recon verify-physics` session published"
+        ),
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        f"{E01_PHYSICS_MARKER}: reads published E01 suite artifacts; needs {E01_PHYSICS_OPTION}",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption(E01_PHYSICS_OPTION):
+        return
+    skip = pytest.mark.skip(
+        reason=(
+            f"needs {E01_PHYSICS_OPTION}: these validators read the artifacts of a real E01 "
+            "suite, and a plain pytest cycle does not run one"
+        )
+    )
+    for item in items:
+        if E01_PHYSICS_MARKER in item.keywords:
+            item.add_marker(skip)
+
 
 PROJECT_YAML = """
 spec_version: "3.0"

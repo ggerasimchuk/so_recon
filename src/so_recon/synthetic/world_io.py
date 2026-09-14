@@ -85,11 +85,15 @@ from so_recon.simulator.contracts import (
     RockSpec,
 )
 from so_recon.simulator.results import RESULT_FILENAME
+from so_recon.synthetic.acceptance import evaluate_p1_acceptance, evidence_matches_world
 from so_recon.synthetic.p1 import (
     GENERATOR_VERSION,
+    P1_PARENTS,
+    P1Design,
     RenderedWorld,
     control_segments,
     observation_masks,
+    parent_world_id,
     support_truth,
 )
 
@@ -201,10 +205,9 @@ class WorldRecord(StrictModel):
     forward_result_ref: FileRef | None
     forward_outputs: dict[str, str]
     cost: dict[str, Any] | None
-    #: The forward completed and published every output its request asked for. The PHYSICS
-    #: gates are scored separately and recorded on the suite row: a world can be `accepted`
-    #: here and still fail a balance threshold, and saying so needs both numbers visible.
+    #: A completed forward with explicit passing physical evidence, including signal.
     accepted: bool
+    physical_acceptance: dict[str, Any]
     provenance: dict[str, Any]
 
 
@@ -668,6 +671,9 @@ def write_world(
     forward: ForwardResult | None,
     paths: ProjectPaths,
     ctx: RunContext,
+    *,
+    gates: Mapping[str, Any] | None = None,
+    tolerances: Mapping[str, float] | None = None,
 ) -> ArtifactRef:
     """Publish a world: its case, its truth, its view and its manifest, in that order.
 
@@ -745,6 +751,10 @@ def write_world(
         if forward is None or forward.monthly_path is None
         else _file_ref(paths.resolve(forward.monthly_path).parent / RESULT_FILENAME, paths)
     )
+    assessment = evaluate_p1_acceptance(gates, tolerances)
+    bound = evidence_matches_world(world, forward, gates, paths, case)
+    assessment["checks"]["evidence_binding"] = bound
+    assessment["passed"] = assessment["passed"] and bound
     record = WorldRecord(
         generator_version=GENERATOR_VERSION,
         parent_world_id=world.parent_world_id,
@@ -767,7 +777,8 @@ def write_world(
         forward_result_ref=result_record,
         forward_outputs=_forward_outputs(forward),
         cost=None if forward is None else forward.cost.model_dump(mode="json"),
-        accepted=forward is not None and forward.status == "COMPLETE",
+        accepted=forward is not None and forward.status == "COMPLETE" and assessment["passed"],
+        physical_acceptance=assessment,
         provenance={
             "run_id": ctx.run_id,
             "created_at": now.isoformat(),
@@ -825,10 +836,8 @@ def world_row(
 ) -> dict[str, Any]:
     """One outcome row of the P1 suite, failures included.
 
-    `gates` is what the physics evaluation concluded about this world — the balance numbers,
-    the BHP behaviour, the state checks. It is a separate field from `accepted` on purpose:
-    a forward can complete and still miss a threshold, and a row that folded the two into
-    one verdict would hide which of them happened.
+    `gates` preserves the measured physics alongside the validated acceptance verdict.
+    A completed forward without explicit passing evidence is not accepted.
     """
     return {
         "parent_world_id": world.parent_world_id,
@@ -841,6 +850,7 @@ def world_row(
         "status": manifest["forward_status"],
         "reason": manifest["forward_reason"],
         "accepted": manifest["accepted"],
+        "physical_acceptance": manifest.get("physical_acceptance"),
         "cost": None if forward is None else forward.cost.model_dump(mode="json"),
         "manifest_path": manifest_path,
         "truth_ref": manifest["truth_ref"]["path"],
@@ -849,7 +859,9 @@ def world_row(
         # loader that table instead would give it the sparse G without the masks, the
         # controls or the cutoff.
         "context_ref": manifest["context_ref"]["path"],
-        "gates": dict(gates) if gates is not None else None,
+        "gates": dict(gates)
+        if gates is not None
+        else manifest.get("physical_acceptance", {}).get("metrics"),
     }
 
 
@@ -863,18 +875,43 @@ def write_suite_manifest(
 ) -> ArtifactRef:
     """Publish every outcome row of the parent set, including the ones that failed.
 
-    `fully_accepted` is the conjunction of the rows and is stated rather than inferred: plan
+    `fully_accepted` requires the exact five unique parents and passing evidence: plan
     11.9 requires a suite with a failed world to SAY that it was not fully accepted, and a
     manifest that simply omitted the row would say the opposite by omission.
     """
     stamp = now or datetime.now(UTC)
+    designs = {row.get("design_id") for row in rows}
+    complete = False
+    if len(designs) == 1 and next(iter(designs)) in {"p1-two-layer-v1", "p1-two-layer-v2"}:
+        design_id = next(iter(designs))
+        expected = {
+            (seed, family, parent_world_id(seed, P1Design(design_id=design_id, family=family)))
+            for seed, family in P1_PARENTS
+        }
+        actual = {(r.get("seed"), r.get("family"), r.get("parent_world_id")) for r in rows}
+        complete = len(rows) == len(expected) and actual == expected
+
+    def row_passes(row: Mapping[str, Any]) -> bool:
+        evidence = row.get("physical_acceptance") or {}
+        validated = evaluate_p1_acceptance(evidence.get("metrics"), evidence.get("tolerances"))
+        identity = (evidence.get("metrics") or {}).get("evidence_identity") or {}
+        return (
+            row.get("accepted") is True
+            and row.get("status") == "COMPLETE"
+            and validated["passed"]
+            and evidence.get("checks", {}).get("evidence_binding") is True
+            and identity.get("parent_world_id") == row.get("parent_world_id")
+            and (identity.get("forward") or {}).get("model_hash") == row.get("model_hash")
+        )
+
     payload = {
         "schema_version": SUITE_SCHEMA_VERSION,
         "generator_version": GENERATOR_VERSION,
         "derived_view_id": DERIVED_VIEW_ID,
         "split": SPLIT,
         "n_parents": len(rows),
-        "fully_accepted": bool(rows) and all(bool(row["accepted"]) for row in rows),
+        "parent_set_complete": complete,
+        "fully_accepted": complete and all(row_passes(row) for row in rows),
         "note": (
             "Every parent of the first P1 set has a row here, whatever its outcome. A row is "
             "never removed to make the suite pass (SPEC 18.4)"

@@ -1179,10 +1179,10 @@ def _refinement_outputs(result_dir: Path) -> dict[str, Path]:
 
 @pytest.mark.julia
 def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -> None:
-    """E01.10.7-10.8 under P1_LOOP: 256 and 1024 cells, 5 wells, 36 calendar months.
+    """E01.10.7-10.8 under P1_LOOP: 256 and 2304 cells, 5 wells, 36 calendar months.
 
     Four forwards in one Julia process: Buckley-Leverett at 64 cells with the report step and
-    at 128 with half of it, and the five-spot at 16x16 and at 32x32. The first pair has an
+    at 128 with half of it, and the five-spot at 16x16 and at 48x48. The first pair has an
     analytic answer and is scored against it; the second has none and is scored on AGREEMENT,
     over a fixed 8x8 support of physical zones that both meshes tile exactly.
 
@@ -1261,7 +1261,7 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     assert check.metrics["five_spot_so_range"] > 0.5
 
     # THE GATE IS BOUND TO THE FROZEN CONFIG, on both grids. `evaluate_physics` above scores
-    # the 16x16 case, whose shape its registry pins; the 32x32 refinement it cannot score at
+    # the 16x16 case, whose shape its registry pins; the 48x48 refinement it cannot score at
     # all, so without the two lines below that grid's symmetry would be gated only by the
     # hand-copied constant in `refinement.jl` — and editing `configs/e01_tolerances.yml` would
     # leave it silently on the old number. The diagnostic exports its copy and it is compared
@@ -1269,7 +1269,7 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     # the loaded value rather than against Julia's.
     symmetry_gate = tolerances["five_spot_symmetry_abs_max"]
     assert report["five_spot_symmetry_abs_max"] == symmetry_gate
-    for grid in ("five_spot_16", "five_spot_32"):
+    for grid in ("five_spot_16", "five_spot_48"):
         measured = report["five_spot_symmetry"][grid]
         assert measured["so_mirror_x_abs"] <= symmetry_gate, grid
         assert measured["so_mirror_y_abs"] <= symmetry_gate, grid
@@ -1277,40 +1277,50 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
         assert measured["so_range"] > 0.5, grid
 
     # ---- 10.8 the same continuous problem on a finer grid ---------------------------------
-    fine = fixtures["five_spot_32"]
+    fine = fixtures["five_spot_48"]
     assert fine["status"] == "COMPLETE"
     fine_case = fine["case"]
-    assert tuple(fine_case["grid"]["shape"]) == (32, 32, 1)
+    assert tuple(fine_case["grid"]["shape"]) == (48, 48, 1)
     # THE SAME CONTINUOUS FIELD, not a second realisation: the same extent, the same
     # homogeneous porosity and permeability, and the same total pore volume.
     assert tuple(fine_case["grid"]["extent_m"]) == FIVE_SPOT_EXTENT_M
-    for label, fixture in (("16", coarse), ("32", fine)):
+    for label, fixture in (("16", coarse), ("48", fine)):
         assert set(np.asarray(fixture["arrays"]["porosity"], dtype=np.float64)) == {0.2}, label
     coarse_pv = float(np.asarray(coarse["native"]["pore_volume_m3"], dtype=np.float64).sum())
     fine_pv = float(np.asarray(fine["native"]["pore_volume_m3"], dtype=np.float64).sum())
     assert fine_pv == pytest.approx(coarse_pv, rel=1e-12)
-    # The wells are at the same PHYSICAL locations: what perforated one coarse cell perforates
-    # the 2x2 block of fine cells that replaced it.
+    # Fixed vertical trajectories: centre child of the odd 3x refinement, no
+    # additional parallel full-height completions.
     fine_wells = {w["well_id"]: w for w in fine_case["wells"]}
-    assert sorted(fine_wells["INJ_SW"]["cells"]) == sorted(
-        _cell(i, j, 32) for i in (4, 5) for j in (4, 5)
-    )
+    assert fine_wells["INJ_SW"]["cells"] == [_cell(7, 7, 48)]
+    for name, well in wells.items():
+        assert len(fine_wells[name]["cells"]) == len(well["cells"])
+        coarse_xyz = np.asarray(coarse["arrays"]["cell_centers_m"])[well["cells"]]
+        fine_xyz = np.asarray(fine["arrays"]["cell_centers_m"])[fine_wells[name]["cells"]]
+        np.testing.assert_allclose(fine_xyz, coarse_xyz, rtol=0, atol=1e-12)
     # The native well index is RECOMPUTED from the same radius in the refined geometry, never
     # carried over and never tuned back to reproduce the coarse answer.
     wi = report["five_spot_well_index_total"]
-    assert wi["32"]["INJ_SW"] != wi["16"]["INJ_SW"]
-    assert wi["32"]["INJ_SW"] > wi["16"]["INJ_SW"]
+    assert wi["48"]["INJ_SW"] != wi["16"]["INJ_SW"]
+    assert wi["48"]["INJ_SW"] > wi["16"]["INJ_SW"]
+    # Isotropic Peaceman r_e = 0.14*sqrt(dx^2+dy^2). Only its logarithm
+    # changes: the number and 10 m length of vertical completions stay fixed.
+    coarse_re = 0.14 * math.sqrt(2) * (400.0 / 16)
+    fine_re = 0.14 * math.sqrt(2) * (400.0 / 48)
+    expected_wi_ratio = math.log(coarse_re / 0.1) / math.log(fine_re / 0.1)
+    for name in wells:
+        assert wi["48"][name] / wi["16"][name] == pytest.approx(expected_wi_ratio, rel=1e-12)
 
-    _, fine_dir = publish_fixture(fine, paths, "five-spot-32", report, world="refinement")
+    _, fine_dir = publish_fixture(fine, paths, "five-spot-48", report, world="refinement")
     support = CommonSupport(
         name="five_spot_refinement",
         n_zones=SUPPORT_SIDE**2,
         coarse_zone_id=cartesian_zone_ids(16, 16, SUPPORT_SIDE),
-        fine_zone_id=cartesian_zone_ids(32, 32, SUPPORT_SIDE),
+        fine_zone_id=cartesian_zone_ids(48, 48, SUPPORT_SIDE),
     )
     # The support Julia used and the one recomputed here are the same partition.
     assert support.coarse_zone_id.tolist() == report["support_zone_ids"]["five_spot_16"]
-    assert support.fine_zone_id.tolist() == report["support_zone_ids"]["five_spot_32"]
+    assert support.fine_zone_id.tolist() == report["support_zone_ids"]["five_spot_48"]
 
     refinement = compare_refinement(
         _refinement_outputs(coarse_dir), _refinement_outputs(fine_dir), support, tolerances
@@ -1321,7 +1331,7 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     # comparison legal at all.
     assert refinement.metrics["support_pore_volume_relative"] < 1e-12
     assert refinement.metrics["coarse_cells"] == 256.0
-    assert refinement.metrics["fine_cells"] == 1024.0
+    assert refinement.metrics["fine_cells"] == 2304.0
     assert refinement.metrics["n_months"] == float(FIVE_SPOT_MONTHS)
     # NOT VACUOUS: the two grids really do give different answers, and the difference is a
     # discretisation sensitivity rather than a posterior.
@@ -1349,3 +1359,45 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     ratio = errors[128] / errors[64]
     assert ratio <= tolerances["bl_refinement_ratio_max"]
     assert errors[128] < errors[64]
+
+
+@pytest.mark.julia
+def test_five_spot_refinement_preserves_physical_perforations() -> None:
+    """Horizontal refinement must not drill extra full-height vertical connections."""
+    import subprocess
+
+    script = r"""
+    using Test
+    include(joinpath(pwd(), "julia", "verification", "operations.jl"))
+    coarse, ca = five_spot_case(16)
+    @testset "fixed physical well trajectories" begin
+        for nx in (48, 80, 112)
+            fine, fa = five_spot_case(nx)
+            for (cw, fw) in zip(coarse["wells"], fine["wells"])
+                @test cw["well_id"] == fw["well_id"]
+                @test length(cw["cells"]) == length(fw["cells"])
+                cc = ca["cell_centers_m"][cw["cells"] .+ 1, :]
+                fc = fa["cell_centers_m"][fw["cells"] .+ 1, :]
+                @test size(cc) == size(fc)
+                if size(cc) == size(fc)
+                    @test cc ≈ fc atol=1e-12
+                end
+            end
+        end
+        @test_throws ErrorException five_spot_case(32)
+    end
+    """
+    result = subprocess.run(
+        [
+            str(_skip_unless_julia_is_installed()),
+            f"--project={ROOT / 'julia'}",
+            "--startup-file=no",
+            "-e",
+            script,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

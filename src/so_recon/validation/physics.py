@@ -3,7 +3,8 @@
 Three responsibilities, kept apart on purpose.
 
 **The tolerances are data, not code.** `load_tolerances` reads `configs/e01_tolerances.yml`
-and refuses anything that is not exactly the key set the plan fixed: a missing key is a
+and refuses anything outside the versioned key set (Task 9.1 plus the v2 absolute phase
+limit): a missing key is a
 refusal rather than a default, and an unknown key is a refusal rather than a value nobody
 reads. A threshold that can be defaulted is a threshold nobody agreed to, and a scoring run
 whose config silently gained a key is a run whose gate moved.
@@ -26,6 +27,8 @@ they are declared here and the integration test proves the published case matche
 Denominators, once. A rate or a volume is divided by `max(abs(reference), 1e-6)` in its own
 unit and a pressure by `max(abs(reference), 1 Pa)`, exactly as `configs/e01_tolerances.yml`
 states; a zero rate is checked absolutely and never as a relative error against zero.
+Version 2 compares near-zero phase volumes against its explicit absolute tolerance,
+with crossover absolute_limit / relative_limit. Raw phase-relative errors remain reported.
 
 On the duplication with `validation.balance`: that module has carried
 `CUMULATIVE_RELATIVE_TOLERANCE`, `MEDIAN_STEP_RELATIVE_TOLERANCE` and `BALANCE_FLOOR_M3_SC`
@@ -60,9 +63,10 @@ DEFAULT_TOLERANCES_RELPATH = "configs/e01_tolerances.yml"
 
 #: The schema the tolerance block declares. A config from another schema is refused rather
 #: than read field by field: the names would still resolve and would mean something else.
-TOLERANCE_SCHEMA_VERSION = "e01-tolerances-1"
+TOLERANCE_SCHEMA_VERSION = "e01-tolerances-2"
 
-#: Every tolerance the plan fixed in Task 9.1, and nothing else. `load_tolerances` requires
+#: Task 9.1 tolerances plus the explicit v2 absolute phase-volume tolerance.
+#: `load_tolerances` requires
 #: EXACTLY these: see the module docstring for why neither direction is forgiving.
 REQUIRED_TOLERANCE_KEYS: frozenset[str] = frozenset(
     {
@@ -89,6 +93,7 @@ REQUIRED_TOLERANCE_KEYS: frozenset[str] = frozenset(
         "refinement_so_pv_mae_max",
         "refinement_inventory_relative_max",
         "refinement_monthly_volume_relative_max",
+        "refinement_monthly_volume_absolute_max_m3_sc",
     }
 )
 
@@ -127,14 +132,10 @@ def load_tolerances(path: Path) -> dict[str, float]:
             f"Missing {missing}, unknown {unknown}; a missing threshold is never defaulted "
             "and an unknown one is never ignored"
         )
-    out: dict[str, float] = {}
-    for key, value in sorted(values.items()):
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            raise ValueError(f"{path}: {key} must be a number, got {value!r}")
-        if not float(value) > 0.0:
-            raise ValueError(f"{path}: {key} must be positive, got {value!r}")
-        out[key] = float(value)
-    return out
+    try:
+        return require_tolerances(values)
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from exc
 
 
 def require_tolerances(tolerances: Mapping[str, float]) -> dict[str, float]:
@@ -146,7 +147,14 @@ def require_tolerances(tolerances: Mapping[str, float]) -> dict[str, float]:
             f"the tolerance mapping is not the fixed block: missing {missing}, unknown "
             f"{unknown}; load it with load_tolerances({DEFAULT_TOLERANCES_RELPATH!r})"
         )
-    return {key: float(value) for key, value in tolerances.items()}
+    out: dict[str, float] = {}
+    for key, value in sorted(tolerances.items()):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"{key} must be a number, got {value!r}")
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{key} must be finite and positive, got {value!r}")
+        out[key] = float(value)
+    return out
 
 
 # --------------------------------------------------------------------------------------
@@ -416,6 +424,11 @@ _REFINEMENT_GATES: tuple[Gate, ...] = (
     Gate("so_pv_mae", "refinement_so_pv_mae_max", "at_most"),
     Gate("inventory_relative", "refinement_inventory_relative_max", "at_most"),
     Gate("monthly_volume_relative", "refinement_monthly_volume_relative_max", "at_most"),
+    Gate(
+        "monthly_volume_near_zero_absolute_m3_sc",
+        "refinement_monthly_volume_absolute_max_m3_sc",
+        "at_most",
+    ),
 )
 
 _BL_GATES: tuple[Gate, ...] = (
@@ -944,19 +957,42 @@ def _component_inventory_m3_sc(
 def _monthly_volumes(path: Path) -> dict[str, NDArray[np.float64]]:
     """Every well's monthly phase integrals, summed to the field, one row per month."""
     rows = _read_table(path, ("month_index", *_MONTHLY_VOLUME_COLUMNS))
-    months = [int(m) for m in rows["month_index"]]
-    n_months = max(months) + 1
+    months = rows["month_index"]
+    if any(isinstance(month, bool) or not isinstance(month, int) or month < 0 for month in months):
+        raise ArtifactUnreadable(f"{path}: month_index must contain nonnegative integers")
+    unique_months = set(months)
+    # Check contiguity before allocating: a corrupt huge index must not request a
+    # huge array, and a missing month must not silently become a zero-volume month.
+    if unique_months != set(range(len(unique_months))):
+        raise ArtifactUnreadable(f"{path}: month_index must cover consecutive months starting at 0")
+    n_months = len(unique_months)
     out: dict[str, NDArray[np.float64]] = {}
     for column in _MONTHLY_VOLUME_COLUMNS:
         totals = np.zeros(n_months, dtype=np.float64)
         for month, value in zip(months, rows[column], strict=True):
-            totals[month] += float(value)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(value)
+                or value < 0.0
+            ):
+                raise ArtifactUnreadable(
+                    f"{path}: {column} must contain finite nonnegative volumes"
+                )
+            total = float(totals[month]) + float(value)
+            if not math.isfinite(total):
+                raise ArtifactUnreadable(f"{path}: {column} monthly sum is nonfinite")
+            totals[month] = total
         out[column] = totals
+
     return out
 
 
 def _refinement_metrics(
-    coarse: Mapping[str, Path], fine: Mapping[str, Path], support: CommonSupport
+    coarse: Mapping[str, Path],
+    fine: Mapping[str, Path],
+    support: CommonSupport,
+    tolerances: Mapping[str, float],
 ) -> dict[str, float]:
     grids: dict[str, dict[str, Any]] = {}
     for label, outputs, zone_id in (
@@ -1011,24 +1047,33 @@ def _refinement_metrics(
             f"{len(fine_monthly[_MONTHLY_VOLUME_COLUMNS[0]])} months; a refinement compares "
             "the same horizon"
         )
-    # THE DENOMINATOR, stated once. Each monthly phase integral is divided by the month's own
-    # total liquid THROUGHPUT — everything produced and injected in it — and not by its own
-    # value. A phase integral that is a millionth of the month's throughput is numerical noise,
-    # and dividing two of them by each other measures the noise floor rather than the physics;
-    # the frozen 2% is about volumes somebody would forecast. The self-relative number is
-    # reported beside it, never as the gate, so a large relative disagreement on a negligible
-    # phase stays visible.
-    throughput = sum(coarse_monthly[column] for column in _MONTHLY_VOLUME_COLUMNS)
-    throughput_denominator = np.maximum(np.abs(throughput), VOLUME_DENOMINATOR_FLOOR)
+    # v2: 2% of each phase's OWN reference volume, with an explicit 1 ml
+    # absolute tolerance below their crossover. The raw relative number is still
+    # reported. Neither oil throughput nor injection can dilute a water error.
+    absolute_limit = tolerances["refinement_monthly_volume_absolute_max_m3_sc"]
+    relative_limit = tolerances["refinement_monthly_volume_relative_max"]
+    crossover = absolute_limit / relative_limit
     monthly_relative = 0.0
     monthly_self_relative = 0.0
+    monthly_near_zero_absolute = 0.0
     monthly_absolute = 0.0
     for column in _MONTHLY_VOLUME_COLUMNS:
         difference = np.abs(fine_monthly[column] - coarse_monthly[column])
+        own = np.abs(coarse_monthly[column])
+        near_zero = own <= crossover
         monthly_absolute = max(monthly_absolute, float(difference.max()))
-        monthly_relative = max(monthly_relative, float((difference / throughput_denominator).max()))
-        own = np.maximum(np.abs(coarse_monthly[column]), VOLUME_DENOMINATOR_FLOOR)
-        monthly_self_relative = max(monthly_self_relative, float((difference / own).max()))
+        monthly_self_relative = max(
+            monthly_self_relative,
+            float((difference / np.maximum(own, VOLUME_DENOMINATOR_FLOOR)).max()),
+        )
+        if near_zero.any():
+            monthly_near_zero_absolute = max(
+                monthly_near_zero_absolute, float(difference[near_zero].max())
+            )
+        if (~near_zero).any():
+            monthly_relative = max(
+                monthly_relative, float((difference[~near_zero] / own[~near_zero]).max())
+            )
 
     return {
         "support_pore_volume_relative": float((np.abs(fine_pv - coarse_pv) / pv_denominator).max()),
@@ -1038,6 +1083,8 @@ def _refinement_metrics(
         "inventory_relative": inventory_relative,
         "monthly_volume_relative": monthly_relative,
         "monthly_volume_self_relative": monthly_self_relative,
+        "monthly_volume_near_zero_absolute_m3_sc": monthly_near_zero_absolute,
+        "monthly_volume_absolute_crossover_m3_sc": crossover,
         "monthly_volume_absolute_m3_sc": monthly_absolute,
         "n_zones": float(support.n_zones),
         "n_months": float(n_months),
@@ -1092,7 +1139,7 @@ def compare_refinement(
             ),
         )
     try:
-        metrics = _refinement_metrics(coarse_result, fine_result, common_support)
+        metrics = _refinement_metrics(coarse_result, fine_result, common_support, checked)
     except ArtifactUnreadable as exc:
         return PhysicsCheck(
             name=common_support.name,
@@ -1157,6 +1204,25 @@ def _measure(
     elif fixture.family == "five_spot":
         metrics.update(_five_spot_metrics(states, fixture))
     return metrics
+
+
+def common_metrics(
+    states_path: Path, balances_path: Path, tolerances: Mapping[str, float]
+) -> dict[str, float]:
+    """The saturation and balance numbers EVERY published forward owes, whatever its family.
+
+    A registered fixture is scored by `evaluate_physics`, which knows what else that fixture
+    claims. A result that is not one of the seven registered fixtures — an operational
+    sector, a P1 parent world — still publishes states and both balance statements, and plan
+    12.9 has the stage report cite those from the published files rather than from a
+    docstring. This is that subset, scored against the same frozen tolerance block and
+    against nothing else.
+    """
+    checked = require_tolerances(tolerances)
+    return {
+        **_saturation_metrics(_read_states(states_path)),
+        **_balance_metrics(balances_path, checked["balance_cumulative_target"]),
+    }
 
 
 def _failed_gates(

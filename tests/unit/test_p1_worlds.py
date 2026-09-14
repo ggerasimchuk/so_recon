@@ -274,14 +274,14 @@ def test_the_three_streams_are_independent_and_reproducible() -> None:
 def test_the_grid_is_the_p1_loop_box() -> None:
     design = P1Design()
     assert design.shape == (16, 16, 2)
-    assert design.extent_m == (400.0, 400.0, 20.0)
+    assert design.extent_m == (100.0, 100.0, 20.0)
     assert design.n_cells == 512
     world = render_p1(41, design)
     centers = world.arrays["cell_centers_m"]
     assert centers.shape == (512, 3)
     # z is depth, positive down, and the two layer centres are the only depths there are.
     assert sorted(set(centers[:, 2].tolist())) == [5.0, 15.0]
-    np.testing.assert_allclose(world.arrays["cell_volume_m3"], 25.0 * 25.0 * 10.0)
+    np.testing.assert_allclose(world.arrays["cell_volume_m3"], 6.25 * 6.25 * 10.0)
 
 
 def test_the_initial_state_is_oil_connected_hydrostatic_from_the_datum() -> None:
@@ -904,3 +904,245 @@ def test_a_failed_forward_is_kept_as_an_outcome_row(tmp_project: Path) -> None:
     assert row["seed"] == 45 and row["family"] == "high_contrast"
     assert row["cost"]["wall_s"] == 12.0
     assert row["gates"] is None
+
+
+def test_complete_without_physics_evidence_is_not_accepted(tmp_project: Path) -> None:
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    world = render_p1(41, P1Design())
+    case = build_p1_case(world, paths, ctx)
+    complete = _failed_result(case.model_hash, write_case(case, paths, ctx).sha256).model_copy(
+        update={"status": "COMPLETE", "reason": None}
+    )
+    ref = write_world(world, complete, paths, ctx)
+    assert json.loads(paths.resolve(ref.path).read_text())["accepted"] is False
+
+
+def test_versioned_p1_geometry_preserves_historical_design() -> None:
+    assert P1Design().design_id == "p1-two-layer-v2"
+    assert P1Design().extent_m == (100.0, 100.0, 20.0)
+    assert P1Design(design_id="p1-two-layer-v1").extent_m == (400.0, 400.0, 20.0)
+
+
+def _passing_physics_evidence() -> tuple[dict[str, Any], dict[str, float]]:
+    from so_recon.synthetic.acceptance import SCREEN_VERSION
+    from so_recon.validation.physics import load_tolerances
+
+    tolerances = load_tolerances(Path(__file__).resolve().parents[2] / "configs/e01_tolerances.yml")
+    metrics: dict[str, Any] = {
+        "status": "COMPLETE",
+        "balance_cumulative_relative": 0.0,
+        "balance_step_median_relative": 0.0,
+        "saturation_sum_abs": 0.0,
+        "saturation_bound_violation": 0.0,
+        "rate_control_relative": 0.0,
+        "pressure_min_pa": 1e7,
+        "producer_bhp_min_pa": 1e7,
+        "injector_bhp_max_pa": 2e7,
+        "equilibrium_preflight": {
+            "status": "COMPLETE",
+            "pressure_relative_drift": 0.0,
+            "state_saturation_drift": 0.0,
+            "connection_mass_kg_s": 0.0,
+            "balance_cumulative_relative": 0.0,
+            "balance_step_median_relative": 0.0,
+        },
+        "p2_lower_completion": {
+            "shut": list(range(18, 24)),
+            "open": [m for m in range(36) if not 18 <= m < 24],
+        },
+        "restart": {"completed_report_step": 36, "native_format": "Jutul-native"},
+        "watercut_signal": {
+            "version": SCREEN_VERSION,
+            "by_producer": {
+                well: {"valid": True, "maximum": 0.4, "range": 0.2} for well in ("P1", "P2")
+            },
+        },
+    }
+    return metrics, tolerances
+
+
+@pytest.mark.parametrize("fault", ["missing", "balance", "nan", "signal", "preflight", "restart"])
+def test_physics_acceptance_fails_closed(fault: str) -> None:
+    from so_recon.synthetic.acceptance import evaluate_p1_acceptance
+
+    gates, tolerances = _passing_physics_evidence()
+    assert evaluate_p1_acceptance(gates, tolerances)["passed"] is True
+    if fault == "missing":
+        del gates["producer_bhp_min_pa"]
+    elif fault == "balance":
+        gates["balance_cumulative_relative"] = 1.0
+    elif fault == "nan":
+        gates["pressure_min_pa"] = float("nan")
+    elif fault == "signal":
+        for producer in gates["watercut_signal"]["by_producer"].values():
+            producer["maximum"] = 0.0003
+    elif fault == "preflight":
+        gates["equilibrium_preflight"]["status"] = "FAILED"
+    else:
+        gates["restart"] = {}
+    assert evaluate_p1_acceptance(gates, tolerances)["passed"] is False
+
+
+@pytest.mark.parametrize("fault", ["none", "missing", "duplicate", "wrong_family", "failed_gate"])
+def test_suite_requires_exact_parent_set_and_physics(tmp_project: Path, fault: str) -> None:
+    from so_recon.synthetic.acceptance import evaluate_p1_acceptance
+    from so_recon.synthetic.p1 import parent_world_id
+    from so_recon.synthetic.world_io import write_suite_manifest
+
+    gates, tolerances = _passing_physics_evidence()
+    rows = [
+        {
+            "seed": seed,
+            "family": family,
+            "design_id": DESIGN_ID,
+            "parent_world_id": parent_world_id(seed, P1Design(family=family)),
+            "accepted": True,
+            "status": "COMPLETE",
+            "physical_acceptance": evaluate_p1_acceptance(gates, tolerances),
+        }
+        for seed, family in P1_PARENTS
+    ]
+    for row in rows:
+        row["model_hash"] = "a" * 64
+        row["physical_acceptance"]["checks"]["evidence_binding"] = True
+        row["physical_acceptance"]["metrics"]["evidence_identity"] = {
+            "parent_world_id": row["parent_world_id"],
+            "forward": {"model_hash": "a" * 64},
+        }
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows[-1] = rows[0]
+    elif fault == "wrong_family":
+        rows[-1]["family"] = "base"
+    elif fault == "failed_gate":
+        rows[-1]["physical_acceptance"] = None
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    ref = write_suite_manifest(
+        rows,
+        paths.reports / "suite.json",
+        paths,
+        RunContext.start(command="test", argv=[], cfg=None, paths=paths),
+    )
+    suite = json.loads(paths.resolve(ref.path).read_text())
+    assert suite["fully_accepted"] is (fault == "none")
+    assert len(suite["rows"]) == len(rows)
+
+
+def test_historical_v1_parent_ids_are_unchanged() -> None:
+    from so_recon.synthetic.p1 import parent_world_id
+
+    expected = [
+        "p1-base-s0041-d45d0dc01dd5",
+        "p1-base-s0042-67da57847444",
+        "p1-base-s0043-45814954de89",
+        "p1-low_vertical-s0044-212d729812e6",
+        "p1-high_contrast-s0045-1f19d2e2680f",
+    ]
+    assert [
+        parent_world_id(seed, P1Design(design_id="p1-two-layer-v1", family=family))
+        for seed, family in P1_PARENTS
+    ] == expected
+
+
+@pytest.mark.parametrize("fault", ["none", "invalid", "missing", "duplicate", "startup_only"])
+def test_late_signal_requires_valid_complete_dynamic_observations(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    from so_recon.synthetic import acceptance
+
+    rows = [
+        {"well_id": well, "month_index": month, "fw": 0.1 + 0.01 * month, "fw_valid": True}
+        for well in ("P1", "P2")
+        for month in range(36)
+    ]
+    if fault == "invalid":
+        rows[-1]["fw_valid"] = False
+    elif fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows[-1] = rows[-2]
+    elif fault == "startup_only":
+        for row in rows:
+            row["fw"] = 0.2 if row["month_index"] < 12 else 0.0
+    monkeypatch.setattr(acceptance, "_rows", lambda *args: rows)
+    result = _failed_result("a" * 64, "b" * 64)
+    screen = acceptance.watercut_signal(result, ProjectPaths.default(Path("/tmp")))
+    assert screen["passed"] is (fault == "none")
+
+
+@pytest.mark.parametrize("fault", ["null_preflight", "list_preflight", "nan_producer"])
+def test_malformed_nested_physical_evidence_fails_closed(fault: str) -> None:
+    from so_recon.synthetic.acceptance import evaluate_p1_acceptance
+
+    gates, tolerances = _passing_physics_evidence()
+    if fault == "null_preflight":
+        gates["equilibrium_preflight"] = None
+    elif fault == "list_preflight":
+        gates["equilibrium_preflight"] = []
+    else:
+        gates["watercut_signal"]["by_producer"]["P1"]["maximum"] = float("nan")
+    assert evaluate_p1_acceptance(gates, tolerances)["passed"] is False
+
+
+def test_arbitrary_passing_gates_cannot_accept_a_complete_world(tmp_project: Path) -> None:
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    world = render_p1(41, P1Design())
+    case = build_p1_case(world, paths, ctx)
+    complete = _failed_result(case.model_hash, write_case(case, paths, ctx).sha256).model_copy(
+        update={"status": "COMPLETE", "reason": None}
+    )
+    gates, tolerances = _passing_physics_evidence()
+    ref = write_world(world, complete, paths, ctx, gates=gates, tolerances=tolerances)
+    assert json.loads(paths.resolve(ref.path).read_text())["accepted"] is False
+
+
+def test_evidence_binding_rejects_foreign_attempt_preflight_and_changed_bytes(
+    tmp_project: Path,
+) -> None:
+    from so_recon.synthetic.acceptance import evidence_matches_world, result_evidence_identity
+    from so_recon.synthetic.p1 import closed_preflight_world
+
+    paths = ProjectPaths.default(tmp_project)
+    paths.ensure_dirs()
+    ctx = RunContext.start(command="forward", argv=[], cfg=None, paths=paths)
+    world = render_p1(41, P1Design())
+    case = build_p1_case(world, paths, ctx)
+    complete = _failed_result(case.model_hash, write_case(case, paths, ctx).sha256).model_copy(
+        update={"status": "COMPLETE", "reason": None}
+    )
+    pre_ctx = RunContext.start(command="preflight", argv=[], cfg=None, paths=paths)
+    pre_case = build_p1_case(closed_preflight_world(world), paths, pre_ctx)
+    pre = _failed_result(pre_case.model_hash, write_case(pre_case, paths, pre_ctx).sha256)
+    output = paths.artifacts / "binding-test.bin"
+    output.write_bytes(b"scored output")
+    complete = complete.model_copy(update={"monthly_path": "artifacts/binding-test.bin"})
+    gates = {
+        "evidence_identity": {
+            "parent_world_id": world.parent_world_id,
+            "forward": result_evidence_identity(complete, paths),
+            "preflight": result_evidence_identity(pre, paths),
+            "preflight_result": pre.model_dump(mode="json"),
+        }
+    }
+    assert evidence_matches_world(world, complete, gates, paths, case)
+    assert not evidence_matches_world(
+        world, complete.model_copy(update={"job_id": "other-attempt"}), gates, paths, case
+    )
+    assert not evidence_matches_world(render_p1(42, P1Design()), complete, gates, paths, case)
+    foreign_pre = pre.model_copy(update={"model_hash": "f" * 64})
+    foreign_gates = {
+        "evidence_identity": {
+            **gates["evidence_identity"],
+            "preflight": result_evidence_identity(foreign_pre, paths),
+            "preflight_result": foreign_pre.model_dump(mode="json"),
+        }
+    }
+    assert not evidence_matches_world(world, complete, foreign_gates, paths, case)
+    output.write_bytes(b"changed after scoring")
+    assert not evidence_matches_world(world, complete, gates, paths, case)

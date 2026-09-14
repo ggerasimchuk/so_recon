@@ -49,3 +49,38 @@ E00 открывает их только на чтение. Каталог `data
 Каждый запуск создаёт `artifacts/runs/<run_id>/` с `run.json`, `resolved_config.json`,
 `run.log` и артефактами запуска. Коммитируемые файлы в `reports/` и `configs/`
 детерминированы: повторный gate не создаёт diff.
+
+### E01: forward-synthetic
+
+`--root` и `--config` — глобальные и идут **до** подкоманды; порядок не менялся.
+
+    uv run so-recon --config configs/e01.yml forward --case PATH
+    uv run so-recon --config configs/e01.yml forward-resume --case PATH --restart PATH
+    uv run so-recon --config configs/e01.yml verify-physics --suite {p0|p1|bo}
+    uv run so-recon --config configs/e01.yml synthetic-p1 --seeds 41 42 43 44 45
+    uv run so-recon --config configs/e01.yml benchmark-forward --case PATH --warm-runs 5
+    uv run so-recon --config configs/e01.yml e01-report --runs PATH [PATH ...]
+
+    make e01-p0                   # зарегистрированный P0 suite (бюджет 10 минут)
+    make e01-p1                   # зарегистрированный P1 suite (бюджет 1 час)
+    make e01-gate                 # регрессия + suites + stage-валидаторы
+    make e01-report RUNS="artifacts/runs/<run_id> ..."
+
+`PATH` — **фактический** путь: файл, который у оператора есть, или путь, который напечатала
+предыдущая команда. Никогда не имя будущего артефакта и никогда не выдуманный run id.
+
+Код возврата: `0` только если произошло то, о чём просили. Записанный checkpoint, частичный
+отчёт или опубликованный мир сами по себе не являются успехом. Исчерпанный бюджет —
+`2` со списком незапущенных jobs; проваленная обязательная проверка — `1`.
+
+Запланированная матрица (23 job P0, 17 P1, 4 BO) описана в `configs/e01_jobs.json`; пороги
+зафиксированы в `configs/e01_tolerances.yml` и hash порогов проверяется перед каждым запуском.
+Итог стадии — `reports/stages/E01.md`, собранный **только** из опубликованных артефактов.
+Фигуры (`reports/figures/*.png`) читаются из опубликованных HDF5/Parquet; подпись на каждой:
+«synthetic truth; exploratory; educational OW».
+
+`scripts/e01_gate.sh` намеренно **не** вызывает `scripts/gate.sh`: тот удаляет `.venv` и
+сверяет lock-файлы с HEAD. Полный foundation gate выполняется отдельно, после коммита
+изменений зависимостей (E01 добавляет Matplotlib). Детерминированный отчёт окружения E00
+не перезаписывается: каждая E01-сессия пишет свои lock-хэши и свой хост в
+`e01_environment.json` внутри своего run-каталога.

@@ -482,6 +482,10 @@ class BoundarySpec(StrictModel):
                     "a closed boundary names no cells and carries no pressure or transmissibility"
                 )
             return self
+        if self.fractional_flow != (1.0, 0.0):
+            raise ValueError(
+                "a pressure_water boundary supplies pure water: fractional_flow must be (1, 0)"
+            )
         if not self.cells:
             raise ValueError("a pressure_water boundary needs at least one cell")
         if any(c < 0 for c in self.cells):

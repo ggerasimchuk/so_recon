@@ -322,6 +322,10 @@ function boundary_conditions(model, boundary)
         "build_forces: boundary.fractional_flow must be non-negative and sum to exactly 1, " *
         "got $(fractional)",
     )
+    fractional == [1.0, 0.0] || invalid(
+        "build_forces: a pressure_water boundary supplies pure water; " *
+        "fractional_flow must be [1, 0], got $(fractional)",
+    )
 
     n_cells = Jutul.number_of_cells(model.models[:Reservoir].domain)
     rho_water_sc = Float64(JutulDarcy.reference_densities(model.models[:Reservoir].system)[1])

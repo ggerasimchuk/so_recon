@@ -407,14 +407,13 @@ The column is closed and carries a shut monitoring well. It must stay where it i
 MEASURED, on the pinned JutulDarcy 0.3.11: at EXACTLY `So = 0` the two-phase Newton update
 produces a non-finite pressure increment — `Jutul.check_increment`
 (`Jutul/src/utils.jl:94`) reports `Pressure: 2 non-finite values`, and the simulator's own
-`failure_cuts_timestep` recovers by halving the step. With the oil phase exactly absent its
-conservation equation is `0 = 0`: `So * drho_o/dp` and `dkr_o/dSo` both vanish for the
-quadratic Corey pair, so the oil row carries no pressure sensitivity at all. It happens with
-the default CPR solver and with a direct one alike, and with and without the well, so it is
-the degenerate two-phase Jacobian and not the linear solver or the wellbore. The column
-still completes in equilibrium — measured drift below — and the alternative would be to move
-the fixture off the single-phase limit it is here to test, so the behaviour is recorded
-rather than designed around.
+`failure_cuts_timestep` recovers by halving the step. This was observed with the default CPR
+solver and with a direct solver, with and without the well; those observations do not
+establish the cause. At `So = 0` the oil accumulation still has the nonzero saturation
+derivative `d(phi * rho_o * So)/dSo = phi * rho_o`, so the absent phase alone does not prove
+a singular two-phase Jacobian. The column still completes in equilibrium — measured drift
+below — and the fixture retains the exact single-phase limit it is here to test. The
+timestep cuts are recorded without assigning an unverified mathematical explanation.
 """
 function hydrostatic_case()
     fluids = limit_fluids(

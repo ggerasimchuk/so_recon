@@ -14,7 +14,7 @@
 #   and time together is the only honest way to refine a first-order upwind scheme: halving
 #   the cells alone raises the Courant number of every step.
 #
-# * The five-spot at 16x16 and at 32x32. This pair has no analytic answer, so what is measured
+# * The five-spot at 16x16 and at 48x48. This pair has no analytic answer, so what is measured
 #   is AGREEMENT: the two are compared on a fixed 8x8 grid of physical zones that both meshes
 #   tile exactly, plus the standard-volume inventory and every monthly phase integral.
 #
@@ -23,13 +23,12 @@
 # The continuous field is the same one: the five-spot rock is homogeneous, so the fine grid
 # carries the identical porosity and permeability rather than a second draw of a random field,
 # and the zone pore volumes agree to round-off — which the check verifies rather than assumes.
-# The wells are at the same PHYSICAL locations: a well that perforated one coarse cell
-# perforates the whole block of fine cells that replaced it (`refine_cells`), so the completion
-# covers the same rock. Its well index is NOT carried over: `setup_well` recomputes it natively
-# from the same radius in the refined geometry, which is what a refinement means. Tuning a fine
-# WI until it reproduced the coarse rate would be fitting the answer.
+# The same full-height vertical trajectories are retained. Odd refinement 16→48
+# puts a centre child at each original completion centre; connection count, radius
+# and completed thickness are unchanged. Native WI is recomputed for the smaller
+# cell. Completing every child would instead drill extra parallel trajectories.
 #
-# The five-spot is 256 cells with 5 wells over 36 months and its refinement is 1024 cells, so
+# The five-spot is 256 cells with 5 wells over 36 months and its refinement is 2304 cells, so
 # both belong to P1_LOOP and neither may be run under P0_VERIFY, whose ceiling is 3 wells and
 # 12 report intervals.
 
@@ -44,12 +43,12 @@ using JSON
 include(joinpath(@__DIR__, "operations.jl"))
 
 #: The refinement pair of the five-spot: the 256-cell case plan 10.7 names, and one whole
-#: doubling of it. 32/16 = 2, so every coarse cell is exactly four fine ones.
-const FIVE_SPOT_GRIDS = (16, 32)
+#: tripling of it. 48/16 = 3 preserves each original cell centre.
+const FIVE_SPOT_GRIDS = (16, 48)
 
 #: The fixed physical support both five-spot grids are compared on: 8x8 zones over the same
-#: 400 x 400 m extent, so each zone is 50 x 50 m. 16 and 32 are both whole multiples of 8, so
-#: a zone is 2x2 coarse cells and 4x4 fine ones and every cell lies entirely inside one zone.
+#: 400 x 400 m extent, so each zone is 50 x 50 m. 16 and 48 are both whole multiples of 8, so
+#: a zone is 2x2 coarse cells and 6x6 fine ones and every cell lies entirely inside one zone.
 #: That exactness is why no geometry library is needed and why the zone pore volumes have to
 #: agree — the check measures that agreement instead of assuming it.
 const FIVE_SPOT_SUPPORT_SIDE = 8
@@ -61,7 +60,7 @@ const BL_REFINEMENT = ((64, 1), (128, 2))
 #: this process has no YAML reader and the diagnostic should fail where the number is produced.
 #:
 #: A hand-copied threshold is a threshold that can go stale, and this one carries real weight:
-#: `so_recon.validation.physics` pins its `five_spot` fixture to the 16x16 grid, so the 32x32
+#: `so_recon.validation.physics` pins its `five_spot` fixture to the 16x16 grid, so the 48x48
 #: refinement's symmetry is gated HERE and nowhere else. It is therefore EXPORTED in the
 #: payload below, and `tests/integration/test_e01_physics.py` asserts it equals the frozen YAML
 #: value and re-scores both grids' measured reflections against that value. Editing the YAML
@@ -173,7 +172,10 @@ function selftest_refinement()
 
         # --- 10.7 / 10.8 the five-spot at both resolutions -------------------------------
         for nx in FIVE_SPOT_GRIDS
-            elapsed = @elapsed run = run_operational(:five_spot, Dict{String,Any}("nx" => nx))
+            elapsed = @elapsed run = run_operational(:five_spot, Dict{String,Any}(
+                "nx" => nx, "tol_cnv" => 1.0e-10, "tol_mb" => 1.0e-12,
+                "tol_cnv_well" => 1.0e-12, "max_timestep" => 5.0 * SECONDS_PER_DAY,
+            ))
             @test run["status"] == "COMPLETE"
             extraction = run["extraction"]
             @test extraction["control_infeasible_reason"] === nothing
@@ -215,7 +217,7 @@ function selftest_refinement()
 
         # --- 10.8 the well index is RECOMPUTED, not carried over --------------------------
         coarse_wi = well_index_totals(fixtures["five_spot_16"])
-        fine_wi = well_index_totals(fixtures["five_spot_32"])
+        fine_wi = well_index_totals(fixtures["five_spot_48"])
         @test sort(collect(keys(coarse_wi))) == sort(collect(keys(fine_wi)))
         for name in keys(coarse_wi)
             # Native Peaceman on a smaller cell gives a different number for the same radius.
@@ -223,7 +225,7 @@ function selftest_refinement()
             @test fine_wi[name] != coarse_wi[name]
         end
         measured["five_spot_well_index_total"] =
-            Dict{String,Any}("16" => coarse_wi, "32" => fine_wi)
+            Dict{String,Any}("16" => coarse_wi, "48" => fine_wi)
 
         # --- 10.8 the support both grids are compared on ----------------------------------
         support = Dict{String,Any}()

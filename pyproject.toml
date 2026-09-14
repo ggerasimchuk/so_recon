@@ -12,6 +12,7 @@ dependencies = [
   "pyarrow>=19",
   "h5py>=3.16.0",
   "psutil>=6.1,<8",
+  "matplotlib>=3.9,<4",
 ]
 
 [project.scripts]
@@ -38,6 +39,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
   "julia: requires an instantiated Julia environment with JutulDarcy",
+  "e01_physics: reads published E01 suite artifacts; needs --run-e01-physics",
 ]
 
 [tool.ruff]

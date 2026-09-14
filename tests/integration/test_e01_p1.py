@@ -37,10 +37,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import pyarrow.parquet as pq
 import pytest
-from numpy.typing import NDArray
 
 from so_recon.config.resources import P1_LOOP_PROFILE
 from so_recon.environment.resources import ResourceSnapshot, probe_resources
@@ -48,9 +45,8 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
-from so_recon.simulator.case_io import load_case, read_array
+from so_recon.simulator.case_io import load_case
 from so_recon.simulator.contracts import (
-    SECONDS_PER_DAY,
     CaseBundle,
     ForwardResult,
     OutputRequest,
@@ -59,13 +55,12 @@ from so_recon.simulator.forward import SolverConfig, check_requested_outputs, si
 from so_recon.simulator.julia_bridge import JuliaNotFoundError, find_julia
 from so_recon.simulator.results import RESULT_FILENAME, load_forward_result, write_forward_result
 from so_recon.simulator.worker import PersistentJuliaWorker
+from so_recon.synthetic.acceptance import score_p1_world
 from so_recon.synthetic.p1 import (
     COMPLETION_REOPEN_EDGE,
     COMPLETION_SHUT_EDGE,
-    INJECTOR_IDS,
     INJECTOR_MAX_BHP_PA,
     P1_PARENTS,
-    PRODUCER_IDS,
     PRODUCER_MIN_BHP_PA,
     P1Design,
     RenderedWorld,
@@ -135,123 +130,6 @@ def _bounded_probe(session_dir: Path) -> Callable[[], ResourceSnapshot]:
     return probe
 
 
-def _states(result: ForwardResult, paths: ProjectPaths) -> dict[str, NDArray[np.float64]]:
-    return {
-        name: np.asarray(read_array(ref, paths), dtype=np.float64)
-        for name, ref in result.states.items()
-    }
-
-
-def _rows(path: str | None, paths: ProjectPaths) -> list[dict[str, Any]]:
-    assert path is not None
-    out: list[dict[str, Any]] = pq.read_table(paths.resolve(path)).to_pylist()
-    return out
-
-
-def _state_metrics(states: dict[str, NDArray[np.float64]]) -> dict[str, float]:
-    """Finiteness, the saturation identity and the physical bounds of every published state."""
-    for name, values in states.items():
-        assert np.isfinite(values).all(), f"{name} holds nonfinite values"
-    sw, so, pressure = states["sw"], states["so"], states["pressure_pa"]
-    return {
-        "saturation_sum_abs": float(np.abs(sw + so - 1.0).max()),
-        "saturation_bound_violation": max(
-            0.0, float(-sw.min()), float(sw.max() - 1.0), float(-so.min()), float(so.max() - 1.0)
-        ),
-        "pressure_min_pa": float(pressure.min()),
-        "pressure_max_pa": float(pressure.max()),
-        "sw_min": float(sw.min()),
-        "sw_max": float(sw.max()),
-    }
-
-
-def _balance_metrics(result: ForwardResult, paths: ProjectPaths) -> dict[str, float]:
-    """The worst of BOTH published balances, over both components (plan §7.6)."""
-    rows = _rows(result.balances_path, paths)
-    assert len({row["balance"] for row in rows}) == 2, "a forward publishes both balances"
-    return {
-        "balance_cumulative_relative": max(float(r["cumulative_relative"]) for r in rows),
-        "balance_step_median_relative": max(float(r["median_step_relative"]) for r in rows),
-        "balance_max_step_relative": max(float(r["max_step_relative"]) for r in rows),
-        "balance_absolute_residual_m3_sc": max(float(r["absolute_residual_m3_sc"]) for r in rows),
-    }
-
-
-def _connection_mass_rate(result: ForwardResult, paths: ProjectPaths) -> float:
-    """The largest mean connection mass rate any perforation carried, kg/s."""
-    worst = 0.0
-    for row in _rows(result.connections_path, paths):
-        duration = float(row["end_s"]) - float(row["start_s"])
-        assert duration > 0.0
-        worst = max(worst, abs(float(row["total_mass_kg"])) / duration)
-    return worst
-
-
-def _bhp_metrics(result: ForwardResult, paths: ProjectPaths) -> dict[str, float]:
-    """How close every well came to the limit its own control segment recorded."""
-    rows = [row for row in _rows(result.connections_path, paths) if row["bhp_min_pa"] is not None]
-    producers = [row for row in rows if str(row["well_id"]) in PRODUCER_IDS]
-    injectors = [row for row in rows if str(row["well_id"]) in INJECTOR_IDS]
-    assert producers and injectors
-    return {
-        "producer_bhp_min_pa": min(float(row["bhp_min_pa"]) for row in producers),
-        "producer_bhp_max_pa": max(float(row["bhp_max_pa"]) for row in producers),
-        "injector_bhp_min_pa": min(float(row["bhp_min_pa"]) for row in injectors),
-        "injector_bhp_max_pa": max(float(row["bhp_max_pa"]) for row in injectors),
-    }
-
-
-def _rate_control_relative(
-    world: RenderedWorld, result: ForwardResult, paths: ProjectPaths
-) -> float:
-    """How far any well's monthly volume fell from the rate its control asked for.
-
-    The target is the segment's own day rate times the length of that calendar month, so a
-    well that held its rate matches it to the solver's own zero and one that switched to a
-    pressure limit does not. It is REPORTED whatever it is: `CONTROL_INFEASIBLE` is the
-    verdict on a control that was not honoured, and this is the size of the miss.
-    """
-    edges = world.case_fields["report_edges_s"]
-    targets: dict[tuple[str, int], float] = {}
-    for segment in world.case_fields["controls"]:
-        for month in range(len(edges) - 1):
-            overlap = min(segment.end_s, edges[month + 1]) - max(segment.start_s, edges[month])
-            if overlap > 0.0:
-                targets[(segment.well_id, month)] = (
-                    targets.get((segment.well_id, month), 0.0)
-                    + segment.value * overlap / SECONDS_PER_DAY
-                )
-    worst = 0.0
-    for row in _rows(result.monthly_path, paths):
-        key = (str(row["well_id"]), int(row["month_index"]))
-        target = targets.get(key, 0.0)
-        actual = (
-            float(row["water_inj_m3_sc"])
-            if key[0] in INJECTOR_IDS
-            else float(row["liquid_prod_m3_sc"])
-        )
-        worst = max(worst, abs(actual - target) / max(abs(target), 1e-6))
-    return worst
-
-
-def _completion_event_months(
-    world: RenderedWorld, result: ForwardResult, paths: ProjectPaths
-) -> dict[str, list[int]]:
-    """Which months P2's LOWER perforation was open for, as the published table saw it."""
-    wells = {well.well_id: well for well in world.case_fields["wells"]}
-    lower_cell = wells["P2"].cells[-1]
-    rows = [
-        row
-        for row in _rows(result.connections_path, paths)
-        if str(row["well_id"]) == "P2" and int(row["cell_id"]) == lower_cell
-    ]
-    assert rows, "the published connections name no lower perforation for P2"
-    return {
-        "open": sorted(int(r["month_index"]) for r in rows if float(r["open_s"]) > 0.0),
-        "shut": sorted(int(r["month_index"]) for r in rows if float(r["open_s"]) == 0.0),
-    }
-
-
 def _run(
     world: RenderedWorld,
     paths: ProjectPaths,
@@ -297,60 +175,27 @@ def test_the_first_p1_parent_set_runs_and_every_outcome_is_recorded(tmp_project:
             world = render_p1(seed, P1Design(family=family))
 
             # ---- the equilibrium preflight ------------------------------------------
-            preflight_case, preflight, preflight_s = _run(
+            _preflight_case, preflight, preflight_s = _run(
                 closed_preflight_world(world),
                 paths,
                 worker,
                 ledger,
                 preflight_output_request(world.design),
             )
-            equilibrium: dict[str, Any] = {
-                "status": preflight.status,
-                "reason": preflight.reason,
-                "wall_s": preflight_s,
-                "case_id": preflight_case.case_id,
-            }
-            if preflight.status == "COMPLETE":
-                states = _states(preflight, paths)
-                pressure, sw, so = states["pressure_pa"], states["sw"], states["so"]
-                equilibrium |= {
-                    "pressure_relative_drift": float(
-                        (np.abs(pressure - pressure[0]) / np.abs(pressure[0])).max()
-                    ),
-                    "state_saturation_drift": max(
-                        float(np.abs(sw - sw[0]).max()), float(np.abs(so - so[0]).max())
-                    ),
-                    "connection_mass_kg_s": _connection_mass_rate(preflight, paths),
-                    **_balance_metrics(preflight, paths),
-                }
-
             # ---- the world itself -----------------------------------------------------
             request = output_request(world.design)
             _case, result, wall_s = _run(world, paths, worker, ledger, request)
-            gates: dict[str, Any] = {
-                "status": result.status,
-                "reason": result.reason,
-                "equilibrium_preflight": equilibrium,
-                "measured_wall_s": wall_s,
-            }
-            if result.status == "COMPLETE":
-                gates |= _balance_metrics(result, paths)
-                gates |= _state_metrics(_states(result, paths))
-                gates |= _bhp_metrics(result, paths)
-                gates["rate_control_relative"] = _rate_control_relative(world, result, paths)
-                gates["p2_lower_completion"] = _completion_event_months(world, result, paths)
-                assert result.restart is not None
-                gates["restart"] = {
-                    "completed_report_step": result.restart.completed_report_step,
-                    "completed_time_s": result.restart.completed_time_s,
-                    "native_format": result.restart.native_format,
-                }
+            gates = score_p1_world(world, result, preflight, paths)
+            gates["equilibrium_preflight"].update({"wall_s": preflight_s})
+            gates["measured_wall_s"] = wall_s
 
             manifest_ref = write_world(
                 world,
                 result,
                 paths,
                 RunContext.start(command="forward", argv=[], cfg=None, paths=paths),
+                gates=gates,
+                tolerances=tolerances,
             )
             manifest = json.loads(paths.resolve(manifest_ref.path).read_text(encoding="utf-8"))
             rows.append(
@@ -402,7 +247,8 @@ def test_the_first_p1_parent_set_runs_and_every_outcome_is_recorded(tmp_project:
         name = row["parent_world_id"]
         gates = row["gates"]
         assert row["status"] == "COMPLETE", f"{name}: {row['reason']}"
-        assert row["accepted"] is True, name
+        assert row["accepted"] is True, (name, row["physical_acceptance"])
+        assert gates["watercut_signal"]["passed"] is True, name
         # SPEC 23.1, both components and both published balances.
         assert (
             gates["balance_cumulative_relative"] <= tolerances["balance_cumulative_relative_max"]

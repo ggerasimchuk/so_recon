@@ -597,24 +597,22 @@ end
 """
     refine_cells(base_cells, nx, base_nx) -> Vector{Int}
 
-The cells of the `nx`-grid that cover the same PHYSICAL footprint as `base_cells` does on the
-`base_nx` grid.
+Map fixed vertical well trajectories to an odd nested grid refinement.
 
-The grids are nested — `nx` is a whole multiple of `base_nx` and both cover the same extent —
-so every fine cell lies entirely inside one base cell and the correspondence is exact without
-any geometry library. A well perforating a base cell therefore perforates the whole block of
-fine cells that replaces it: the same rock, in the same place, and the native well index is
-recomputed by `setup_well` from the same radius in the refined geometry rather than carried
-over or tuned to reproduce the coarse answer.
+Each base connection represents one full-height vertical perforation at that cell's
+centre. An odd refinement has a centre child at exactly the same coordinates; only
+that child is completed. Completing all children would multiply well length and WI.
+Even refinement is refused because this cell-centred fixture cannot represent its
+original trajectories exactly on that grid. Native WI is recomputed from unchanged
+radius and perforated thickness in the refined cell geometry.
 """
 function refine_cells(base_cells, nx::Int, base_nx::Int)
     factor, remainder = divrem(nx, base_nx)
-    remainder == 0 || error("refine_cells: $(nx) is not a whole refinement of $(base_nx)")
-    out = Int[]
-    for (bi, bj) in base_cells, dj in 0:(factor - 1), di in 0:(factor - 1)
-        push!(out, (bi * factor + di) + nx * (bj * factor + dj))
-    end
-    return sort!(out)
+    remainder == 0 && factor >= 1 && isodd(factor) ||
+        error("refine_cells: nx must be an odd whole refinement to preserve well coordinates")
+    offset = factor ÷ 2
+    return sort!([(bi * factor + offset) + nx * (bj * factor + offset)
+                  for (bi, bj) in base_cells])
 end
 
 """
@@ -651,16 +649,9 @@ function five_spot_case(nx::Int)
         [refine_cells((ij,), nx, FIVE_SPOT_BASE_NX) for ij in FIVE_SPOT_BASE_INJECTORS]
     injector_names = ["INJ_SW", "INJ_NW", "INJ_SE", "INJ_NE"]
 
-    # EVERY well of the pattern is a `SimpleWell`, and that is a measurement rather than a
-    # preference. A `SimpleWell` is a single node, so however many connections it has they are
-    # equidistant from it and no ordering can favour one. A `MultiSegmentWell` instead chains
-    # its nodes along the perforation list, and that chain has a direction: on the refined
-    # grid, where each injector covers a 2x2 block of cells rather than one, the chained
-    # injectors left the final oil saturation asymmetric by 1.1e-4 about one axis and 6.8e-5
-    # about the other — above the fixed `five_spot_symmetry_abs_max` of 1e-4, and NOT a
-    # convergence artefact: tightening `tol_cnv` to 1e-6 and `tol_mb` to 1e-9 moved it only to
-    # 1.0e-4. With single-node wells the same run is symmetric to 2.0e-5 about BOTH axes.
-    # 10.4's crossflow cases are the ones that need a segmented wellbore, and they keep it.
+    # Each injector keeps one vertical connection and the producer keeps its four
+    # fixed vertical connections. A single-node SimpleWell keeps equal-depth
+    # connections symmetric; the separate crossflow cases retain segmented wells.
     wells = Any[
         analytic_well("PRO1", producer_cells; reference_depth = datum, model = "simple"),
     ]
@@ -780,6 +771,7 @@ function run_operational(name::Symbol, options::AbstractDict = Dict{String,Any}(
     case, arrays = operational_case(name, options)
     solver = Dict{Symbol,Any}(Symbol(k) => v for (k, v) in options if k != "nx")
     out = Dict{String,Any}(
+        "solver_options" => Dict(String(k) => v for (k, v) in solver),
         "name" => String(name),
         "case" => case,
         "arrays" => serialisable_arrays(arrays),

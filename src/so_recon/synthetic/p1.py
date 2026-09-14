@@ -67,7 +67,7 @@ from so_recon.simulator.schedule import month_edges, month_edges_s
 GENERATOR_VERSION = "p1-generator-1"
 
 #: The design this generator renders, and the renderer label the case carries.
-DESIGN_ID: Literal["p1-two-layer-v1"] = "p1-two-layer-v1"
+DESIGN_ID: Literal["p1-two-layer-v2"] = "p1-two-layer-v2"
 RENDERER_VERSION = "e01.11"
 
 #: The six modes of the versioned cosine basis, per layer, and the two layers: twelve
@@ -199,12 +199,21 @@ class P1Design(StrictModel):
     what makes a comparison between them a comparison of geology.
     """
 
-    design_id: Literal["p1-two-layer-v1"] = DESIGN_ID
+    design_id: Literal["p1-two-layer-v1", "p1-two-layer-v2"] = DESIGN_ID
     family: Family = "base"
     shape: tuple[int, int, int] = (16, 16, 2)
-    extent_m: tuple[float, float, float] = (400.0, 400.0, 20.0)
+    extent_m: tuple[float, float, float] = (100.0, 100.0, 20.0)
     n_months: int = 36
     start_date: str = "2000-01-01"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _versioned_geometry(cls, values: Any) -> Any:
+        # v1 remains byte-reproducible. v2 changes only horizontal geometry: the
+        # same declared policy injects about one pore volume over three years.
+        if isinstance(values, dict) and values.get("design_id") == "p1-two-layer-v1":
+            return {"extent_m": (400.0, 400.0, 20.0), **values}
+        return values
 
     @model_validator(mode="after")
     def _is_the_two_layer_box(self) -> P1Design:
