@@ -424,6 +424,16 @@ function hydrostatic_case()
     return (case, arrays)
 end
 
+#: What the single-phase limit costs, MEASURED on the pinned Jutul 0.4.31 / JutulDarcy
+#: 0.3.11 and asserted exactly. Three report steps of a day become four accepted substeps
+#: because the non-finite Newton increment `hydrostatic_case` describes is caught twice by
+#: `failure_cuts_timestep` and each catch halves the step; the recovery is bounded, not
+#: open-ended, and if either number moves the defect has changed and must be looked at again
+#: rather than re-documented. An exhausted cut budget is `dt = NaN` and a hard failure, so
+#: these counters growing is the only quiet way this could rot.
+const SINGLE_PHASE_CUT_STEPS = 2
+const SINGLE_PHASE_ACCEPTED_STEPS = 4
+
 #: The segregation column: heavy water ABOVE light oil, which is the unstable arrangement.
 #: Both saturations are inside the §3.1 mobile range [0.2, 0.8] so that both phases can move;
 #: at the endpoints one of them could not, and the case would demonstrate nothing.
@@ -727,9 +737,30 @@ function selftest_analytic()
         # the native gravity parameter and the model's own densities, not asserted to be zero.
         head = abs(face["gdz"] * face["face_density_kg_m3"][1])
         @test abs(face["potential_residual_pa"][1]) / head < 1.0e-5
-        # The single-phase limit costs the solver two timestep cuts (see `hydrostatic_case`):
-        # the substeps still tile the schedule and every report edge is still a boundary.
+        # The EXTENT of the single-phase defect `hydrostatic_case` documents, pinned rather
+        # than described. `run_forward` runs at `info_level = -1`, so the cut messages are
+        # suppressed and the only trace is an unconditional `@warn` on a subprocess's stderr
+        # that the launcher discards — a prose note about "two cuts" would let two become
+        # twenty, or the degeneracy change character on a dependency bump, entirely in
+        # silence. The solver's own counters are in the payload and are asserted exactly:
+        # this is the fixture that defines verified physics for the rest of the plan, so its
+        # known fragility is the thing that has to break first.
+        solver = column["extraction"]["solver"]
+        @test solver["cut_steps"] == SINGLE_PHASE_CUT_STEPS
+        @test solver["accepted_steps"] == SINGLE_PHASE_ACCEPTED_STEPS
+        @test length(column["extraction"]["chunk"]["dt_s"]) == SINGLE_PHASE_ACCEPTED_STEPS
+        # Whatever the cuts, the accepted substeps still tile the schedule exactly and every
+        # report edge is still one of their boundaries (`requested_states` refuses otherwise).
         @test sum(column["extraction"]["chunk"]["dt_s"]) ≈ CLOSED_EDGES_DAYS[end] * SECONDS_PER_DAY
+        measured["single_phase_degeneracy"] = Dict{String,Any}(
+            "fixture" => "hydrostatic",
+            "report_steps" => length(CLOSED_EDGES_DAYS) - 1,
+            "cut_steps" => solver["cut_steps"],
+            "accepted_steps" => solver["accepted_steps"],
+            "nonlinear_iterations" => solver["nonlinear_iterations"],
+            "expected_cut_steps" => SINGLE_PHASE_CUT_STEPS,
+            "expected_accepted_steps" => SINGLE_PHASE_ACCEPTED_STEPS,
+        )
         # And no artificial drift afterwards.
         states = column["extraction"]["states"]
         @test maximum(

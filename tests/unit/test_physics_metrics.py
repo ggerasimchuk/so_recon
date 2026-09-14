@@ -296,15 +296,28 @@ def _write_states(
     return path
 
 
-def _write_balances(paths: ProjectPaths, label: str, *, residual_m3_sc: float = 0.0) -> Path:
+def _write_balances(
+    paths: ProjectPaths,
+    label: str,
+    *,
+    residual_m3_sc: float = 0.0,
+    step_residual_m3_sc: float = 0.0,
+) -> Path:
     """A published balances.parquet, from a real inventory/source pair.
 
-    `residual_m3_sc` is added to the LAST inventory entry of water only: that is the
-    mutation, and it is applied to the inventory rather than to the metric, so the residual
-    the evaluator reads is one `component_balance` really computed.
+    Both knobs move an INVENTORY entry of water and leave the source alone, so the residual
+    the evaluator reads is one `component_balance` really computed rather than a metric typed
+    in by hand.
+
+    `residual_m3_sc` moves the LAST entry, which breaks the cumulative balance.
+    `step_residual_m3_sc` moves the MIDDLE one, which breaks two consecutive steps by equal
+    and opposite amounts and therefore leaves the cumulative balance intact: that is the only
+    way to make `balance_step_median_relative` the gate that fires, and without it a test
+    could never tell the two balance gates apart.
     """
     inventory = np.array([[100.0, 200.0], [90.0, 200.0], [80.0, 200.0]], dtype=np.float64)
     source = np.diff(inventory, axis=0).copy()
+    inventory[1, 0] += step_residual_m3_sc
     inventory[-1, 0] += residual_m3_sc
     metrics = {
         name: component_balance(inventory, source, components=("water", "oil"))
@@ -348,16 +361,36 @@ def _closed_outputs(
     sw_drift: float = 0.0,
     pressure_drift_pa: float = 0.0,
     residual_m3_sc: float = 0.0,
+    step_residual_m3_sc: float = 0.0,
     connection_mass_kg: float = 0.0,
+    saturation_sum_excess: float = 0.0,
+    saturation_overshoot: float = 0.0,
 ) -> dict[str, Path]:
+    """The closed fixture's published artifacts, with one thing at a time moved.
+
+    `saturation_sum_excess` and `saturation_overshoot` break the saturation field in the two
+    independent ways the evaluator gates on, and both are applied to EVERY published time so
+    that the drift gate stays quiet and the failure is unambiguously the one under test:
+    an excess adds to `so` alone, so `sw + so` leaves 1 while both stay inside [0,1]; an
+    overshoot pushes `sw` above 1 and `so` symmetrically below 0, so the sum stays exactly 1
+    and only the bound is broken.
+    """
     times = np.array([0.0, SECONDS_PER_DAY, 2 * SECONDS_PER_DAY], dtype=np.float64)
     sw = np.full((3, 2), 0.3)
     sw[-1, 0] += sw_drift
+    if saturation_overshoot:
+        sw = np.full((3, 2), 1.0 + saturation_overshoot)
+    so = 1.0 - sw + saturation_sum_excess
     pressure = np.full((3, 2), 1.5e7)
     pressure[-1, 1] += pressure_drift_pa
     return {
-        "states": _write_states(paths, label, times_s=times, pressure_pa=pressure, sw=sw),
-        "balances": _write_balances(paths, label, residual_m3_sc=residual_m3_sc),
+        "states": _write_states(paths, label, times_s=times, pressure_pa=pressure, sw=sw, so=so),
+        "balances": _write_balances(
+            paths,
+            label,
+            residual_m3_sc=residual_m3_sc,
+            step_residual_m3_sc=step_residual_m3_sc,
+        ),
         "connections": _write_connections(paths, label, total_mass_kg=connection_mass_kg),
     }
 
@@ -410,19 +443,32 @@ def _segregation_outputs(
 
 
 def _bl_outputs(
-    paths: ProjectPaths, *, label: str = "bl", coarse_answer: bool = False
+    paths: ProjectPaths,
+    *,
+    label: str = "bl",
+    coarse_answer: bool = False,
+    published_t_pvi: float = 0.2,
 ) -> dict[str, Path]:
     """Three BL grids whose published saturation IS the analytic answer, cell-averaged.
 
-    A perfect numerical answer makes the L1 zero, which is the wrong thing to test alone:
-    `coarse_answer` replaces the 128-cell profile with the 32-cell one resampled, so the
-    fine grid is no better than the coarse one and the refinement gate has to notice.
+    A perfect numerical answer makes the L1 zero, which is the wrong thing to test alone, so
+    there are two independent ways of breaking it and each one fires a DIFFERENT gate.
+
+    `coarse_answer` replaces the 128-cell profile with the 32-cell one resampled: the fine
+    grid is then no better than the coarse one and `bl_refinement_ratio_64_to_128` has to
+    notice, while the L1 of the 64-cell grid stays at zero.
+
+    `published_t_pvi` publishes every grid's profile at a DIFFERENT injected volume from the
+    one the fixture's schedule implies (the `times_s` below still say one day, so the
+    evaluator still builds its reference at 0.2 PV). The front is then in the wrong place by
+    the same amount on all three grids, so the refinement ratio stays at one and it is
+    `bl_pv_l1_at_128` that has to fire — the gate `coarse_answer` cannot reach.
     """
     outputs: dict[str, Path] = {}
     profiles: dict[int, NDArray[np.float64]] = {}
     for n_cells in (32, 64, 128):
         edges = np.linspace(0.0, 1.0, n_cells + 1)
-        profiles[n_cells] = bl_cell_average(edges, t_pvi=0.2, subpoints=64)
+        profiles[n_cells] = bl_cell_average(edges, t_pvi=published_t_pvi, subpoints=64)
     if coarse_answer:
         centers = np.linspace(0.0, 1.0, 129)[:-1] + 0.5 / 128
         coarse_edges = np.linspace(0.0, 1.0, 33)
@@ -523,6 +569,92 @@ def test_one_connection_carrying_mass_turns_the_closed_fixture_red(
     assert check.status == "FAIL"
     assert check.reason is not None and "connection_mass_kg_s" in check.reason
     assert check.metrics["connection_mass_kg_s"] == pytest.approx(1.0 / SECONDS_PER_DAY)
+
+
+def test_a_saturation_pair_that_does_not_sum_to_one_turns_the_fixture_red(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    """`saturation_sum_abs` has its own gate, so it needs its own red case.
+
+    Every other fixture in this file publishes `so = 1 - sw`, which makes the sum identically
+    one and the gate unfalsifiable: a sign error in `_saturation_metrics` would pass forever.
+    Here `so` alone is moved, so `sw + so` leaves 1 while both stay inside [0,1] and the
+    saturations stand still — the sum is the only thing wrong.
+    """
+    excess = 10 * tolerances["saturation_sum_abs_max"]
+    check = evaluate_physics(
+        "closed_box_pvt", _closed_outputs(paths, saturation_sum_excess=excess), tolerances
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "saturation_sum_abs" in check.reason
+    assert check.metrics["saturation_sum_abs"] == pytest.approx(excess, rel=1e-9)
+    # ...and nothing else: the bounds are intact and the state never moved.
+    assert check.metrics["saturation_bound_violation"] == 0.0
+    assert check.metrics["state_saturation_drift"] == 0.0
+
+
+def test_a_saturation_outside_zero_to_one_turns_the_fixture_red(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    """`saturation_bound_violation` likewise. `sw` goes above 1 and `so` symmetrically below
+    0, so the pair still sums to exactly 1 and the bound is the only gate that can fire."""
+    overshoot = 10 * tolerances["saturation_bound_slack"]
+    check = evaluate_physics(
+        "closed_box_pvt", _closed_outputs(paths, saturation_overshoot=overshoot), tolerances
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "saturation_bound_violation" in check.reason
+    assert check.metrics["saturation_bound_violation"] == pytest.approx(overshoot, rel=1e-6)
+    assert check.metrics["saturation_sum_abs"] <= tolerances["saturation_sum_abs_max"]
+
+
+def test_a_per_step_residual_that_cancels_over_the_horizon_still_turns_the_balance_red(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    """The median-per-step gate is not the cumulative gate, and this is what tells them apart.
+
+    Moving the MIDDLE inventory entry breaks two consecutive steps by equal and opposite
+    amounts, so the cumulative balance closes exactly and only SPEC 23.1's per-step half has
+    anything to say. A suite that only ever breaks the cumulative balance would never find out
+    whether the median gate works at all.
+    """
+    check = evaluate_physics(
+        "closed_box_pvt", _closed_outputs(paths, step_residual_m3_sc=0.01), tolerances
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None
+    assert "balance_step_median_relative" in check.reason
+    assert "balance_cumulative_relative" not in check.reason
+    assert (
+        check.metrics["balance_step_median_relative"]
+        > tolerances["balance_step_median_relative_max"]
+    )
+    assert (
+        check.metrics["balance_cumulative_relative"]
+        <= tolerances["balance_cumulative_relative_max"]
+    )
+
+
+def test_a_front_in_the_wrong_place_on_every_grid_turns_the_bl_l1_red(
+    paths: ProjectPaths, tolerances: dict[str, float]
+) -> None:
+    """`bl_pv_l1_max_at_128` needs a red case the refinement ratio cannot claim.
+
+    `coarse_answer` fires the ratio because the 64-cell error is zero; it says nothing about
+    the L1 threshold. Publishing every grid's profile at 0.35 PV against a reference built at
+    0.2 PV displaces the front by the same amount everywhere: the ratio stays at one and the
+    0.08 L1 gate is the only thing left to fail. The L1 is then the extra water itself, since
+    the BL solution is monotone in time before breakthrough.
+    """
+    check = evaluate_physics(
+        "bl", _bl_outputs(paths, label="blf", published_t_pvi=0.35), tolerances
+    )
+    assert check.status == "FAIL"
+    assert check.reason is not None and "bl_pv_l1_at_128" in check.reason
+    assert "bl_refinement_ratio_64_to_128" not in check.reason
+    assert check.metrics["bl_pv_l1_at_128"] > tolerances["bl_pv_l1_max_at_128"]
+    assert check.metrics["bl_pv_l1_at_128"] == pytest.approx(0.35 - 0.2, abs=1e-3)
+    assert check.metrics["bl_refinement_ratio_64_to_128"] <= tolerances["bl_refinement_ratio_max"]
 
 
 def test_an_artifact_that_is_missing_is_reported_unrun_and_never_omitted(

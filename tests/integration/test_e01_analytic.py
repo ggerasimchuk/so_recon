@@ -412,6 +412,21 @@ def test_the_analytic_fixtures_pass_the_tolerances_fixed_before_they_ran(
     # initialised from the CONTINUOUS hydrostatic solution of the same rho(p), not from the
     # discrete balance, which would have made it zero by construction.
     assert 0.0 < native_residual < 1.0
+    # The extent of the single-phase solver defect the fixture documents, on the record and
+    # asserted. At exactly So = 0 the two-phase Newton update goes non-finite; Jutul catches
+    # it under `failure_cuts_timestep`, discards the partial increment and halves the step,
+    # so no NaN ever reaches a published state and an exhausted cut budget would be a hard
+    # failure. What could rot silently is the COUNT — `run_forward` runs at info_level -1 and
+    # the launcher discards stderr — so the recovery is bounded here by number.
+    degeneracy = report["single_phase_degeneracy"]
+    assert degeneracy["fixture"] == "hydrostatic"
+    assert degeneracy["report_steps"] == 3
+    assert degeneracy["cut_steps"] == degeneracy["expected_cut_steps"] == 2
+    assert degeneracy["accepted_steps"] == degeneracy["expected_accepted_steps"] == 4
+    assert column["extraction"]["solver"]["cut_steps"] == 2
+    # Every other fixture pays nothing for it: only this one sits at the single-phase limit.
+    for name in ("closed_cell_pvt", "closed_box_pvt", "segregation", "bl_32", "bl_64", "bl_128"):
+        assert fixtures[name]["extraction"]["solver"]["cut_steps"] == 0, name
     checks["hydrostatic"] = check
 
     # ---- 9.7 gravity segregation -------------------------------------------------------
