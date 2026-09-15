@@ -146,10 +146,10 @@ class InversePhysicalDesign(StrictModel):
             "transform_version": self.transform_version,
             "layer_base_permeability_md": list(self.layer_base_permeability_md),
             "kz_over_kx": self.kz_over_kx,
-            "control_protocol": (
-                "fixed-bhp-feasible-1"
+            **(
+                {"control_protocol": "fixed-bhp-feasible-1"}
                 if self.design_id == "e02-t2-v2"
-                else "rate-with-bhp-limits-1"
+                else {}
             ),
             "well_columns": [
                 {"well_id": name, "column": list(column), "role": role}

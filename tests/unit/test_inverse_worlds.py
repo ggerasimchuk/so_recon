@@ -161,13 +161,19 @@ def test_t2_pair_swaps_physical_layers_not_whitened_coordinate_labels(tmp_path: 
 
 
 def test_t2_v2_uses_symmetric_fixed_bhp_without_limit_switching() -> None:
-    controls = inverse_control_segments(inverse_design("e02-t2-v2"))
+    design = inverse_design("e02-t2-v2")
+    controls = inverse_control_segments(design)
+    assert design.payload()["control_protocol"] == "fixed-bhp-feasible-1"
     assert len(controls) == 4
     assert all(control.target == "bhp" for control in controls)
     assert all(control.bhp_limit_pa is None for control in controls)
     assert {control.value for control in controls if control.role == "injector"} == {30.0e6}
     assert {control.value for control in controls if control.role == "producer"} == {5.0e6}
     assert all(control.connection_open == (True, True) for control in controls)
+
+
+def test_existing_t4_v1_payload_identity_does_not_gain_t2_metadata() -> None:
+    assert "control_protocol" not in inverse_design("e02-t4-v1").payload()
 
 
 def test_t4_pair_changes_only_remote_initial_state(tmp_path: Path) -> None:
