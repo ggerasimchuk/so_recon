@@ -861,6 +861,11 @@ BALANCE_SYSTEMS: tuple[tuple[str, str, str], ...] = (
 #: is about. The whole-model statement is the headline; the other is beside it in the table.
 HEADLINE_BALANCE = BALANCE_SYSTEMS[0][0]
 
+#: The reservoir-only statement, by name. It is the one a quantity summed over RESERVOIR
+#: cells has to be compared against: the whole-model one also holds what the wellbores are
+#: storing, which is a real quantity and not a discrepancy.
+RESERVOIR_BALANCE = BALANCE_SYSTEMS[1][0]
+
 
 def _components_of(payload: Mapping[str, Any]) -> tuple[str, ...]:
     """Which components this extraction balances: the oil-water pair or the black-oil trio.

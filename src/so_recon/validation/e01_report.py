@@ -38,12 +38,13 @@ from so_recon.config.schema import StrictModel
 from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file
 from so_recon.simulator.suite_record import (
+    BO_CHECKS,
     MANDATORY_CHECKS,
     SUITE_REPORT_FILENAME,
     JobOutcome,
     SuiteReport,
 )
-from so_recon.validation.physics import PhysicsCheck
+from so_recon.validation.physics import BLACKOIL_GATES, PhysicsCheck
 from so_recon.validation.plots import FIGURES_RELDIR
 
 STAGE_REPORT_SCHEMA_VERSION: Literal["e01-stage-1"] = "e01-stage-1"
@@ -650,6 +651,78 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
 # --------------------------------------------------------------------------------------
 
 
+#: What the capability establishes, and what it does not. Plan 13.5, in the report rather
+#: than only in the plan, because this is the page a later stage reads before PhysicsDecision.
+BO_SCOPE_NOTE = (
+    "What a PASS here establishes: that this adapter builds, drives, balances and restarts a "
+    "three-phase black-oil system with dissolved gas — support, component balance including "
+    "the dissolved term, a phase transition, and a native restart that carries the phase "
+    "state — on an EDUCATIONAL case. What it does not establish: it does not choose the "
+    "physics of the Romashka case, its PVT is an academic benchmark that ships inside the "
+    "pinned JutulDarcy and not a field sample, its three-phase relative permeability is an "
+    "explicit approximation (independent Corey curves, no hysteresis) rather than a selected "
+    "Stone or LET model, and it is not the paired oil-water/black-oil sensitivity study with "
+    "matched oil inventory — that is E06. This dependency is due before PhysicsDecision and "
+    "its verdict is a gate of its own: an oil-water deliverable is never removed or failed "
+    "because a black-oil benchmark is missing or failed."
+)
+
+
+def _blackoil_section(report: StageReport) -> list[str]:
+    """The measured black-oil evidence, or the reason there is none.
+
+    It is rendered from the same `jobs` and `checks` the rest of the page is rendered from,
+    filtered to the capability's own group and its own check names, so the BO block cannot
+    drift from the session it claims to describe.
+    """
+    jobs = [job for job in report.jobs if job.group == "black_oil"]
+    checks = [check for check in report.checks if check.name in BO_CHECKS]
+    lines = [BO_SCOPE_NOTE, ""]
+    if not jobs and not checks:
+        return lines
+    lines += ["### Black-oil jobs", ""]
+    lines += _table(
+        ("job", "kind", "accounting", "status", "expected", "wall s", "peak RSS"),
+        [
+            (
+                f"`{job.job_id}`",
+                job.kind,
+                job.accounting,
+                job.status,
+                job.expected_outcome,
+                _number(job.wall_s, 4),
+                "—" if job.peak_rss_bytes is None else f"{job.peak_rss_bytes / 2**30:.2f} GiB",
+            )
+            for job in jobs
+        ],
+    )
+    for check in checks:
+        lines += [f"### `{check.name}` — {check.status}", ""]
+        if check.reason:
+            lines += [check.reason, ""]
+        lines += _table(
+            ("metric", "measured", "threshold"),
+            [
+                (
+                    f"`{metric}`",
+                    _number(value, 6),
+                    next(
+                        (
+                            f"`{name}` = {_number(check.thresholds[name], 3)}"
+                            for gated, name in BLACKOIL_GATES.get(check.name, ())
+                            if gated == metric and name in check.thresholds
+                        ),
+                        "reported, not gated",
+                    ),
+                )
+                for metric, value in sorted(check.metrics.items())
+            ],
+        )
+        if check.evidence_paths:
+            lines += ["Evidence: " + ", ".join(f"`{p}`" for p in check.evidence_paths), ""]
+    return lines
+
+
 def _table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> list[str]:
     if not rows:
         return ["_(none)_", ""]
@@ -903,6 +976,7 @@ def render_e01_report(report: StageReport) -> str:
         "mandatory oil-water, restart or balance check carries.",
         "",
     ]
+    lines += _blackoil_section(report)
     if report.limitations:
         lines += ["## Limitations", ""]
         lines += [f"* {item}" for item in report.limitations]

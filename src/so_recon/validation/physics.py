@@ -125,6 +125,44 @@ REQUIRED_BLACKOIL_TOLERANCE_KEYS: frozenset[str] = frozenset(
 )
 
 
+#: Which measured number each black-oil check is GATED on, and against which threshold.
+#:
+#: It lives here, beside the thresholds themselves, because two modules need the same answer:
+#: `simulator/suites.py` scores against it and `validation/e01_report.py` renders the
+#: measured-against-threshold column from it. A renderer that guessed the pairing from the
+#: names would print "reported, not gated" beside a number that IS gated — which is the one
+#: mistake a table like that must not make.
+#:
+#: A metric that appears in a check and NOT here is reported and not gated, deliberately: an
+#: inventory, a bubble point or a surface volume is context for the gated numbers, and pairing
+#: it with a threshold would name a comparison nobody makes.
+BLACKOIL_GATES: dict[str, tuple[tuple[str, str], ...]] = {
+    "black_oil": (
+        ("blackoil_saturation_sum_drift", "blackoil_saturation_sum_abs_max"),
+        ("blackoil_gas_balance_cumulative_relative", "blackoil_gas_balance_relative_max"),
+        (
+            "blackoil_gas_inventory_closure_relative",
+            "blackoil_gas_inventory_closure_relative_max",
+        ),
+        ("blackoil_free_gas_shortfall", "blackoil_free_gas_shortfall_max"),
+        ("blackoil_bubble_point_shortfall", "blackoil_bubble_point_shortfall_max"),
+        ("blackoil_closed_saturation_drift", "blackoil_closed_saturation_drift_max"),
+        ("blackoil_closed_gas_inventory_relative", "blackoil_closed_gas_inventory_relative_max"),
+    ),
+    "black_oil_restart": (
+        ("blackoil_restart_saturation_abs", "blackoil_restart_saturation_abs_max"),
+        ("blackoil_restart_pressure_relative", "blackoil_restart_pressure_relative_max"),
+        ("blackoil_restart_rs_relative", "blackoil_restart_rs_relative_max"),
+        ("blackoil_restart_free_gas_relative", "blackoil_restart_inventory_relative_max"),
+        ("blackoil_restart_dissolved_gas_relative", "blackoil_restart_inventory_relative_max"),
+        (
+            "blackoil_restart_surface_volume_relative",
+            "blackoil_restart_surface_volume_relative_max",
+        ),
+    ),
+}
+
+
 def load_blackoil_tolerances(path: Path) -> dict[str, float]:
     """Read the black-oil capability's fixed tolerance block, or refuse it.
 

@@ -78,6 +78,7 @@ from so_recon.simulator.results import (
     CONNECTIONS_FILENAME,
     HEADLINE_BALANCE,
     MONTHLY_FILENAME,
+    RESERVOIR_BALANCE,
     RESULT_FILENAME,
     STATES_FILENAME,
     load_forward_result,
@@ -112,6 +113,7 @@ from so_recon.synthetic.world_io import (
 )
 from so_recon.validation.fixtures import publish_fixture
 from so_recon.validation.physics import (
+    BLACKOIL_GATES,
     DEFAULT_BLACKOIL_TOLERANCES_RELPATH,
     CommonSupport,
     PhysicsCheck,
@@ -1719,24 +1721,9 @@ BO_RESTART_AFTER_STEP = 4
 #: the tolerance block, and what the gate scores is the SHORTFALL against them.
 BO_MIN_FREE_GAS_SATURATION = 1e-3
 
-_BO_GATES: tuple[tuple[str, str], ...] = (
-    ("blackoil_saturation_sum_drift", "blackoil_saturation_sum_abs_max"),
-    ("blackoil_gas_balance_cumulative_relative", "blackoil_gas_balance_relative_max"),
-    ("blackoil_gas_inventory_closure_relative", "blackoil_gas_inventory_closure_relative_max"),
-    ("blackoil_free_gas_shortfall", "blackoil_free_gas_shortfall_max"),
-    ("blackoil_bubble_point_shortfall", "blackoil_bubble_point_shortfall_max"),
-    ("blackoil_closed_saturation_drift", "blackoil_closed_saturation_drift_max"),
-    ("blackoil_closed_gas_inventory_relative", "blackoil_closed_gas_inventory_relative_max"),
-)
-
-_BO_RESTART_GATES: tuple[tuple[str, str], ...] = (
-    ("blackoil_restart_saturation_abs", "blackoil_restart_saturation_abs_max"),
-    ("blackoil_restart_pressure_relative", "blackoil_restart_pressure_relative_max"),
-    ("blackoil_restart_rs_relative", "blackoil_restart_rs_relative_max"),
-    ("blackoil_restart_free_gas_relative", "blackoil_restart_inventory_relative_max"),
-    ("blackoil_restart_dissolved_gas_relative", "blackoil_restart_inventory_relative_max"),
-    ("blackoil_restart_surface_volume_relative", "blackoil_restart_surface_volume_relative_max"),
-)
+#: The gate pairs of the two black-oil checks, read from the one place that owns them.
+_BO_GATES = BLACKOIL_GATES["black_oil"]
+_BO_RESTART_GATES = BLACKOIL_GATES["black_oil_restart"]
 
 
 def _relative(measured: float, reference: float, floor: float) -> float:
@@ -1820,17 +1807,25 @@ def _blackoil_capability_metrics(
     # inside the gas component.
     assert depletion.black_oil is not None
     balances = pq.read_table(run.paths.resolve(str(depletion.balances_path))).to_pylist()
-    gas_rows = [
-        row for row in balances if row["component"] == "gas" and row["balance"] == HEADLINE_BALANCE
-    ]
-    if gas_rows:
-        metrics["blackoil_gas_balance_cumulative_relative"] = float(
-            gas_rows[0]["cumulative_relative"]
-        )
-        native_initial = float(gas_rows[0]["initial_inventory_m3_sc"])
+    gas_rows = {str(row["balance"]): row for row in balances if row["component"] == "gas"}
+    headline = gas_rows.get(HEADLINE_BALANCE)
+    if headline is not None:
+        metrics["blackoil_gas_balance_cumulative_relative"] = float(headline["cumulative_relative"])
+        metrics["blackoil_initial_gas_inventory_m3_sc"] = float(headline["initial_inventory_m3_sc"])
+    reservoir = gas_rows.get(RESERVOIR_BALANCE)
+    if reservoir is not None:
+        # Against the RESERVOIR inventory, because the split below is a sum over reservoir
+        # cells. The whole-model statement also holds the gas standing in the wellbores,
+        # which is a real quantity and not an error; it is reported beside this rather than
+        # folded into it.
+        native_initial = float(reservoir["initial_inventory_m3_sc"])
         split = depletion.black_oil.free_gas_m3_sc[0] + depletion.black_oil.dissolved_gas_m3_sc[0]
         metrics["blackoil_gas_inventory_closure_relative"] = _relative(split, native_initial, 1e-6)
-        metrics["blackoil_initial_gas_inventory_m3_sc"] = native_initial
+        metrics["blackoil_initial_reservoir_gas_inventory_m3_sc"] = native_initial
+        if headline is not None:
+            metrics["blackoil_wellbore_gas_inventory_m3_sc"] = (
+                float(headline["initial_inventory_m3_sc"]) - native_initial
+            )
     metrics["blackoil_initial_free_gas_m3_sc"] = depletion.black_oil.free_gas_m3_sc[0]
     metrics["blackoil_initial_dissolved_gas_m3_sc"] = depletion.black_oil.dissolved_gas_m3_sc[0]
     metrics["blackoil_final_free_gas_m3_sc"] = depletion.black_oil.free_gas_m3_sc[-1]

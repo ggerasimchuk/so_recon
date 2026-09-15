@@ -120,19 +120,27 @@ def test_a_published_balance_table_carries_both_statements(
     `balance` column here rather than on row order.
     """
     checked = 0
-    for _name, (_run_dir, report) in suites.items():
+    for name, (_run_dir, report) in suites.items():
+        # Which components this suite's results balance. Task 13's black-oil capability
+        # balances three; every oil-water suite balances two. The expectation is read from
+        # the suite rather than fixed at two, because a black-oil table that had to pass a
+        # two-component assertion would have to drop its gas row to do it.
+        expected = {"water", "oil", "gas"} if name == "bo" else {"water", "oil"}
         for check in report.checks:
             for evidence in check.evidence_paths:
-                path = ROOT / evidence
-                if path.name != "balances.parquet" or not path.is_file():
-                    continue
-                rows = pq.read_table(path).to_pylist()
-                labels = {row["balance"] for row in rows}
-                assert labels == {"full_system_surface", "reservoir_connections"}, evidence
-                for label in labels:
-                    components = {r["component"] for r in rows if r["balance"] == label}
-                    assert components == {"water", "oil"}, (evidence, label)
-                checked += 1
+                # A check may cite a result DIRECTORY rather than the table inside it.
+                root = ROOT / evidence
+                tables = [root / "balances.parquet"] if root.is_dir() else [root]
+                for path in tables:
+                    if path.name != "balances.parquet" or not path.is_file():
+                        continue
+                    rows = pq.read_table(path).to_pylist()
+                    labels = {row["balance"] for row in rows}
+                    assert labels == {"full_system_surface", "reservoir_connections"}, evidence
+                    for label in labels:
+                        components = {r["component"] for r in rows if r["balance"] == label}
+                        assert components == expected, (name, evidence, label)
+                    checked += 1
     if checked == 0:
         pytest.skip("no published balance table among the evidence of these suites")
 

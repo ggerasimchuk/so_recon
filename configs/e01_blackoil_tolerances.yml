@@ -40,7 +40,18 @@ blackoil_gas_balance_relative_max: 1.0e-3
 # Free gas (`Sg*PV/Bg`) plus dissolved gas (`Rs*So*PV/Bo`), recomputed from the PUBLISHED
 # states, against the native component gas inventory of the same state. This is the assertion
 # that the dissolved term is really in the gas component and not an accounting convention.
-blackoil_gas_inventory_closure_relative_max: 1.0e-4
+#
+# The comparison is against the RESERVOIR inventory (`reservoir_connections`), because the
+# split is a sum over reservoir cells. The whole-model statement (`full_system_surface`) also
+# holds the gas standing in the wellbores, which is a real quantity and not an error: on the
+# one-cell closed fixture it is 0.31% of the total. Comparing against that one instead would
+# have made this gate a measurement of wellbore volume.
+#
+# Against the reservoir inventory this is an identity and holds to float64 round-off:
+# measured 1.4e-16 on the closed fixture and exactly 0 on the depletion. The limit is set
+# where a real discrepancy — a dissolved term left out of the component, say — would fail by
+# many orders of magnitude, and round-off would not.
+blackoil_gas_inventory_closure_relative_max: 1.0e-9
 
 # Gas must actually come out of solution. The metric is a SHORTFALL — how far the depletion
 # fixture fell short of the free gas saturation it has to reach and of the bubble-point

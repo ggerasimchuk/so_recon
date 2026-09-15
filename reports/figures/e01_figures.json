@@ -1,15 +1,16 @@
 {
   "cited_runs": [
-    "20260914T223915Z-verify-physics-92b03974",
-    "20260914T224226Z-verify-physics-92b03974"
+    "20260915T014552Z-verify-physics-5d576d4e",
+    "20260915T014800Z-verify-physics-5d576d4e",
+    "20260915T015114Z-verify-physics-5d576d4e"
   ],
   "figures": [
     "reports/figures/e01_balances.png",
     "reports/figures/e01_monthly.png",
     "reports/figures/e01_true_so.png"
   ],
-  "generated_at": "2026-09-14T22:44:56.216608+00:00",
+  "generated_at": "2026-09-15T01:56:02.354742+00:00",
   "note": "Written by `so-recon e01-report`. `figures` is what THIS command drew; any other PNG under reports/figures is an earlier session's and is named as a limitation.",
-  "run_id": "20260914T224455Z-e01-report-eafabbaa",
+  "run_id": "20260915T015601Z-e01-report-a5b8e5f4",
   "schema_version": "e01-figures-1"
 }
