@@ -46,6 +46,7 @@ from so_recon.paths import PathEscapeError, ProjectPaths
 from so_recon.registry.hashing import sha256_file, sha256_json
 from so_recon.simulator.commands import BENCHMARK_FILENAME, MANDATORY_CHECKS
 from so_recon.simulator.contracts import RelativePath, Sha256
+from so_recon.simulator.suite_record import SUITE_REPORT_FILENAME
 from so_recon.validation.e01_report import STAGE_REPORT_SCHEMA_VERSION, StageReport
 
 E01_OW_EVIDENCE_SCHEMA_VERSION: Literal["e01-ow-dependency-1"] = "e01-ow-dependency-1"
@@ -205,7 +206,7 @@ def _require_ow_matrix(report: StageReport, report_ref: str) -> tuple[CheckEvide
         ) from exc
 
 
-def _restart_ref(report: StageReport, report_ref: str) -> str:
+def _restart_ref(report: StageReport, report_ref: str, paths: ProjectPaths) -> str:
     """The artifact the restart round trip was scored on, from the report's own row."""
     row: Mapping[str, Any] = report.restart_round_trip
     if not row:
@@ -223,18 +224,58 @@ def _restart_ref(report: StageReport, report_ref: str) -> str:
         raise E01DependencyError(
             f"{report_ref}: the restart_round_trip row names no evidence artifact"
         )
-    return str(evidence[0])
+    first = str(evidence[0])
+    try:
+        target = paths.resolve(first)
+    except ValueError:
+        return first
+    if target.is_dir():
+        manifest = target / "checkpoint" / "restart_manifest.json"
+        if not manifest.is_file():
+            raise E01DependencyError(
+                f"{report_ref}: restart evidence directory {first} has no "
+                "checkpoint/restart_manifest.json"
+            )
+        return paths.relative(manifest)
+    return first
 
 
-def _benchmark_ref(report: StageReport, report_ref: str) -> str:
+def _benchmark_ref(report: StageReport, report_ref: str, paths: ProjectPaths) -> str:
     """The measured-cost artifact, from the benchmark run the report itself cites."""
     runs = [record.run_dir for record in report.commands if record.command == "benchmark-forward"]
-    if not runs:
+    if runs:
+        return f"{runs[-1]}/{BENCHMARK_FILENAME}"
+
+    # Current E01 runs benchmark as the `benchmark` group of `verify-physics` and publishes
+    # the measured block inside that session's e01_suite.json.  The stage report copies the
+    # block under report.benchmark[suite].  Match the two values exactly rather than merely
+    # accepting any verify-physics directory that happens to contain a suite record.
+    if not report.benchmark:
+        raise E01DependencyError(f"{report_ref}: the report carries no measured benchmark block")
+    candidates: list[tuple[str, str]] = []
+    for record in report.commands:
+        if record.command != "verify-physics":
+            continue
+        relative = f"{record.run_dir}/{SUITE_REPORT_FILENAME}"
+        path = paths.resolve(relative)
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        suite = str(payload.get("suite", ""))
+        if suite in report.benchmark and payload.get("benchmark") == report.benchmark[suite]:
+            candidates.append((suite, relative))
+    if not candidates:
         raise E01DependencyError(
-            f"{report_ref}: the report cites no `benchmark-forward` run, so E01's measured "
-            "forward cost is not part of this evidence"
+            f"{report_ref}: no cited verify-physics suite reproduces the report's measured "
+            "benchmark block"
         )
-    return f"{runs[-1]}/{BENCHMARK_FILENAME}"
+    candidates.sort(key=lambda item: (item[0] != "p1", item[0], item[1]))
+    return candidates[0][1]
 
 
 # --------------------------------------------------------------------------------------
@@ -242,12 +283,15 @@ def _benchmark_ref(report: StageReport, report_ref: str) -> str:
 # --------------------------------------------------------------------------------------
 
 
-def _require_artifact(relative: str, paths: ProjectPaths, *, role: str) -> Path:
+def _require_artifact(
+    relative: str, paths: ProjectPaths, *, role: str, allow_directory: bool = False
+) -> Path:
     try:
         resolved = paths.resolve(relative)
     except (ValueError, PathEscapeError) as exc:
         raise E01DependencyError(f"{role} path {relative!r} is not usable: {exc}") from exc
-    if not resolved.is_file():
+    exists = resolved.is_file() or (allow_directory and resolved.is_dir())
+    if not exists:
         raise E01DependencyError(
             f"{role} {relative} is named by the E01 report but is not on disk; the "
             "evidence cannot be checked against an artifact that is gone"
@@ -380,13 +424,18 @@ def require_e01_ow(evidence_path: Path, paths: ProjectPaths) -> dict[str, object
     """
     report, report_ref = _load_report(evidence_path, paths)
     checks = _require_ow_matrix(report, report_ref)
-    restart_ref = _restart_ref(report, report_ref)
-    benchmark_ref = _benchmark_ref(report, report_ref)
+    restart_ref = _restart_ref(report, report_ref, paths)
+    benchmark_ref = _benchmark_ref(report, report_ref, paths)
     _require_artifact(restart_ref, paths, role="restart evidence")
     _require_artifact(benchmark_ref, paths, role="benchmark evidence")
     for check in checks:
         for artifact in check.artifact_refs:
-            _require_artifact(artifact, paths, role=f"{check.check_id} evidence")
+            _require_artifact(
+                artifact,
+                paths,
+                role=f"{check.check_id} evidence",
+                allow_directory=True,
+            )
     lock_hash = _require_recorded_hashes(report, paths, report_ref)
     commit = _require_identified_commit(report, report_ref)
     code_tree_hash = _require_ancestry(commit, paths, report_ref)

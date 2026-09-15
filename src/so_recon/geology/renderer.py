@@ -27,9 +27,13 @@ normaliser tests — not a silent clip inside a renderer.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from so_recon.geology.conditional import (
     N_GEOLOGY,
@@ -45,12 +49,39 @@ from so_recon.inference.contracts import (
     RendererNumericalError,
     ThetaRecord,
 )
+from so_recon.paths import ProjectPaths
+from so_recon.registry.artifact import write_artifact
 from so_recon.registry.hashing import sha256_json
+from so_recon.registry.run import RunContext
+from so_recon.simulator.case_io import (
+    cartesian_neighbors,
+    compute_model_hash,
+    validate_case,
+    write_arrays,
+)
+from so_recon.simulator.contracts import (
+    CELL_AXES,
+    CELL_DIM_AXES,
+    DIM_CELL_AXES,
+    FACE_AXES,
+    BoundarySpec,
+    CaseBundle,
+    FluidSpec,
+    GridSpec,
+    InitialStateSpec,
+    ObservationSpec,
+    RockSpec,
+)
 from so_recon.synthetic.p1 import (
+    DYNAMIC_CHANNELS,
     GENERATOR_VERSION,
     N_LAYERS,
     N_MODES,
+    OBSERVATION_SCHEMA,
+    PRESSURE_AVAILABLE,
+    control_segments,
     render_coefficients,
+    well_specs,
 )
 from so_recon.synthetic.p1 import RENDERER_VERSION as E01_RENDERER_VERSION
 
@@ -160,10 +191,141 @@ def render_theta(theta: ThetaRecord, context: PriorContext) -> RenderedParameter
     )
 
 
+def _array_identity(arrays: dict[str, F64]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(arrays):
+        values = np.ascontiguousarray(arrays[name], dtype=np.float64)
+        digest.update(name.encode("utf-8"))
+        digest.update(str(values.shape).encode("ascii"))
+        digest.update(values.tobytes())
+    return digest.hexdigest()
+
+
+def _empty_observations_bytes() -> bytes:
+    sink = pa.BufferOutputStream()
+    pq.write_table(pa.Table.from_pylist([], schema=OBSERVATION_SCHEMA), sink, compression="snappy")
+    payload: bytes = sink.getvalue().to_pybytes()
+    return payload
+
+
+def build_inverse_case(
+    rendered: RenderedParameters,
+    context: PriorContext,
+    paths: ProjectPaths,
+    ctx: RunContext,
+) -> CaseBundle:
+    """Publish a rendered theta as a solver case without consulting a truth world.
+
+    The deterministic case location is derived from the renderer and physical array bytes.
+    An empty observation table satisfies the forward exchange contract; observations are
+    not an input the solver reads and the actual inverse bundle stays on the Python side.
+    """
+    design = p1_design_for(context, rendered.family)
+    arrays = rendered.arrays
+    identity = sha256_json(
+        {
+            "renderer_hash": rendered.renderer_hash,
+            "array_identity": _array_identity(arrays),
+            "design": design.payload(),
+        }
+    )
+    root = paths.artifacts / "inverse_cases" / identity
+    grid = write_arrays(
+        root / "grid.h5",
+        {
+            "cell_centers_m": (arrays["cell_centers_m"], "m", CELL_DIM_AXES),
+            "cell_volume_m3": (arrays["cell_volume_m3"], "m3", CELL_AXES),
+            "neighbors": (cartesian_neighbors(design.shape), "1", FACE_AXES),
+        },
+        paths=paths,
+    )
+    geology = write_arrays(
+        root / "geology.h5",
+        {
+            "porosity": (arrays["porosity"], "1", CELL_AXES),
+            "permeability_m2": (arrays["permeability_m2"], "m2", DIM_CELL_AXES),
+        },
+        paths=paths,
+    )
+    initial = write_arrays(
+        root / "initial.h5",
+        {
+            "pressure_pa": (arrays["pressure_pa"], "Pa", CELL_AXES),
+            "sw": (arrays["sw"], "1", CELL_AXES),
+        },
+        paths=paths,
+    )
+    observation_ref = write_artifact(
+        root / "observations.parquet",
+        _empty_observations_bytes(),
+        paths,
+        schema_version="e02-forward-observations-1",
+        producer_run_id=ctx.run_id,
+        media_type="application/vnd.apache.parquet",
+        now=datetime.now(UTC),
+    )
+    ctx.add_output(f"inverse_case.{identity}.observations", observation_ref)
+
+    case = CaseBundle(
+        case_id=f"inverse-{identity[:16]}",
+        world_id=f"inverse-{identity[:16]}",
+        start_date=design.start_date,
+        cutoff=design.cutoff,
+        report_edges_s=design.report_edges_s,
+        grid=GridSpec(
+            shape=design.shape,
+            extent_m=design.extent_m,
+            cell_centers_m=grid["cell_centers_m"],
+            cell_volume_m3=grid["cell_volume_m3"],
+            neighbors=grid["neighbors"],
+        ),
+        rock=RockSpec(porosity=geology["porosity"], permeability_m2=geology["permeability_m2"]),
+        fluids=FluidSpec(),
+        wells=well_specs(design),
+        controls=control_segments(design),
+        initial=InitialStateSpec(
+            kind="explicit",
+            pressure_pa=initial["pressure_pa"],
+            sw=initial["sw"],
+            meaning="synthetic_initial",
+        ),
+        boundary=BoundarySpec(kind="closed", cells=()),
+        observations=ObservationSpec(
+            table_path=observation_ref.path,
+            sha256=observation_ref.sha256,
+            dynamic_channels=DYNAMIC_CHANNELS,
+            pressure_available=PRESSURE_AVAILABLE,
+        ),
+        renderer_version=RENDERER_VERSION,
+        units={
+            "pressure": "Pa",
+            "permeability": "m2",
+            "time": "s",
+            "length": "m",
+            "control_rate": "m3_sc/day",
+        },
+        seeds={"fixture": 0},
+        source_hashes={
+            "conditional_information": context.information_hash,
+            "renderer": rendered.renderer_hash,
+            "physical_arrays": _array_identity(arrays),
+        },
+        model_hash="e" * 64,
+    )
+    case = case.model_copy(update={"model_hash": compute_model_hash(case)})
+    report = validate_case(case, paths)
+    if not report.valid:
+        raise ValueError(
+            f"rendered inverse case {identity} is invalid: " + "; ".join(report.errors)
+        )
+    return case
+
+
 __all__ = [
     "N_GEOLOGY_IN_RESIDUAL",
     "RENDERER_VERSION",
     "RenderedParameters",
+    "build_inverse_case",
     "geology_coefficients",
     "render_theta",
     "renderer_hash",

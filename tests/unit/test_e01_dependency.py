@@ -268,8 +268,8 @@ def test_accepted_e01_evidence_is_mapped_into_the_dependency_protocol(world: Wor
     assert evidence["report_ref"] == f"{REPORT_RUN}/E01.json"
     checks = evidence["checks"]
     assert isinstance(checks, tuple | list)
-    assert {str(row["check_id"]) for row in checks} == set(MANDATORY_CHECKS)  # type: ignore[index]
-    assert all(row["status"] == "PASS" for row in checks)  # type: ignore[index]
+    assert {str(row["check_id"]) for row in checks} == set(MANDATORY_CHECKS)
+    assert all(row["status"] == "PASS" for row in checks)
     # The code tree and the locks are named by content, not by the report's own adjectives.
     assert isinstance(evidence["code_tree_hash"], str)
     assert len(str(evidence["code_tree_hash"])) == 40
@@ -280,6 +280,34 @@ def test_black_oil_not_run_does_not_block_the_oil_water_scope(world: World) -> N
     assert world.payload["bo_status"] == "NOT_RUN"
     evidence = require_e01_ow(world.publish(), world.paths)
     assert evidence["ow_status"] == "PASS"
+
+
+def test_benchmark_group_inside_verify_physics_is_the_current_measured_cost_ref(
+    world: World,
+) -> None:
+    benchmark = {"warm41": {"n": 5, "mean_s": 4.2}}
+    _write(
+        world.root,
+        f"{P0_RUN}/e01_suite.json",
+        json.dumps({"suite": "p1", "benchmark": benchmark}),
+    )
+    world.payload["commands"] = [_command(P0_RUN, "verify-physics", world.accepted_commit)]
+    world.payload["benchmark"] = {"p1": benchmark}
+    evidence = require_e01_ow(world.publish(), world.paths)
+    assert evidence["benchmark_ref"] == f"{P0_RUN}/e01_suite.json"
+
+
+def test_current_restart_job_directory_resolves_to_its_checkpoint_manifest(world: World) -> None:
+    job_dir = f"{P0_RUN}/job-a1"
+    manifest = f"{job_dir}/checkpoint/restart_manifest.json"
+    _write(world.root, manifest, '{"completed_report_step": 3}\n')
+    world.payload["restart_round_trip"]["evidence_paths"] = [job_dir]
+    world.payload["checks"] = [
+        {**check, "evidence_paths": [job_dir]} if check["name"] == "restart_round_trip" else check
+        for check in world.payload["checks"]
+    ]
+    evidence = require_e01_ow(world.publish(), world.paths)
+    assert evidence["restart_ref"] == manifest
 
 
 def test_a_file_e02_adds_of_its_own_is_not_a_change_to_e01_physics(world: World) -> None:
