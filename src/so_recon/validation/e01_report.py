@@ -29,6 +29,7 @@ is visible in one place.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1156,6 +1157,46 @@ def render_e01_report(report: StageReport) -> str:
 _UNGATED_METRIC_SUFFIXES = ("_met", "_target", "_forwards", "_cells", "_zones", "_months")
 
 
+#: One failed comparison, as the two writers of a FAIL reason spell it: `_failed_gates` in
+#: `validation/physics.py` and `_gate` in `simulator/suites.py` both write
+#: `<metric>=<value> exceeds|does not exceed <threshold>=<limit>`, joined by "; ". This is the
+#: ONLY place a check records which threshold gated which metric, which is why a FAILING row
+#: is read out of the reason instead of re-derived from the two separate maps.
+_FAILED_GATE = re.compile(
+    r"(?P<metric>\w+)=(?P<value>[-+0-9.eE]+) (?P<comparison>exceeds|does not exceed) "
+    r"(?P<threshold>\w+)=(?P<limit>[-+0-9.eE]+)"
+)
+
+
+def _failed_comparison(check: PhysicsCheck) -> str:
+    """The comparison a FAILED check's own reason names, furthest past its gate first.
+
+    `_worst` pairs a metric to a threshold by name prefix, and on the E01 matrix 37 of 88
+    thresholds pair with nothing — among them every threshold of `five_spot_refinement`
+    except one. On a FAILING row that mattered: the single incidental match was
+    `support_pore_volume_relative`, inside its gate by seven orders of magnitude, so the row
+    that failed advertised a measurement that passed. A FAIL is therefore read out of the
+    reason, which is the only record of which threshold actually gated which metric, and an
+    unparseable reason gets the em dash rather than a guess.
+    """
+    best: tuple[float, str] | None = None
+    for match in _FAILED_GATE.finditer(check.reason or ""):
+        value, limit = float(match["value"]), float(match["limit"])
+        # `exceeds` failed above its limit and `does not exceed` failed below it. Both are
+        # ranked by how far past their own gate they are, so a row with several failures
+        # shows the worst of them and never a ratio below 1.
+        if match["comparison"] == "exceeds":
+            severity = value / limit if limit else float("inf")
+        else:
+            severity = limit / value if value else float("inf")
+        if best is None or severity > best[0]:
+            best = (
+                severity,
+                f"`{match['metric']}`={value:.3g} vs `{match['threshold']}`={limit:.3g}",
+            )
+    return best[1] if best else "—"
+
+
 def _worst(check: PhysicsCheck) -> str:
     """The metric closest to (or furthest past) its own gate, for the summary row.
 
@@ -1163,7 +1204,13 @@ def _worst(check: PhysicsCheck) -> str:
     threshold: `PhysicsCheck` records the two as separate maps and does not record which
     threshold gated which metric. The full metric and threshold tables below are the
     authority; this column is a reading aid.
+
+    A FAILED check is NOT best effort. There the column would be read as the evidence of the
+    failure, so it is taken from the comparison the check's own reason names and from nothing
+    else — see `_failed_comparison`.
     """
+    if check.status == "FAIL":
+        return _failed_comparison(check)
     if not check.metrics or not check.thresholds:
         return "—"
     best: tuple[float, str] | None = None

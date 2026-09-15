@@ -656,3 +656,102 @@ def test_the_page_names_which_session_scope_caps_are_enforced_and_which_are_not(
     assert "wall" in text
     assert "two attempts per model hash is enforced per job ledger" in text
     assert named[0] in render_e01_report(report)
+
+
+# --------------------------------------------------------------------------------------
+# I2 — the summary column of a FAILING row is about the metric that failed
+# --------------------------------------------------------------------------------------
+
+#: The real `five_spot_refinement` verdict of run 20260915T021124Z-verify-physics-b9ec409b,
+#: copied from its published `e01_suite.json`. Four of its five thresholds pair with no
+#: metric at all under a `startswith` match — including the one that failed, whose metric is
+#: `monthly_volume_near_zero_absolute_m3_sc` against
+#: `refinement_monthly_volume_absolute_max_m3_sc`.
+FAILING_REFINEMENT = PhysicsCheck(
+    name="five_spot_refinement",
+    status="FAIL",
+    metrics={
+        "coarse_cells": 256.0,
+        "fine_cells": 2304.0,
+        "inventory_relative": 9.231783393011368e-11,
+        "monthly_volume_absolute_crossover_m3_sc": 4.9999999999999996e-05,
+        "monthly_volume_absolute_m3_sc": 3.4947780576666254e-06,
+        "monthly_volume_near_zero_absolute_m3_sc": 3.0304194259052176e-06,
+        "monthly_volume_relative": 1.3821991187514615e-05,
+        "monthly_volume_self_relative": 1.038466270256858,
+        "n_months": 36.0,
+        "n_zones": 64.0,
+        "so_pv_mae": 0.015665273005009587,
+        "so_zone_max_abs": 0.051251142022209706,
+        "so_zone_range_coarse": 0.46102623103589047,
+        "support_pore_volume_relative": 7.275957614183426e-16,
+    },
+    thresholds={
+        "refinement_inventory_relative_max": 0.01,
+        "refinement_monthly_volume_absolute_max_m3_sc": 1e-06,
+        "refinement_monthly_volume_relative_max": 0.02,
+        "refinement_so_pv_mae_max": 0.02,
+        "support_pore_volume_relative_max": 1e-09,
+    },
+    input_hashes={},
+    evidence_paths=(),
+    reason=(
+        "five_spot_refinement: monthly_volume_near_zero_absolute_m3_sc=3.03042e-06 exceeds "
+        "refinement_monthly_volume_absolute_max_m3_sc=1e-06"
+    ),
+)
+
+
+def _matrix_row(page: str, name: str) -> str:
+    return next(line for line in page.splitlines() if line.startswith(f"| `{name}` |"))
+
+
+def test_a_failing_row_does_not_advertise_a_metric_that_passed(tmp_path: Path) -> None:
+    """The column paired metrics to thresholds by prefix and reported the largest ratio.
+
+    On this row four of the five thresholds pair with nothing — including the one that
+    failed, because its metric is named `monthly_volume_near_zero_absolute_m3_sc` and its
+    threshold `refinement_monthly_volume_absolute_max_m3_sc`. The single incidental match
+    was `support_pore_volume_relative`, which clears its gate by seven orders of magnitude,
+    so a FAILING row advertised a passing measurement.
+    """
+    paths = _paths(tmp_path)
+    run = _write_run(
+        paths,
+        "20260915T030000Z-verify-physics-dddd",
+        suite="p1",
+        checks=(FAILING_REFINEMENT,),
+        jobs=(_job("five_spot_coarse"),),
+        exit_code=1,
+    )
+    row = _matrix_row(render_e01_report(build_e01_report((run,), paths)), "five_spot_refinement")
+
+    assert "| FAIL |" in row
+    assert "monthly_volume_near_zero_absolute_m3_sc" in row, row
+    assert "support_pore_volume_relative`=7.28e-16" not in row, row
+
+
+def test_a_failing_row_never_advertises_a_measurement_inside_its_gate(tmp_path: Path) -> None:
+    """A FAIL whose reason names nothing parseable prints an em dash, never a passing ratio."""
+    paths = _paths(tmp_path)
+    unparseable = FAILING_REFINEMENT.model_copy(
+        update={"reason": "five_spot_refinement: the fine grid published no monthly table"}
+    )
+    run = _write_run(
+        paths,
+        "20260915T031000Z-verify-physics-eeee",
+        suite="p1",
+        checks=(unparseable,),
+        jobs=(_job("five_spot_coarse"),),
+        exit_code=1,
+    )
+    row = _matrix_row(render_e01_report(build_e01_report((run,), paths)), "five_spot_refinement")
+    assert "| FAIL | yes | — |" in row, row
+
+
+def test_a_passing_row_still_reports_the_measurement_closest_to_its_gate(tmp_path: Path) -> None:
+    """The reading aid is unchanged where it was never misleading."""
+    paths = _paths(tmp_path)
+    run = _green_p0(paths)
+    row = _matrix_row(render_e01_report(build_e01_report((run,), paths)), "hydrostatic")
+    assert "balance_cumulative_relative" in row, row
