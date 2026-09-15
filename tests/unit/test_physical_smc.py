@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 
 from so_recon.inference.contracts import DensitySchema, PriorContext
 from so_recon.validation.physical_smc import (
+    closed_preflight_case,
     convergence_screen,
+    preflight_reproducibility_metrics,
     prior_context_payload,
     report_zone_matrix,
 )
@@ -109,3 +114,55 @@ def test_near_zero_width_uses_absolute_not_relative_gap() -> None:
         _summary(64, 12, [0.6, 0.5], [0.019, 0.009], 0.4),
     ]
     assert convergence_screen(rows)["checks"]["zone_width_gap"] is True
+
+
+def test_t4_closed_preflight_disables_surface_and_perforation_flow(tmp_path) -> None:
+    from so_recon.inference.contracts import ThetaRecord
+    from so_recon.paths import ProjectPaths
+    from so_recon.registry.run import RunContext
+    from so_recon.simulator.contracts import CaseBundle
+    from so_recon.synthetic.inverse_worlds import make_inverse_world
+
+    root = Path(tmp_path) / "repo"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    paths = ProjectPaths.default(root)
+    paths.ensure_dirs()
+    ctx = RunContext.start(command="unit-t4-preflight", argv=[], cfg=None, paths=paths)
+    _context, _observations, truth = make_inverse_world("e02-t4-v1", 144, paths, ctx)
+    payload = json.loads(paths.resolve(truth.path).read_text(encoding="utf-8"))
+    ThetaRecord.model_validate(payload["theta"])
+    case = CaseBundle.model_validate(payload["case"])
+
+    preflight = closed_preflight_case(case)
+
+    assert len(preflight.report_edges_s) == 2
+    assert preflight.report_edges_s == case.report_edges_s[:2]
+    assert len(preflight.controls) == len(case.wells)
+    assert all(
+        control.role == "shut" and control.target == "disabled" for control in preflight.controls
+    )
+    assert all(not any(control.connection_open) for control in preflight.controls)
+    assert preflight.model_hash != case.model_hash
+
+
+def test_t4_preflight_reproducibility_is_strict_and_does_not_forbid_transient() -> None:
+    first_pressure = np.array([[15.0, 15.1], [14.8, 15.3]])
+    first_so = np.array([[0.8, 0.7], [0.79, 0.71]])
+    metrics = preflight_reproducibility_metrics(
+        first_pressure,
+        first_so,
+        first_pressure.copy(),
+        first_so.copy(),
+    )
+    assert metrics["status"] == "PASS"
+    assert metrics["pressure_transient_relative"] > 0.0
+    assert metrics["so_transient_abs"] > 0.0
+
+    failed = preflight_reproducibility_metrics(
+        first_pressure,
+        first_so,
+        first_pressure * (1.0 + 2.0e-6),
+        first_so + 2.0e-6,
+    )
+    assert failed["status"] == "FAIL"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 import numpy as np
@@ -33,8 +33,8 @@ from so_recon.registry.artifact import ArtifactRef, register_artifact, write_jso
 from so_recon.registry.hashing import sha256_file, sha256_json
 from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
-from so_recon.simulator.case_io import read_array
-from so_recon.simulator.contracts import CaseBundle, ForwardResult, OutputRequest
+from so_recon.simulator.case_io import compute_model_hash, read_array
+from so_recon.simulator.contracts import CaseBundle, ControlSegment, ForwardResult, OutputRequest
 from so_recon.simulator.forward import (
     BASE_MAX_NONLINEAR_ITERATIONS,
     DEFAULT_MAX_TIMESTEP_DAYS,
@@ -42,6 +42,7 @@ from so_recon.simulator.forward import (
     simulate,
 )
 from so_recon.simulator.results import load_forward_result, write_forward_result
+from so_recon.simulator.schedule import month_edges
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.inverse_worlds import (
     generate_dynamic_history,
@@ -63,6 +64,75 @@ def prior_context_payload(context: PriorContext) -> dict[str, Any]:
     for name in ("mean", "chol", "rotation"):
         payload[name] = np.asarray(payload[name], dtype=np.float64).tolist()
     return payload
+
+
+def closed_preflight_case(case: CaseBundle) -> CaseBundle:
+    """Build T4's one-month closed transient check from its exact initial state and rock."""
+    if case.initial.meaning != "developed_state":
+        raise ValueError("the E02 closed transient preflight is defined only for T4")
+    edges = case.report_edges_s[:2]
+    closed = tuple(False for _ in range(case.grid.shape[2]))
+    controls = tuple(
+        ControlSegment(
+            start_s=edges[0],
+            end_s=edges[-1],
+            well_id=well.well_id,
+            role="shut",
+            target="disabled",
+            value=0.0,
+            bhp_limit_pa=None,
+            connection_open=closed,
+        )
+        for well in case.wells
+    )
+    payload = case.model_dump(mode="python")
+    payload.update(
+        {
+            "case_id": f"{case.case_id}-closed-preflight",
+            "cutoff": month_edges(date.fromisoformat(case.start_date), 1)[-1].isoformat(),
+            "report_edges_s": edges,
+            "controls": controls,
+            "model_hash": "e" * 64,
+        }
+    )
+    preflight = CaseBundle.model_validate(payload)
+    return preflight.model_copy(update={"model_hash": compute_model_hash(preflight)})
+
+
+def preflight_reproducibility_metrics(
+    pressure_a: np.ndarray,
+    so_a: np.ndarray,
+    pressure_b: np.ndarray,
+    so_b: np.ndarray,
+) -> dict[str, Any]:
+    """Check deterministic replay while allowing the declared non-equilibrium state to move."""
+    arrays = tuple(
+        np.asarray(value, dtype=np.float64) for value in (pressure_a, so_a, pressure_b, so_b)
+    )
+    if any(value.ndim != 2 or value.shape[0] != 2 for value in arrays):
+        raise ValueError("closed preflight replay arrays must have initial and one-month states")
+    if arrays[0].shape != arrays[2].shape or arrays[1].shape != arrays[3].shape:
+        raise ValueError("closed preflight replay shapes differ")
+    if not all(np.isfinite(value).all() for value in arrays):
+        raise ValueError("closed preflight replay contains non-finite states")
+    pressure_scale = max(float(np.abs(arrays[0]).max()), 1.0)
+    pressure_replay = float(np.abs(arrays[2] - arrays[0]).max() / pressure_scale)
+    so_replay = float(np.abs(arrays[3] - arrays[1]).max())
+    checks = {
+        "pressure_replay_relative": pressure_replay <= 1.0e-12,
+        "so_replay_abs": so_replay <= 1.0e-12,
+    }
+    return {
+        "status": "PASS" if all(checks.values()) else "FAIL",
+        "checks": checks,
+        "pressure_replay_relative": pressure_replay,
+        "so_replay_abs": so_replay,
+        "pressure_transient_relative": float(
+            np.abs(arrays[0][1] - arrays[0][0]).max() / pressure_scale
+        ),
+        "so_transient_abs": float(np.abs(arrays[1][1] - arrays[1][0]).max()),
+        "thresholds": {"pressure_replay_relative_max": 1.0e-12, "so_replay_abs_max": 1.0e-12},
+    }
 
 
 def report_zone_matrix(design_id: str) -> tuple[tuple[str, ...], np.ndarray]:
@@ -314,6 +384,17 @@ def _so_states(result: ForwardResult, paths: ProjectPaths) -> np.ndarray:
     return out
 
 
+def _pressure_states(result: ForwardResult, paths: ProjectPaths) -> np.ndarray:
+    if "pressure_pa" not in result.states:
+        raise ValueError(f"forward {result.job_id} has no pressure state")
+    values = np.asarray(read_array(result.states["pressure_pa"], paths), dtype=np.float64)
+    if values.shape != (len(result.times_s), 512) or not np.isfinite(values).all():
+        raise ValueError(f"forward {result.job_id} has invalid pressure shape {values.shape}")
+    if np.any(values <= 0.0):
+        raise ValueError(f"forward {result.job_id} has non-positive pressure")
+    return values
+
+
 def _truth_checks(result: ForwardResult, paths: ProjectPaths) -> dict[str, Any]:
     states = _so_states(result, paths)
     if result.balances_path is None:
@@ -342,6 +423,82 @@ def _truth_checks(result: ForwardResult, paths: ProjectPaths) -> dict[str, Any]:
         "so_min": float(states.min()),
         "so_max": float(states.max()),
     }
+
+
+def _run_t4_closed_preflight(
+    *,
+    case: CaseBundle,
+    parent_ctx: RunContext,
+    worker: PersistentJuliaWorker,
+    ledger: BudgetLedger,
+    run_factory: RunFactory,
+) -> tuple[dict[str, Any], tuple[ArtifactRef, ...]]:
+    paths = worker.paths
+    preflight = closed_preflight_case(case)
+    results: list[ForwardResult] = []
+    refs: list[ArtifactRef] = []
+    for replay in (1, 2):
+        child = run_factory("e02-t4-closed-preflight", (parent_ctx.run_id,))
+        try:
+            result = require_complete_forward(
+                simulate(
+                    preflight,
+                    OutputRequest(
+                        state_times_s=preflight.report_edges_s,
+                        keep_native_restart=False,
+                        chunk_months=1,
+                    ),
+                    worker=worker,
+                    ctx=child,
+                    ledger=ledger,
+                    solver_config=SolverConfig(
+                        max_timestep_days=DEFAULT_MAX_TIMESTEP_DAYS,
+                        max_nonlinear_iterations=BASE_MAX_NONLINEAR_ITERATIONS,
+                    ),
+                )
+            )
+            ref = _publish_forward(result, child, paths)
+            child.finish("PASS", notes=[f"closed transient replay {replay}/2"])
+        except BaseException as exc:
+            if child.record.status == "RUNNING":
+                child.finish("FAIL", notes=[f"{type(exc).__name__}: {exc}"])
+            raise
+        results.append(result)
+        refs.append(ref)
+
+    pressure = tuple(_pressure_states(result, paths) for result in results)
+    so = tuple(_so_states(result, paths) for result in results)
+    reproducibility = preflight_reproducibility_metrics(pressure[0], so[0], pressure[1], so[1])
+    if case.initial.pressure_pa is None or case.initial.sw is None:
+        raise ValueError("T4 closed preflight requires explicit pressure and Sw arrays")
+    initial_pressure = np.asarray(read_array(case.initial.pressure_pa, paths), dtype=np.float64)
+    initial_sw = np.asarray(read_array(case.initial.sw, paths), dtype=np.float64)
+    pressure_scale = max(float(np.abs(initial_pressure).max()), 1.0)
+    initial_pressure_gap = float(np.abs(pressure[0][0] - initial_pressure).max() / pressure_scale)
+    initial_so_gap = float(np.abs(so[0][0] - (1.0 - initial_sw)).max())
+    forward_checks = [_truth_checks(result, paths) for result in results]
+    checks = {
+        "forward_checks": all(item["status"] == "PASS" for item in forward_checks),
+        "initial_pressure": initial_pressure_gap <= 1.0e-10,
+        "initial_so": initial_so_gap <= 1.0e-10,
+        "reproducible": reproducibility["status"] == "PASS",
+    }
+    return (
+        {
+            "status": "PASS" if all(checks.values()) else "FAIL",
+            "checks": checks,
+            "forward_checks": forward_checks,
+            "initial_pressure_relative": initial_pressure_gap,
+            "initial_so_abs": initial_so_gap,
+            "reproducibility": reproducibility,
+            "thresholds": {
+                "initial_pressure_relative_max": 1.0e-10,
+                "initial_so_abs_max": 1.0e-10,
+            },
+            "forward_refs": [ref.model_dump(mode="json") for ref in refs],
+        },
+        tuple(refs),
+    )
 
 
 def _history_seed(parent_seed: int) -> int:
@@ -428,6 +585,18 @@ def prepare_physical_experiment(
     paths = worker.paths
     context, _pending, generator_ref = make_inverse_world(design_id, truth_seed, paths, ctx)
     case, truth_theta = _load_truth_case(design_id, generator_ref, paths)
+    closed_preflight: dict[str, Any] | None = None
+    preflight_refs: tuple[ArtifactRef, ...] = ()
+    if design_id.startswith("e02-t4-"):
+        closed_preflight, preflight_refs = _run_t4_closed_preflight(
+            case=case,
+            parent_ctx=ctx,
+            worker=worker,
+            ledger=ledger,
+            run_factory=run_factory,
+        )
+        if closed_preflight["status"] != "PASS":
+            raise ValueError("T4 closed transient preflight failed; truth and inverse are blocked")
     times = _state_times(case)
     truth_result = require_complete_forward(
         simulate(
@@ -503,6 +672,7 @@ def prepare_physical_experiment(
                 "forward": truth_forward_ref.model_dump(mode="json"),
                 "checks": truth_checks,
             },
+            "closed_preflight": closed_preflight,
             "pair": pair,
             "state_times_s": list(times),
             "report_zones": list(report_zone_matrix(design_id)[0]),
@@ -514,7 +684,11 @@ def prepare_physical_experiment(
         paths,
         schema_version=PHYSICAL_EXPERIMENT_SCHEMA,
         producer_run_id=ctx.run_id,
-        parent_artifact_ids=(generator_ref.artifact_id, truth_forward_ref.artifact_id),
+        parent_artifact_ids=(
+            generator_ref.artifact_id,
+            *(ref.artifact_id for ref in preflight_refs),
+            truth_forward_ref.artifact_id,
+        ),
         now=datetime.now(UTC),
     )
     ctx.add_output("physical_experiment", ref)
@@ -832,7 +1006,9 @@ __all__ = [
     "PHYSICAL_COMPARISON_SCHEMA",
     "PHYSICAL_EXPERIMENT_SCHEMA",
     "PHYSICAL_SMC_RUN_SCHEMA",
+    "closed_preflight_case",
     "convergence_screen",
+    "preflight_reproducibility_metrics",
     "prepare_physical_experiment",
     "prior_context_payload",
     "publish_physical_comparison",
