@@ -515,18 +515,24 @@ def _launcher_outcome(
     dash; `peak_rss_bytes` is the sampled maximum of this process tree while the diagnostic
     ran, which IS measured — shared across its forwards, and said so in
     `measurement_method`.
+
+    `native_chunk_calls` is one of the unmeasured ones, and used to be filled with the wrong
+    quantity: `len(extraction["chunk"]["dt_s"])`. `dt_s` is the ACCEPTED SUBSTEP axis — for a
+    restart-merged extraction it is merged across chunks, and `julia/verification/fixtures.jl`
+    asserts `length(chunk["dt_s"]) == solver["accepted_steps"]` — so every launcher row
+    published its accepted-substep count under the name of the chunk-call count, identically
+    to the `accepted_steps` column beside it, while ledger rows carried the genuine count
+    from `chunk_diagnostics`. One column cannot be two quantities. The diagnostics go through
+    `adapter.run_forward`, which is un-chunked and publishes no chunk diagnostics, so there is
+    no chunk-call count to derive here and the row records its absence.
     """
     solver: Mapping[str, Any] | None = None
-    chunks: int | None = None
     if fixture is not None:
         extraction = fixture.get("extraction")
         if isinstance(extraction, Mapping):
             raw = extraction.get("solver")
             if isinstance(raw, Mapping):
                 solver = raw
-            chunk = extraction.get("chunk")
-            if isinstance(chunk, Mapping):
-                chunks = len(chunk.get("dt_s", []))
     return JobOutcome(
         job_id=job.job_id,
         group=job.group,
@@ -541,7 +547,7 @@ def _launcher_outcome(
         cpu_s=None,
         peak_rss_bytes=peak_rss_bytes,
         output_bytes=None,
-        native_chunk_calls=chunks,
+        native_chunk_calls=None,
         accepted_steps=None if solver is None else int(solver.get("accepted_steps", 0)),
         cut_steps=None if solver is None else int(solver.get("cut_steps", 0)),
         nonlinear_iterations=(

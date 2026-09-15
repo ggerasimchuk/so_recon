@@ -231,6 +231,10 @@ class JobOutcome(StrictModel):
     cpu_s: float | None
     peak_rss_bytes: int | None
     output_bytes: int | None
+    #: How many times the chunked native driver was CALLED for this trajectory, from the
+    #: result's own `chunk_diagnostics`. Never the accepted-substep count, which is
+    #: `accepted_steps` beside it. `None` on a launcher row: a verification diagnostic runs
+    #: un-chunked through `adapter.run_forward` and publishes no chunk diagnostics.
     native_chunk_calls: int | None
     accepted_steps: int | None
     cut_steps: int | None

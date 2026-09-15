@@ -11,8 +11,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from so_recon.simulator.suite_record import JobOutcome
-from so_recon.simulator.suites import first_cold_import_s, first_worker_job, warm_block
+from so_recon.simulator.suite_record import JobOutcome, PlannedJob
+from so_recon.simulator.suites import (
+    _launcher_outcome,
+    first_cold_import_s,
+    first_worker_job,
+    warm_block,
+)
 
 
 def _job(job_id: str, wall_s: float, cold_import_s: float | None) -> JobOutcome:
@@ -85,3 +90,59 @@ def test_a_short_warm_sample_still_reports_what_it_has() -> None:
     assert block["failure_rate"] == 0.5
     assert "p50_s" not in block
     assert "cold_s" not in block
+
+
+# --------------------------------------------------------------------------------------
+# I3 — the `chunks` column is native chunk CALLS, not accepted substeps
+# --------------------------------------------------------------------------------------
+
+
+def _planned_fixture_job() -> PlannedJob:
+    return PlannedJob.model_validate(
+        {
+            "job_id": "bo_depletion",
+            "group": "black_oil",
+            "kind": "fixture",
+            "profile": "P0_VERIFY",
+            "expected_outcome": "COMPLETE",
+            "output_request": "states+monthly+balances+connections",
+            "julia_threads": 4,
+            "cache_bypass": False,
+            "accounting": "launcher",
+            "native_source": None,
+            "scored_as": "black_oil",
+            "declared_by_plan": True,
+        }
+    )
+
+
+def test_a_launcher_row_does_not_publish_its_substeps_as_chunk_calls() -> None:
+    """One column, one quantity. `dt_s` is the accepted-substep axis, not a chunk count.
+
+    `julia/verification/fixtures.jl` asserts `length(chunk["dt_s"]) == solver["accepted_steps"]`,
+    so reading `len(dt_s)` as the chunk count made every launcher row report `chunks ==
+    accepted` identically — `bo_depletion` 40/40, `five_spot_coarse` 319/319, `bl32` 8/8 —
+    while ledger rows in the same column carry the real chunk-call count from
+    `chunk_diagnostics` (`world41`: 36 chunks against 239 accepted). The diagnostics run
+    through `adapter.run_forward`, which is un-chunked and publishes no chunk diagnostics at
+    all, so this route measures no chunk calls and says so with an em dash.
+    """
+    fixture = {
+        "extraction": {
+            "chunk": {"dt_s": [86400.0] * 40, "start_s": [0.0] * 40},
+            "solver": {"accepted_steps": 40, "cut_steps": 2, "nonlinear_iterations": 118},
+        }
+    }
+    outcome = _launcher_outcome(
+        _planned_fixture_job(),
+        status="COMPLETE",
+        wall_s=1.0,
+        started_at="2026-09-15T00:00:00+00:00",
+        fixture=fixture,
+    )
+    assert outcome.native_chunk_calls is None, (
+        "a launcher forward's chunk calls are not measured; 40 is its accepted substeps"
+    )
+    assert outcome.accepted_steps == 40
+    assert outcome.cut_steps == 2
+    assert outcome.nonlinear_iterations == 118
