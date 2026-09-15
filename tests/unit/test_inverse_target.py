@@ -24,6 +24,7 @@ from so_recon.inference.contracts import (
 from so_recon.inference.target import (
     ForwardEvaluationError,
     PhysicalTarget,
+    ReducedPhysicalTarget,
     _grids,
     require_complete_forward,
 )
@@ -37,6 +38,7 @@ from so_recon.simulator.contracts import TIME_CELL_AXES, CostRecord, ForwardResu
 from so_recon.simulator.results import MONTHLY_SCHEMA
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.p1 import P1Design, render_p1
+from so_recon.synthetic.reduced_inverse import ReducedDesign, ReducedGaussianPrior
 
 
 class _CaseContext:
@@ -440,6 +442,54 @@ def test_empty_observations_do_not_call_the_physical_forward(tmp_path: Path) -> 
     assert called is False
     assert result.log_l == 0.0
     assert result.forward_ref is None
+
+
+def test_reduced_target_reuses_identical_physics_and_likelihood(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    paths = ProjectPaths.default(root)
+    design = ReducedDesign()
+    prior = ReducedGaussianPrior(design)
+    worker = SimpleNamespace(paths=paths, environment_lock_hash="a" * 64)
+    contexts: list[_TargetContext] = []
+    forwards: list[ForwardResult] = []
+
+    def run_factory(command: str, parent_run_ids: tuple[str, ...]) -> RunContext:
+        assert command == "e02-reduced-smc-evaluation"
+        assert parent_run_ids == ("reference-run",)
+        ctx = _TargetContext(root, len(contexts))
+        contexts.append(ctx)
+        return cast(RunContext, ctx)
+
+    def fake_simulate(case: object, request: object, **kwargs: Any) -> ForwardResult:
+        del case, request, kwargs
+        result = _result(root)
+        forwards.append(result)
+        return result
+
+    target = ReducedPhysicalTarget(
+        prior,
+        prior,
+        design,
+        _bundle().model_copy(update={"logs": ()}),
+        cast(PersistentJuliaWorker, worker),
+        cast(BudgetLedger, object()),
+        run_factory,
+        parent_run_ids=("reference-run",),
+        simulate_fn=fake_simulate,
+        load_forward_fn=lambda path, project_paths: forwards[0],
+        adapter_hash="b" * 64,
+    )
+    theta = prior.sample(1, np.random.default_rng(3))[0]
+    first = target.evaluate(theta)
+    second = target.evaluate(theta)
+
+    assert len(forwards) == 1
+    assert first.forward_ref == second.forward_ref
+    assert first.cache_key == second.cache_key
+    assert first.log_l == second.log_l
+    assert target.checkpoint_hashes["basis_hash"] == prior.schema.basis_hash
+    assert all(ctx.record.status == "PASS" for ctx in contexts)
 
 
 @pytest.mark.parametrize("status", ["TIMEOUT", "RESOURCE_FAILURE", "NUMERICAL_FAILURE"])

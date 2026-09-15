@@ -14,6 +14,7 @@ from so_recon.geology.density import Density
 from so_recon.geology.renderer import build_inverse_case, render_theta
 from so_recon.inference.cache import ArtifactCache, forward_key, likelihood_key
 from so_recon.inference.contracts import (
+    FIXED_NOISE_THETA,
     LoglikResult,
     ModelObservations,
     NoiseTheta,
@@ -41,6 +42,11 @@ from so_recon.simulator.forward import (
 )
 from so_recon.simulator.results import RESULT_FILENAME, load_forward_result, write_forward_result
 from so_recon.simulator.worker import PersistentJuliaWorker
+from so_recon.synthetic.reduced_inverse import (
+    ReducedDesign,
+    build_reduced_case,
+    reduced_density_schema,
+)
 
 OBSERVATION_OPERATOR_VERSION = "e02-observation-operator-1"
 
@@ -332,10 +338,207 @@ class PhysicalTarget:
             raise
 
 
+class ReducedPhysicalTarget:
+    """Cached native target for the registered one-dimensional reduced-v2 experiment."""
+
+    def __init__(
+        self,
+        prior: Density,
+        proposal: Density,
+        design: ReducedDesign,
+        observations: ObservationBundle,
+        worker: PersistentJuliaWorker,
+        ledger: BudgetLedger,
+        run_factory: RunFactory,
+        *,
+        parent_run_ids: tuple[str, ...] = (),
+        forward_cache: ArtifactCache | None = None,
+        likelihood_cache: ArtifactCache | None = None,
+        simulate_fn: SimulateFunction = simulate,
+        load_forward_fn: LoadForwardFunction = load_forward_result,
+        adapter_hash: str | None = None,
+    ) -> None:
+        self.prior = prior
+        self.proposal = proposal
+        self.design = design
+        self.schema = reduced_density_schema(design)
+        self.observations = observations
+        self.worker = worker
+        self.ledger = ledger
+        self.run_factory = run_factory
+        self.parent_run_ids = parent_run_ids
+        self.paths = worker.paths
+        self.forward_cache = forward_cache or ArtifactCache(self.paths, "reduced-forward")
+        self.likelihood_cache = likelihood_cache or ArtifactCache(
+            self.paths, "reduced-likelihood"
+        )
+        self.simulate_fn = simulate_fn
+        self.load_forward_fn = load_forward_fn
+        self.solver_config = SolverConfig(
+            max_timestep_days=DEFAULT_MAX_TIMESTEP_DAYS,
+            max_nonlinear_iterations=BASE_MAX_NONLINEAR_ITERATIONS,
+        )
+        self.solver_hash = sha256_json(self.solver_config.model_dump(mode="json"))
+        self.adapter_hash = adapter_hash or _source_hash(self.paths)
+        self.operator_hash = sha256_json(
+            {
+                "version": OBSERVATION_OPERATOR_VERSION,
+                "history": "recursive-history-1",
+                "logs": "dated-so-log-1",
+            }
+        )
+        self.design_hash = sha256_json(design.model_dump(mode="json"))
+        self.observation_semantic_hash = sha256_json(observations.model_dump(mode="json"))
+        self.fingerprint = sha256_json(
+            {
+                "kind": "e02-reduced-physical-target-1",
+                "prior": prior.fingerprint,
+                "proposal": proposal.fingerprint,
+                "design_hash": self.design_hash,
+                "information_hash": observations.information_hash,
+                "observation_semantic_hash": self.observation_semantic_hash,
+                "solver_hash": self.solver_hash,
+                "adapter_hash": self.adapter_hash,
+                "environment_lock_hash": worker.environment_lock_hash,
+                "operator_hash": self.operator_hash,
+            }
+        )
+        self.checkpoint_hashes = {
+            "prior_hash": prior.fingerprint,
+            "proposal_hash": proposal.fingerprint,
+            "basis_hash": self.schema.basis_hash,
+            "information_hash": observations.information_hash,
+            "observation_hash": self.observation_semantic_hash,
+            "design_hash": self.design_hash,
+            "solver_hash": self.solver_hash,
+            "adapter_hash": self.adapter_hash,
+            "lock_hash": worker.environment_lock_hash,
+            "operator_hash": self.operator_hash,
+        }
+
+    def _publish_forward(self, result: ForwardResult, ctx: RunContext) -> ArtifactRef:
+        path = ctx.run_dir / RESULT_FILENAME
+        write_forward_result(result, path)
+        ref = register_artifact(
+            path,
+            self.paths,
+            schema_version=result.schema_version,
+            producer_run_id=ctx.run_id,
+            media_type="application/json",
+            now=datetime.now(UTC),
+        )
+        ctx.add_output("forward_result", ref)
+        return ref
+
+    def evaluate(self, theta: ThetaRecord) -> TargetEvaluation:
+        """Score one z with the same F, L, U and fixed noise used by quadrature."""
+        self.schema.validate_theta(theta)
+        log_p0 = self.prior.log_prob(theta)
+        log_r = self.proposal.log_prob(theta)
+        if not self.observations.history and not self.observations.logs:
+            return TargetEvaluation(
+                theta=theta,
+                log_p0=log_p0,
+                log_p0_in_support=log_p0 != -math.inf,
+                log_l=0.0,
+                log_l_in_support=True,
+                log_r=log_r,
+                log_r_in_support=log_r != -math.inf,
+                forward_ref=None,
+                cache_key=sha256_json(
+                    {
+                        "target": self.fingerprint,
+                        "theta": theta.model_dump(mode="json"),
+                        "empty_observations": True,
+                    }
+                ),
+            )
+        ctx = self.run_factory("e02-reduced-smc-evaluation", self.parent_run_ids)
+        try:
+            case = build_reduced_case(theta.v[0], self.design, self.paths, ctx)
+            request = OutputRequest(
+                state_times_s=self.design.report_edges_s,
+                keep_native_restart=False,
+                chunk_months=1,
+            )
+            f_key = forward_key(
+                physical={**model_hash_payload(case), "cutoff": case.cutoff},
+                solver_hash=self.solver_hash,
+                output_request=request.model_dump(mode="json"),
+                adapter_hash=self.adapter_hash,
+                environment_lock_hash=self.worker.environment_lock_hash,
+            )
+            forward_ref = self.forward_cache.get(f_key)
+            if forward_ref is None:
+                result = self.simulate_fn(
+                    case,
+                    request,
+                    worker=self.worker,
+                    ctx=ctx,
+                    ledger=self.ledger,
+                    solver_config=self.solver_config,
+                )
+                require_complete_forward(result)
+                forward_ref = self._publish_forward(result, ctx)
+                self.forward_cache.put(f_key, forward_ref)
+            else:
+                result = require_complete_forward(
+                    self.load_forward_fn(self.paths.resolve(forward_ref.path), self.paths)
+                )
+                ctx.add_output("forward_result.cache_hit", forward_ref)
+
+            l_key = likelihood_key(
+                forward_hash=f_key,
+                observation_hash=self.observation_semantic_hash,
+                operator_hash=self.operator_hash,
+                noise_hash=sha256_json(FIXED_NOISE_THETA.model_dump(mode="json")),
+            )
+            likelihood_ref = self.likelihood_cache.get(l_key)
+            if likelihood_ref is None:
+                predicted = predict_observations(result, self.observations, self.paths)
+                likelihood = evaluate_loglik(
+                    predicted, self.observations, FIXED_NOISE_THETA
+                )
+                likelihood_ref = write_json_artifact(
+                    ctx.run_dir / "likelihood.json",
+                    likelihood.model_dump(mode="json"),
+                    self.paths,
+                    schema_version="e02-loglik-1",
+                    producer_run_id=ctx.run_id,
+                    parent_artifact_ids=(forward_ref.artifact_id,),
+                    now=datetime.now(UTC),
+                )
+                ctx.add_output("likelihood", likelihood_ref)
+                self.likelihood_cache.put(l_key, likelihood_ref)
+            else:
+                likelihood = LoglikResult.model_validate_json(
+                    self.paths.resolve(likelihood_ref.path).read_text(encoding="utf-8")
+                )
+                ctx.add_output("likelihood.cache_hit", likelihood_ref)
+
+            ctx.finish("PASS")
+            return TargetEvaluation(
+                theta=theta,
+                log_p0=log_p0,
+                log_p0_in_support=log_p0 != -math.inf,
+                log_l=likelihood.value,
+                log_l_in_support=likelihood.value != -math.inf,
+                log_r=log_r,
+                log_r_in_support=log_r != -math.inf,
+                forward_ref=forward_ref,
+                cache_key=l_key,
+            )
+        except BaseException as exc:
+            if ctx.record.status == "RUNNING":
+                ctx.finish("FAIL", notes=[f"{type(exc).__name__}: {exc}"])
+            raise
+
+
 __all__ = [
     "OBSERVATION_OPERATOR_VERSION",
     "ForwardEvaluationError",
     "PhysicalTarget",
+    "ReducedPhysicalTarget",
     "evaluate_loglik",
     "require_complete_forward",
 ]

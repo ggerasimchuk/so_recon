@@ -12,7 +12,13 @@ from scipy.stats import norm
 
 from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext
-from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case, oil_corey_exponent
+from so_recon.synthetic.reduced_inverse import (
+    ReducedDesign,
+    ReducedGaussianPrior,
+    build_reduced_case,
+    oil_corey_exponent,
+    reduced_density_schema,
+)
 from so_recon.validation.reference_inverse import (
     QUANTILE_METHOD,
     quadrature_reference,
@@ -171,3 +177,17 @@ def test_reduced_v2_records_the_informative_control_change_under_a_new_identity(
     design = ReducedDesign()
     assert design.design_id == "e02-reduced-corey-v2"
     assert design.rate_m3_sc_day == 4.0
+
+
+def test_reduced_prior_is_the_declared_one_dimensional_standard_normal() -> None:
+    design = ReducedDesign()
+    schema = reduced_density_schema(design)
+    prior = ReducedGaussianPrior(design)
+    draws = prior.sample(4, np.random.default_rng(17))
+
+    assert schema.n_v == 1
+    assert schema.n_residual == 0
+    assert schema.families == (0,)
+    assert all(draw.schema_id == schema.schema_id for draw in draws)
+    assert all(draw.basis_hash == schema.basis_hash for draw in draws)
+    assert all(prior.log_prob(draw) == pytest.approx(norm.logpdf(draw.v[0])) for draw in draws)
