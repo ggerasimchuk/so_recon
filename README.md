@@ -112,7 +112,7 @@ digest опубликованного case-манифеста уже имеют 
 Чистая математическая проверка не запускает Julia:
 
     uv run so-recon --config configs/e02.yml verify-inverse --suite math
-    uv run so-recon --config configs/e02.yml inverse-budget --experiment reduced-v1
+    uv run so-recon --config configs/e02.yml inverse-budget --experiment reduced-v2
     uv run so-recon --config configs/e02.yml inverse-budget --experiment e02-t1-v1-s141
     make gate-e02-math
 

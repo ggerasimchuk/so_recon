@@ -125,3 +125,9 @@ def test_reduced_latent_changes_oil_corey_physics_not_the_rock(tmp_path: Path) -
     assert low.grid.shape == (16, 1, 1)
     assert len(low.report_edges_s) == 13
     assert "/truth/" not in str(low.model_dump(mode="json"))
+
+
+def test_reduced_v2_records_the_informative_control_change_under_a_new_identity() -> None:
+    design = ReducedDesign()
+    assert design.design_id == "e02-reduced-corey-v2"
+    assert design.rate_m3_sc_day == 4.0

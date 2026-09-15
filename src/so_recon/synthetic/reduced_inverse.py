@@ -42,13 +42,13 @@ from so_recon.simulator.contracts import (
 from so_recon.simulator.schedule import month_edges, month_edges_s
 from so_recon.synthetic.p1 import OBSERVATION_SCHEMA, P1Design, oil_connected_hydrostatic_pa
 
-REDUCED_RENDERER_VERSION = "e02-reduced-corey-1"
+REDUCED_RENDERER_VERSION = "e02-reduced-corey-2"
 
 
 class ReducedDesign(StrictModel):
     """The fixed 16-cell, 12-calendar-month displacement design."""
 
-    design_id: Literal["e02-reduced-corey-v1"] = "e02-reduced-corey-v1"
+    design_id: Literal["e02-reduced-corey-v2"] = "e02-reduced-corey-v2"
     shape: tuple[int, int, int] = (16, 1, 1)
     extent_m: tuple[float, float, float] = (160.0, 10.0, 10.0)
     porosity: float = 0.25
@@ -56,7 +56,7 @@ class ReducedDesign(StrictModel):
     initial_sw: float = 0.2
     start_date: str = "2000-01-01"
     n_months: int = 12
-    rate_m3_sc_day: float = 2.0
+    rate_m3_sc_day: float = 4.0
     injector_bhp_limit_pa: float = 30.0e6
     producer_bhp_limit_pa: float = 5.0e6
 
@@ -64,12 +64,12 @@ class ReducedDesign(StrictModel):
     def _fixed_design_is_physical(self) -> ReducedDesign:
         if self.shape != (16, 1, 1) or self.extent_m != (160.0, 10.0, 10.0):
             raise ValueError(
-                f"reduced design v1 fixes shape/extent, got {self.shape}/{self.extent_m}"
+                f"reduced design v2 fixes shape/extent, got {self.shape}/{self.extent_m}"
             )
         if date.fromisoformat(self.start_date).day != 1 or self.n_months != 12:
-            raise ValueError("reduced design v1 is twelve calendar months from a month edge")
+            raise ValueError("reduced design v2 is twelve calendar months from a month edge")
         if not 0.0 < self.porosity < 1.0 or self.initial_sw != 0.2:
-            raise ValueError("reduced porosity must be fractional and v1 starts at Sw=0.2")
+            raise ValueError("reduced porosity must be fractional and v2 starts at Sw=0.2")
         if any(value <= 0.0 for value in self.permeability_md):
             raise ValueError("reduced permeability must be positive in all directions")
         if (

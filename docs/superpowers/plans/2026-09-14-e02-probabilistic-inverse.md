@@ -542,7 +542,7 @@ def test_nonuniform_quadrature_weights_are_used():
 ```
 
 - [ ] **11.2 Run RED:** `uv run pytest tests/unit/test_reference_quadrature.py -q`.
-- [ ] **11.3 Зарегистрировать настоящий reduced case.** `shape=(16,1,1)`, `extent=(160,10,10)m`, phi=.25, K=(100,100,5)mD, initial Sw=.2, same OW fluids E01; pressure initialized from native hydrostatic helper; injector cell0, producer cell15, rates=2m³_sc/day, BHP 30/5MPa, 12 calendar months from 2000-01-01. One uncertain latent z~N(0,1) sets oil Corey exponent `n_o=1.5+2*Phi(z)`; n_w=2, Sorw=.2, Swc=.2. This parameter changes phase transport; do not use absolute K scale as the only “identifiable” unknown in fixed-rate displacement. Truth z from seed701, fixed-noise `.03/.4/5`, report watercut bins=.01; save truth state at all 13 report edges. Reduced schema `(n_v=1,n_residual=0,families=(0,))`; log_density is N(z), no double physical Jacobian.
+- [ ] **11.3 Зарегистрировать настоящий reduced case.** `shape=(16,1,1)`, `extent=(160,10,10)m`, phi=.25, K=(100,100,5)mD, initial Sw=.2, same OW fluids E01; pressure initialized from native hydrostatic helper; injector cell0, producer cell15, BHP 30/5MPa, 12 calendar months from 2000-01-01. Frozen `e02-reduced-corey-v1` с rate=2m³_sc/day дал `DESIGN_NOT_INFORMATIVE`: native truth seed701 имел watercut range `0.0010195`. Новый design ID `e02-reduced-corey-v2` меняет только rate на 4m³_sc/day; независимый diagnostic forward дал range `0.63248`, поэтому observations/reference регенерируются под v2. One uncertain latent z~N(0,1) sets oil Corey exponent `n_o=1.5+2*Phi(z)`; n_w=2, Sorw=.2, Swc=.2. This parameter changes phase transport; do not use absolute K scale as the only “identifiable” unknown in fixed-rate displacement. Truth z from seed701, fixed-noise `.03/.4/5`, report watercut bins=.01; save truth state at all 13 report edges. Reduced schema `(n_v=1,n_residual=0,families=(0,))`; log_density is N(z), no double physical Jacobian.
 
 Before inverse, run native balance and actual water breakthrough check on this design. If twelve months do not span informative response, record `DESIGN_NOT_INFORMATIVE`; a revised control/horizon needs new design ID before observations/reference are regenerated. Do not pretend changed design is same experiment.
 - [ ] **11.4 Independent quadrature:** initial nested trapezoid nodes linspace(-7,7,17), then33 (17+16=33 F jobs), then65 and129 **only** with remaining session budget/run intent. Use physical outputs cache at repeated nodes; priors and integration widths remain explicit. Formula:
@@ -672,7 +672,7 @@ Report rejects PASS for beta<1, missing native/reference/generator checks, missi
 
 ```bash
 uv run so-recon --config configs/e02.yml verify-inverse --suite math
-uv run so-recon --config configs/e02.yml inverse-budget --experiment reduced-v1
+uv run so-recon --config configs/e02.yml inverse-budget --experiment reduced-v2
 uv run so-recon --config configs/e02.yml verify-inverse --suite reduced
 uv run so-recon --config configs/e02.yml inverse-budget --experiment e02-t1-v1
 uv run so-recon --config configs/e02.yml inverse-p1 --experiment e02-t1-v1 --seed 141 --particles 32 --inference-seed 11

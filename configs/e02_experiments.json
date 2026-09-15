@@ -6,8 +6,8 @@
   "max_beta_steps": 24,
   "moves_per_level": 2,
   "reduced_experiment": {
-    "experiment_id": "reduced-v1",
-    "design_id": "e02-reduced-corey-v1",
+    "experiment_id": "reduced-v2",
+    "design_id": "e02-reduced-corey-v2",
     "truth_seed": 701,
     "reference_nodes": [17, 33],
     "resource_profile": "P0_VERIFY"
