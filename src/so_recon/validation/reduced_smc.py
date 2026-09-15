@@ -24,7 +24,7 @@ from so_recon.registry.artifact import (
     write_json_artifact,
 )
 from so_recon.registry.hashing import sha256_file
-from so_recon.registry.run import RunContext
+from so_recon.registry.run import RunContext, RunRecord
 from so_recon.simulator.budget import BudgetLedger
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.reduced_inverse import ReducedDesign
@@ -50,6 +50,8 @@ def _mc_se(values: np.ndarray) -> float:
 def compare_reduced_smc_summaries(
     summaries: Sequence[Mapping[str, object]],
     reference: Mapping[str, object],
+    *,
+    particle_counts: tuple[int, ...] = (32, 64),
 ) -> dict[str, object]:
     """Apply the pre-registered two-seed N32/N64 reference criteria."""
     reference_mean = _finite_number(reference["mean"], label="reference mean")
@@ -60,7 +62,9 @@ def compare_reduced_smc_summaries(
 
     by_particles: dict[str, object] = {}
     checks: dict[str, bool] = {}
-    for n_particles in (32, 64):
+    if not particle_counts or any(value < 2 for value in particle_counts):
+        raise ValueError("particle_counts must contain positive SMC ensemble sizes")
+    for n_particles in particle_counts:
         rows = sorted(
             (row for row in summaries if int(cast(int, row["n_particles"])) == n_particles),
             key=lambda row: int(cast(int, row["seed"])),
@@ -125,6 +129,73 @@ def compare_reduced_smc_summaries(
         "checks": checks,
         "by_particles": by_particles,
     }
+
+
+def reduced_smc_artifact_from_path(path: Path, paths: ProjectPaths) -> ArtifactRef:
+    """Recover and verify a reduced SMC artifact from its producer run."""
+    resolved = path if path.is_absolute() else paths.resolve(str(path))
+    try:
+        run = RunRecord.model_validate_json((resolved.parent / "run.json").read_text())
+        ref = run.outputs["reduced_smc"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise ValueError(f"cannot recover reduced SMC artifact {resolved}: {exc}") from exc
+    if paths.resolve(ref.path) != resolved:
+        raise ValueError(f"producer run names {ref.path!r}, not {paths.relative(resolved)!r}")
+    if (
+        not resolved.is_file()
+        or sha256_file(resolved) != ref.sha256
+        or resolved.stat().st_size != ref.size_bytes
+    ):
+        raise ValueError(f"reduced SMC artifact {ref.path} failed immutable identity check")
+    return ref
+
+
+def publish_reduced_smc_comparison(
+    *,
+    ctx: RunContext,
+    smc_refs: Sequence[ArtifactRef],
+    reference_ref: ArtifactRef,
+    paths: ProjectPaths,
+    particle_counts: tuple[int, ...] = (32, 64),
+    diagnostic_protocol: str | None = None,
+) -> ArtifactRef:
+    """Verify four run artifacts and publish their fail-closed scientific verdict."""
+    reference_payload = json.loads(paths.resolve(reference_ref.path).read_text(encoding="utf-8"))
+    if reference_payload.get("status") != "CONVERGED":
+        raise ValueError("reduced SMC comparison requires a CONVERGED reference")
+    summaries: list[dict[str, Any]] = []
+    for ref in smc_refs:
+        path = paths.resolve(ref.path)
+        if sha256_file(path) != ref.sha256 or path.stat().st_size != ref.size_bytes:
+            raise ValueError(f"reduced SMC input {ref.path} failed immutable identity check")
+        payload = load_reduced_smc_summary(path, paths)
+        parent = ArtifactRef.model_validate(payload["reference"])
+        if parent.artifact_id != reference_ref.artifact_id:
+            raise ValueError(f"reduced SMC input {ref.path} names another reference")
+        summaries.append(payload)
+    comparison = compare_reduced_smc_summaries(
+        summaries, reference_payload["fine"], particle_counts=particle_counts
+    )
+    payload = {
+        **comparison,
+        "diagnostic_protocol": diagnostic_protocol,
+        "reference": reference_ref.model_dump(mode="json"),
+        "runs": [ref.model_dump(mode="json") for ref in smc_refs],
+    }
+    ref = write_json_artifact(
+        ctx.run_dir / "reduced_smc_comparison.json",
+        payload,
+        paths,
+        schema_version=REDUCED_SMC_COMPARISON_SCHEMA,
+        producer_run_id=ctx.run_id,
+        parent_artifact_ids=(
+            reference_ref.artifact_id,
+            *(item.artifact_id for item in smc_refs),
+        ),
+        now=datetime.now(UTC),
+    )
+    ctx.add_output("reduced_smc_comparison", ref)
+    return ref
 
 
 def _histogram_modes(values: np.ndarray, weights: np.ndarray) -> dict[str, object]:
@@ -313,6 +384,8 @@ __all__ = [
     "REDUCED_SMC_RUN_SCHEMA",
     "compare_reduced_smc_summaries",
     "load_reduced_smc_summary",
+    "publish_reduced_smc_comparison",
+    "reduced_smc_artifact_from_path",
     "run_reduced_smc",
     "summarize_reduced_smc",
 ]

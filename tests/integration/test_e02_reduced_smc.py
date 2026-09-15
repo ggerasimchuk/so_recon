@@ -83,8 +83,13 @@ def test_reduced_native_smc_reaches_beta_one() -> None:
     observations = ObservationBundle.model_validate(reference["observations"])
     n_particles = _required_int("E02_REDUCED_SMC_PARTICLES")
     seed = _required_int("E02_REDUCED_SMC_SEED")
-    if n_particles not in {32, 64} or seed not in {11, 12}:
-        pytest.fail("the registered reduced SMC matrix is N=32/64 and seed=11/12")
+    diagnostic = os.environ.get("E02_REDUCED_SMC_DIAGNOSTIC") == "1"
+    allowed_particles = {128} if diagnostic else {32, 64}
+    if n_particles not in allowed_particles or seed not in {11, 12}:
+        pytest.fail(
+            "the registered reduced SMC matrix is N=32/64 and seed=11/12; "
+            "the explicit diagnostic extension admits N=128"
+        )
     session_id = os.environ.get(
         "E02_REDUCED_SMC_SESSION_ID", f"e02-reduced-smc-n{n_particles}-s{seed}"
     )
