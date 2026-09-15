@@ -626,3 +626,33 @@ def test_the_report_command_has_no_deferred_import() -> None:
         if line.startswith("    ") and line.strip().startswith(("import ", "from "))
     ]
     assert not offending, offending
+
+
+# --------------------------------------------------------------------------------------
+# I1 — which session-scope caps are enforced, said on the page
+# --------------------------------------------------------------------------------------
+
+
+def test_the_page_names_which_session_scope_caps_are_enforced_and_which_are_not(
+    tmp_path: Path,
+) -> None:
+    """A cap the code declares and does not enforce is not a cap the page may imply.
+
+    COMPUTE §7's disk budget IS re-imposed at session scope (`Session.admit_output`). The
+    session forward count, the session wall between group boundaries and SPEC §3.3's two
+    attempts per model hash are NOT: the first has no session-scope caller at all, the
+    second is checked only between groups, and the third is per-job-ledger because E01 opens
+    one ledger per run of a model. They are latent rather than live — the declared matrices
+    are fixed at 23/17/4 jobs against caps of 64 and 2000 — and the page says so rather than
+    leaving a reader to assume all four bite.
+    """
+    paths = _paths(tmp_path)
+    report = build_e01_report((_green_p0(paths),), paths)
+    named = [item for item in report.limitations if "ession-scope budget caps" in item]
+    assert named, report.limitations
+    text = named[0].lower()
+    assert "disk budget is re-imposed" in text
+    assert "forward count" in text
+    assert "wall" in text
+    assert "two attempts per model hash is enforced per job ledger" in text
+    assert named[0] in render_e01_report(report)

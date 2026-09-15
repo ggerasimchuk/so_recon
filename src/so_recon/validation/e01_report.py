@@ -100,6 +100,28 @@ RESOURCE_NOTE = (
     "NOT_RUN and never a pass, and a stage accepted on such a session is not accepted."
 )
 
+#: Which of the caps a session declares are really imposed at SESSION scope, and which are
+#: not. E01 opens one `BudgetLedger` per run of a model (`Session.ledger`), which is what lets
+#: the isolation quadruple, the restart triple and the warm repeats be separate work rather
+#: than retries — and the price is that no single account sees the session's totals. One of
+#: the three cumulative caps is re-imposed above the ledgers and two are not. A load-bearing
+#: comment that claimed otherwise is the defect class this stage has already hit; the page
+#: states the position instead of leaving a reader to assume all of them bite.
+SESSION_CAP_NOTE = (
+    "Session-scope budget caps: of the three cumulative caps `BudgetLedger.reserve` "
+    "enforces per account, only the COMPUTE §7 disk budget is re-imposed across the whole "
+    "session (`Session.admit_output`, over the bytes every publishing route charges). The "
+    "session FORWARD COUNT is not: nothing compares a running total against "
+    "`max_forwards`, and what bounds the forwards is the fixed declared matrix — 23, 17 and "
+    "4 jobs against a cap of 2000. The session WALL is checked at GROUP BOUNDARIES only; a "
+    "group already running is not interrupted, and `job_timeout_s` bounds the subprocess "
+    "inside it. SPEC §3.3's two attempts per model hash is enforced per job ledger, not "
+    "session-wide, because one run of a model is one account by design. These three are "
+    "latent rather than live — no overrun is reachable through the declared matrices — and "
+    "they are stated here rather than enforced, so that no reader takes an unenforced cap "
+    "for a guarantee."
+)
+
 #: The published-manifest distinction Task 1 introduced, closed here (plan 12.11 lineage).
 MANIFEST_NAMING_NOTE = (
     "Published source manifests are one file per spec version "
@@ -666,6 +688,7 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         bo_status,
         any_evidence=bool(suites),
     )
+    limitations.append(SESSION_CAP_NOTE)
     # Every RESOURCE_FAILURE in the repository, not only the ones inside a cited suite.
     limitations.extend(resource_failures_across_runs(paths, run_dirs))
     limitations.extend(p1_manifest_reconciliation(paths, suites))

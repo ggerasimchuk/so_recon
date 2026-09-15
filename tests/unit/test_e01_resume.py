@@ -552,3 +552,52 @@ def test_the_guard_never_doubles_a_verdict_the_group_already_recorded(tmp_path: 
     with suites.verdict_owed(run, "black_oil_restart", {}, ()):
         run.checks.append(_check("black_oil_restart"))
     assert [(c.name, c.status) for c in run.checks] == [("black_oil_restart", "PASS")]
+
+
+# --------------------------------------------------------------------------------------
+# I1 — the session disk cap counts what the session really wrote
+# --------------------------------------------------------------------------------------
+
+
+def test_the_session_charges_what_a_published_directory_really_holds(tmp_path: Path) -> None:
+    """`record_output` takes a number somebody else measured; this measures it."""
+    paths = _paths(tmp_path)
+    session = _session(paths, tmp_path)
+    result_dir = tmp_path / "results" / "p0-closed_cell"
+    (result_dir / "nested").mkdir(parents=True)
+    (result_dir / "states.h5").write_bytes(b"x" * 4096)
+    (result_dir / "nested" / "monthly.parquet").write_bytes(b"y" * 512)
+
+    session.record_directory(result_dir)
+    assert session.output_bytes == 4096 + 512
+    session.record_directory(tmp_path / "never-written")
+    assert session.output_bytes == 4096 + 512
+
+
+def test_a_launcher_published_fixture_is_charged_to_the_session_disk_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every `artifacts/results/p0-*` and `p1-*` directory used to cost the session nothing.
+
+    `Session.admit_output` re-imposes COMPUTE §7's 5 GiB session cap, but only over what
+    `record_output` was told about, and the launcher route told it nothing: the analytic,
+    operational and refinement groups publish their fixtures through `_publish` and never
+    charged a byte. The BO fixture loop did call `record_output` — with
+    `result.cost.output_bytes`, which `publish_fixture` writes as a constant 0.
+    """
+    paths = _paths(tmp_path)
+    run = _suite_run(paths, tmp_path)
+    result_dir = paths.artifacts / "results" / "p0-closed_cell"
+    result_dir.mkdir(parents=True)
+    (result_dir / "states.h5").write_bytes(b"z" * 2048)
+
+    def fake_publish(*_args: Any, **_kwargs: Any) -> tuple[None, Path]:
+        return None, result_dir
+
+    monkeypatch.setattr(suites, "publish_fixture", fake_publish)
+    published = suites._publish(run, {"fixtures": {"closed_cell": {}}}, "closed_cell", "p0-x")
+
+    assert published == result_dir
+    assert run.session.output_bytes == 2048, (
+        "a fixture the session published is bytes the session wrote"
+    )

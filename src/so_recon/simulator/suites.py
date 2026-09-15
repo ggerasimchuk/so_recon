@@ -209,12 +209,36 @@ class Session:
 
     @property
     def output_bytes(self) -> int:
-        """Everything this SESSION has written, across every per-job ledger it opened."""
+        """What this session has been TOLD it wrote, and nothing it was not told about.
+
+        Every route that publishes bytes in this module charges them here: `_forward` for a
+        ledger forward and for a reused one, `_publish` and the black-oil fixture loop for a
+        launcher-published fixture directory, and both restart continuations. It is a running
+        total of charges, not an audit of the filesystem — a route added later that writes
+        without charging is invisible to it, and to the cap `admit_output` imposes from it.
+        """
         return self._output_bytes
 
     def record_output(self, output_bytes: int | None) -> None:
-        """Add one finished job's published bytes to the session's running total."""
+        """Charge one finished job's published bytes, as its own cost record measured them.
+
+        `None` is an unmeasured quantity and charges nothing. That is right for a row nobody
+        weighed and wrong for a directory that exists: `publish_fixture` writes
+        `output_bytes=0` into a fixture's `CostRecord` because a verification diagnostic
+        measures no per-forward bytes, so a fixture is charged by `record_directory` instead.
+        """
         self._output_bytes += int(output_bytes or 0)
+
+    def record_directory(self, directory: Path) -> None:
+        """Charge what a published directory really holds, measured off the filesystem.
+
+        The launcher route has no per-forward cost to quote — the diagnostic runs many
+        forwards in one process — but the bytes it published are on disk and weighable. A
+        directory that was never written charges nothing.
+        """
+        if not directory.is_dir():
+            return
+        self._output_bytes += sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())
 
     def admit_output(self, *, predicted_bytes: int) -> None:
         """Refuse the next job when the SESSION's disk budget cannot hold what it predicts.
@@ -225,10 +249,24 @@ class Session:
         isolation quadruple, the restart triple and five warm repeats each need more than
         the two attempts per model hash a single ledger allows), and the price of that is
         that every one of those accounts sees a single entry and none of them can see the
-        session's total. The wall bound and the forward count the suite already keeps
-        itself; this is the third cap, kept here, with the same `disk_stop` and the same
-        `DISK_FAILURE_RESERVE_BYTES` left free so that whatever happens next can still be
-        written down.
+        session's total. This is the one of the three that is re-imposed at session scope,
+        with the same `disk_stop` and the same `DISK_FAILURE_RESERVE_BYTES` left free so that
+        whatever happens next can still be written down.
+
+        WHAT IS NOT RE-IMPOSED HERE, so that no reader assumes it is:
+
+        * the session FORWARD COUNT has no session-scope caller. `SuiteRun` never counts its
+          forwards against `profile.max_forwards`; what bounds them is the planned matrix,
+          which is a fixed list of 23, 17 and 4 jobs against a cap of 2000. No overrun is
+          reachable through the plan's own job list, and a suite that grew past the cap would
+          not be stopped by anything in this module.
+        * the session WALL is checked at GROUP BOUNDARIES only — `run_suite_jobs` consults
+          `SuiteRun.out_of_time()` before entering the next group. A group already running
+          is not interrupted; `profile.job_timeout_s` bounds the subprocess inside it.
+        * SPEC §3.3's two attempts per model hash is per-JOB-LEDGER, by the design
+          `Session.ledger` documents, and is therefore not a session-wide attempt cap.
+
+        The stage report names all three (`SESSION_CAP_NOTE`).
         """
         stop = disk_stop(
             self._profile,
@@ -251,11 +289,20 @@ class Session:
         restart suite decided (`tests/integration/test_e01_restart.py:_ledger`), and every
         one of those sessions is written down.
 
-        What that gives up is the ledger's own session-level wall and forward accumulation,
-        because a fresh session starts a fresh clock. The suite keeps both itself:
-        `SuiteRun.deadline_s` is the session's real wall bound and the planned matrix is its
-        real forward count. Nothing is unaccounted — the per-job ledgers are all published
-        under the run directory and the stage report sums them.
+        What that gives up, precisely, so that nothing here reads as a guarantee it is not:
+
+        * the two-attempts-per-model-hash rule holds WITHIN one of these accounts and not
+          across the session. A model run under two different job ids gets two accounts and
+          two attempts each; that is the intent, and it is not a session-wide attempt cap.
+        * the ledger's own session-level WALL and FORWARD accumulation are given up with the
+          fresh clock. `SuiteRun.deadline_s` bounds the session's wall BETWEEN GROUPS — a
+          group already running is not interrupted — and the planned matrix bounds the
+          forward count only in the sense that it is a fixed list; no code compares a running
+          total against `profile.max_forwards`. See `Session.admit_output`, which re-imposes
+          the third cap (disk) and names these two as not re-imposed.
+
+        Everything SPENT is accounted whether or not it is capped: the per-job ledgers are
+        all published under the run directory and the stage report sums them.
         """
         existing = self.ledgers.get(job_id)
         if existing is not None:
@@ -929,10 +976,18 @@ def _launch(
 
 
 def _publish(run: SuiteRun, report: Mapping[str, Any], name: str, label: str) -> Path:
+    """Publish one launcher fixture and charge its bytes to the session's disk budget.
+
+    The charge is measured off the published directory, not read out of the result's cost
+    record: `publish_fixture` builds that record from the diagnostic's solver counters, which
+    carry no per-forward byte count, so `cost.output_bytes` there is a constant 0. Every
+    `artifacts/results/p0-*` and `p1-*` directory used to cost the session nothing at all.
+    """
     fixture = report["fixtures"][name]
     _result, result_dir = publish_fixture(
         dict(fixture), run.paths, label, dict(report), world=run.suite
     )
+    run.session.record_directory(result_dir)
     return result_dir
 
 
@@ -1398,6 +1453,7 @@ def _run_restart(run: SuiteRun) -> None:
         run.checks.append(_gate("restart_round_trip", {}, run.tolerances, _RESTART_GATES))
         return
     suffix = persist_result(suffix, run.paths)
+    run.session.record_output(suffix.cost.output_bytes)
     run.jobs.append(
         _outcome_from_result(
             suffix_job,
@@ -2040,7 +2096,9 @@ def _run_black_oil(run: SuiteRun) -> None:
                 peak_rss_bytes=launched.peak_rss_bytes,
             )
         )
-        run.session.record_output(result.cost.output_bytes)
+        # Measured off the directory, not taken from `result.cost.output_bytes`: a fixture's
+        # cost record is built from the diagnostic's solver counters and carries 0 bytes.
+        run.session.record_directory(result_dir)
 
     metrics = _blackoil_capability_metrics(run, report, results)
     run.checks.append(
@@ -2181,6 +2239,7 @@ def _run_black_oil_restart(
         run.checks.append(_gate("black_oil_restart", {}, thresholds, _BO_RESTART_GATES))
         return
     suffix = persist_result(suffix, run.paths)
+    run.session.record_output(suffix.cost.output_bytes)
     run.jobs.append(
         _outcome_from_result(
             suffix_job,
