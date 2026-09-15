@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from so_recon.config.resources import ResourceProfile, resource_profile
 from so_recon.paths import ProjectPaths
 from so_recon.simulator.suite_record import (
     SUITE_REPORT_FILENAME,
@@ -650,12 +651,25 @@ def test_the_page_names_which_session_scope_caps_are_enforced_and_which_are_not(
     report = build_e01_report((_green_p0(paths),), paths)
     named = [item for item in report.limitations if "ession-scope budget caps" in item]
     assert named, report.limitations
-    text = named[0].lower()
-    assert "disk budget is re-imposed" in text
-    assert "forward count" in text
-    assert "wall" in text
-    assert "two attempts per model hash is enforced per job ledger" in text
-    assert named[0] in render_e01_report(report)
+    note = named[0]
+    lowered = note.lower()
+    assert "disk budget is re-imposed" in lowered
+    assert "forward count" in lowered
+    assert "wall" in lowered
+    assert "two attempts per model hash is enforced" in lowered
+
+    # The names and the numbers, sourced from the approved presets rather than typed here.
+    # The note once said `max_forwards`, which is not a field of anything, and quoted one cap
+    # of 2000 for all three suites; a note whose whole purpose is to state enforcement
+    # exactly may not drift from the profiles it describes.
+    assert "max_new_forward" in note
+    assert "max_forwards" not in note
+    assert set(ResourceProfile.model_fields) >= {"max_new_forward", "wall_budget_s"}
+    for suite_profile, suites_named in (("P0_VERIFY", "`p0` and `bo`"), ("P1_LOOP", "`p1`")):
+        cap = resource_profile(suite_profile).max_new_forward
+        assert f"{cap} under `{suite_profile}` ({suites_named})" in note, (suite_profile, note)
+
+    assert note in render_e01_report(report)
 
 
 # --------------------------------------------------------------------------------------

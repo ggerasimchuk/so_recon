@@ -255,14 +255,17 @@ class Session:
 
         WHAT IS NOT RE-IMPOSED HERE, so that no reader assumes it is:
 
-        * the session FORWARD COUNT has no session-scope caller. `SuiteRun` never counts its
-          forwards against `profile.max_forwards`; what bounds them is the planned matrix,
-          which is a fixed list of 23, 17 and 4 jobs against a cap of 2000. No overrun is
-          reachable through the plan's own job list, and a suite that grew past the cap would
-          not be stopped by anything in this module.
+        * the session FORWARD COUNT has no session-scope caller. `profile.max_new_forward` is
+          compared against ONE account's own entries (`BudgetLedger.reserve`), and with one
+          account per run of a model each sees a handful; nothing sums a session's forwards.
+          `P0_VERIFY` allows 64 and `P1_LOOP` 2000, while the declared matrices produce 30
+          job rows for `p0`, 23 for `p1` and 4 for `bo`. No overrun is reachable through the
+          plan's own job lists, and a suite that grew past the cap would not be stopped by
+          anything in this module.
         * the session WALL is checked at GROUP BOUNDARIES only — `run_suite_jobs` consults
-          `SuiteRun.out_of_time()` before entering the next group. A group already running
-          is not interrupted; `profile.job_timeout_s` bounds the subprocess inside it.
+          `SuiteRun.out_of_time()` before entering the next group. A group already running is
+          not interrupted; inside one, `profile.job_timeout_s` bounds each job — the launcher
+          subprocess and the persistent worker's per-job deadline alike.
         * SPEC §3.3's two attempts per model hash is per-JOB-LEDGER, by the design
           `Session.ledger` documents, and is therefore not a session-wide attempt cap.
 
@@ -297,9 +300,10 @@ class Session:
         * the ledger's own session-level WALL and FORWARD accumulation are given up with the
           fresh clock. `SuiteRun.deadline_s` bounds the session's wall BETWEEN GROUPS — a
           group already running is not interrupted — and the planned matrix bounds the
-          forward count only in the sense that it is a fixed list; no code compares a running
-          total against `profile.max_forwards`. See `Session.admit_output`, which re-imposes
-          the third cap (disk) and names these two as not re-imposed.
+          forward count only in the sense that it is a fixed list; `profile.max_new_forward`
+          is compared against one account's entries and never against a session total. See
+          `Session.admit_output`, which re-imposes the third cap (disk) and names these two as
+          not re-imposed.
 
         Everything SPENT is accounted whether or not it is capped: the per-job ledgers are
         all published under the run directory and the stage report sums them.
