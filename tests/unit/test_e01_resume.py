@@ -711,3 +711,33 @@ def test_legacy_report_without_identity_is_not_reused(tmp_path: Path) -> None:
     assert state is not None
     assert not state.completed_groups
     assert not state.outcomes
+
+
+@pytest.mark.parametrize("coarse_status", ["PASS", "FAIL", None])
+def test_real_refinement_plan_cannot_drop_coarse_resolution_evidence(
+    tmp_path: Path, coarse_status: str | None
+) -> None:
+    paths = _paths(tmp_path)
+    repo = Path(__file__).resolve().parents[2]
+    plan = load_job_plan(repo / "configs/e01_jobs.json", ProjectPaths.default(repo)).suites["p1"]
+    ledger = _publish_parent(paths)
+    report_path = ledger.parent.parent / SUITE_REPORT_FILENAME
+    report = json.loads(report_path.read_text())
+    report["suite"] = "p1"
+    report["resume_input_hash"] = suites.resume_input_hash(paths, plan)
+    report["jobs"] = [
+        _outcome(j.job_id, "refinement").model_dump(mode="json")
+        for j in plan.group_jobs("refinement")
+    ]
+    names = ("five_spot", "five_spot_refinement", "bl_refinement")
+    checks = [_check(name) for name in names]
+    if coarse_status is not None:
+        checks.append(_check("five_spot_coarse_sensitivity", coarse_status))
+    report["checks"] = [c.model_dump(mode="json") for c in checks]
+    report_path.write_text(json.dumps(report))
+    state = load_resume_state(ledger, suite="p1", plan=plan, paths=paths)
+    assert state is not None
+    assert ("refinement" in state.completed_groups) == (coarse_status == "PASS")
+    if coarse_status == "PASS":
+        carried = state.checks_of(plan.group_checks("refinement"))
+        assert "five_spot_coarse_sensitivity" in {c.name for c in carried}

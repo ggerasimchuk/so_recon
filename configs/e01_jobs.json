@@ -598,10 +598,10 @@
           "cache_bypass": false,
           "accounting": "launcher",
           "native_source": "julia/verification/refinement.jl#five_spot_48",
-          "scored_as": "five_spot_refinement",
+          "scored_as": "five_spot_coarse_sensitivity",
           "declared_by_plan": true,
           "parent_job_id": null,
-          "note": null,
+          "note": "The historical 16/48 diagnostic remains in group evidence, including on resume; acceptance is scored by the separate 112/144 reference jobs.",
           "deferred_to": null
         },
         {
