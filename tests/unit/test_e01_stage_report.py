@@ -103,6 +103,8 @@ def _write_run(
     exit_code: int = 0,
     artifacts: dict[str, str] | None = None,
     git_commit: str | None = None,
+    remaining_job_ids: tuple[str, ...] = (),
+    stopped_reason: str | None = None,
 ) -> Path:
     run_dir = paths.runs / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -149,8 +151,8 @@ def _write_run(
             checks=checks,
             mandatory_checks=tuple(sorted(c.name for c in checks)),
             exploratory_checks=(),
-            remaining_job_ids=(),
-            stopped_reason=None,
+            remaining_job_ids=remaining_job_ids,
+            stopped_reason=stopped_reason,
             limitations=(),
             benchmark={},
             artifacts=artifacts or {},
@@ -365,8 +367,30 @@ def _green_ow(paths: ProjectPaths) -> tuple[Path, Path]:
     return p0, p1
 
 
-def _bo_run(paths: ProjectPaths, *, exit_code: int, git_commit: str | None = None) -> Path:
-    """A published black-oil session with the given exit code, and nothing else."""
+#: What the black-oil group's own refusal really leaves behind. `_run_black_oil_restart`
+#: raises `CommandError` when the two sides of the restart split disagree; `run_suite_jobs`
+#: records that as a stop, the two restart jobs are never reached, and `evaluate_suite`
+#: returns 2. A fixture that hard-coded an empty `remaining_job_ids` for an exit-2 session
+#: would test `INCOMPLETE` in a shape no refusal ever produces.
+BO_REFUSED_JOBS = ("bo_restart_prefix", "bo_restart_suffix_new_worker")
+BO_REFUSED_REASON = (
+    "group 'black_oil' failed: CommandError: the black-oil restart is split after report "
+    "step 3 here and after step 4 in julia/verification/blackoil.jl"
+)
+
+
+def _bo_run(
+    paths: ProjectPaths,
+    *,
+    exit_code: int,
+    git_commit: str | None = None,
+    refused: bool = False,
+) -> Path:
+    """A published black-oil session with the given exit code.
+
+    `refused=True` gives it the shape the split-step guard really produces: declared jobs
+    left unreached and a stop reason naming the refusal.
+    """
     return _write_run(
         paths,
         "20260915T050000Z-verify-physics-ffff",
@@ -375,6 +399,8 @@ def _bo_run(paths: ProjectPaths, *, exit_code: int, git_commit: str | None = Non
         jobs=(_job("bo_closed", group="black_oil"),),
         exit_code=exit_code,
         git_commit=git_commit,
+        remaining_job_ids=BO_REFUSED_JOBS if refused else (),
+        stopped_reason=BO_REFUSED_REASON if refused else None,
     )
 
 
@@ -431,7 +457,10 @@ def test_a_refused_black_oil_session_does_not_read_as_one_that_never_ran(
     which of the two happened.
     """
     paths = _paths(tmp_path)
-    runs = (*_green_ow(paths), _bo_run(paths, exit_code=2))
+    # The shape a real refusal produces: exit 2, the two restart jobs never reached, and a
+    # stop reason naming the CommandError. A session with an empty `remaining_job_ids` would
+    # exercise INCOMPLETE in a shape the guard never produces.
+    runs = (*_green_ow(paths), _bo_run(paths, exit_code=2, refused=True))
     report = build_e01_report(runs, paths)
     assert report.bo_status == "INCOMPLETE", report.bo_status
     assert report.status == "PASS_WITH_LIMITATIONS", report.status_reason
@@ -441,6 +470,70 @@ def test_a_refused_black_oil_session_does_not_read_as_one_that_never_ran(
         report.limitations
     )
     assert "BO status: INCOMPLETE" in render_e01_report(report)
+
+    # 13.5, the half this fixture exists to prove: the capability's unreached jobs are named
+    # everywhere a reader looks, and counted against NEITHER the stage status nor the OW gate.
+    assert report.black_oil_remaining_job_ids == BO_REFUSED_JOBS
+    assert set(BO_REFUSED_JOBS) <= set(report.remaining_job_ids)
+    assert "never reached" not in report.status_reason, report.status_reason
+    text = render_e01_report(report)
+    for job_id in BO_REFUSED_JOBS:
+        assert job_id in text, job_id
+    assert any(all(job_id in item for job_id in BO_REFUSED_JOBS) for item in report.limitations), (
+        report.limitations
+    )
+
+
+def test_an_oil_water_job_that_was_never_reached_still_fails_the_stage(
+    tmp_path: Path,
+) -> None:
+    """The narrowing of round 3 is BLACK-OIL ONLY. The general rule has to keep biting.
+
+    "Planned jobs were never reached" is what stops a half-run p0 or p1 from passing, and
+    nothing about the black-oil capability may weaken it. Same complete matrix, same green
+    checks, one unreached p1 job — and the stage must be FAIL with that job named.
+    """
+    paths = _paths(tmp_path)
+    p0 = _green_p0(paths)
+    p1 = _write_run(
+        paths,
+        "20260915T040000Z-verify-physics-eeee",
+        suite="p1",
+        checks=tuple(_check(name) for name in P1_MANDATORY),
+        jobs=(_job("world41", accounting="ledger", group="worlds"),),
+        exit_code=2,
+        remaining_job_ids=("world45",),
+    )
+    report = build_e01_report((p0, p1), paths)
+    assert report.status == "FAIL", report.status_reason
+    assert "planned jobs were never reached" in report.status_reason, report.status_reason
+    assert "world45" in report.status_reason
+    assert report.ow_gate == "FAIL"
+    assert report.black_oil_remaining_job_ids == ()
+
+
+def test_an_oil_water_job_unreached_beside_a_refused_capability_still_fails_the_stage(
+    tmp_path: Path,
+) -> None:
+    """Both at once: the black-oil jobs are excused, the oil-water one is not."""
+    paths = _paths(tmp_path)
+    p0 = _green_p0(paths)
+    p1 = _write_run(
+        paths,
+        "20260915T040000Z-verify-physics-eeee",
+        suite="p1",
+        checks=tuple(_check(name) for name in P1_MANDATORY),
+        jobs=(_job("world41", accounting="ledger", group="worlds"),),
+        exit_code=2,
+        remaining_job_ids=("world45",),
+    )
+    bo = _bo_run(paths, exit_code=2, refused=True)
+    report = build_e01_report((bo, p0, p1), paths)
+    assert report.status == "FAIL", report.status_reason
+    assert "world45" in report.status_reason
+    for job_id in BO_REFUSED_JOBS:
+        assert job_id not in report.status_reason, (job_id, report.status_reason)
+    assert report.bo_status == "INCOMPLETE"
 
 
 def test_the_black_oil_exit_code_mapping_is_covered_end_to_end(tmp_path: Path) -> None:

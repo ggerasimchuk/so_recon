@@ -124,6 +124,11 @@ BlackOilStatus = Literal["NOT_RUN", "PASS", "FAIL", "INCOMPLETE"]
 #: The exit codes `evaluate_suite` produces, and what each says about the capability.
 _BO_STATUS_BY_EXIT: dict[int, BlackOilStatus] = {0: "PASS", 1: "FAIL"}
 
+#: The name the black-oil capability's suite publishes itself under. It is the one suite whose
+#: outcome is a SEPARATE gate (plan 13.5), so it is the one name this module has to be able to
+#: tell apart when it merges what every session left behind.
+BO_SUITE = "bo"
+
 
 def _bo_status(report: SuiteReport | None) -> BlackOilStatus:
     """The black-oil verdict, from the session's own exit code and nothing else."""
@@ -223,7 +228,13 @@ class StageReport(StrictModel):
     failed_checks: tuple[str, ...]
     unrun_checks: tuple[str, ...]
     jobs: tuple[JobOutcome, ...]
+    #: Every planned job no session reached, black-oil ones included, so the page names them
+    #: all. The stage VERDICT is taken on the oil-water ones alone; which of these are the
+    #: capability's is the field below.
     remaining_job_ids: tuple[str, ...]
+    #: The black-oil capability's own unreached jobs, a subset of the field above. Its verdict
+    #: is a separate gate (plan 13.5), so these never move the stage status or the OW gate.
+    black_oil_remaining_job_ids: tuple[str, ...]
     limitations: tuple[str, ...]
 
     ow_gate: str
@@ -276,6 +287,8 @@ def _status(
     required: Sequence[str],
     failed: Sequence[str],
     unrun: Sequence[str],
+    #: Oil-water jobs that were planned and never reached. Black-oil ones are deliberately
+    #: not in here; see `build_e01_report`.
     remaining: Sequence[str],
     bo_status: str,
     *,
@@ -295,6 +308,9 @@ def _status(
             f"the stage matrix is missing mandatory checks {missing}; a matrix with a hole "
             "in it is not a passing matrix (plan 12.9)",
         )
+    # OIL-WATER jobs only. A black-oil session's unreached jobs are kept out of this list by
+    # `build_e01_report` and reported through `bo_status` instead; this rule is what stops a
+    # half-run p0 or p1 from passing and is unchanged for them.
     if remaining:
         return "FAIL", f"planned jobs were never reached: {sorted(remaining)}"
     # A black-oil capability that FAILED, or that was REFUSED and left incomplete, is a
@@ -571,7 +587,22 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
 
     checks: list[PhysicsCheck] = []
     jobs: list[JobOutcome] = []
+    # Jobs that were planned and never reached, kept in TWO lists and not one.
+    #
+    # `_status` fails the stage on `remaining` unconditionally, before it looks at anything
+    # else, and that rule is what stops a half-run oil-water suite from passing — it must keep
+    # biting exactly as it does. But a black-oil session that was REFUSED leaves its own
+    # declared jobs unreached, and merging those into the same list made a refused capability
+    # fail the whole stage and drag `ow_gate` down with it: `status="FAIL"`, reason
+    # `planned jobs were never reached: ['bo_restart_prefix', ...]`, while `bo_status` was
+    # correctly INCOMPLETE. That is precisely what plan 13.5 forbids — «OW deliverables не
+    # удаляются и не объявляются failed только из-за отсутствующего BO benchmark».
+    #
+    # So the oil-water rule reads the oil-water list, unchanged; the capability's unreached
+    # jobs are named in the limitation its own INCOMPLETE status already emits, and both lists
+    # are published, so nothing is hidden — only re-attributed to the gate it belongs to.
     remaining: list[str] = []
+    bo_remaining: list[str] = []
     limitations: list[str] = []
     artifacts: dict[str, str] = {}
     benchmark: dict[str, Any] = {}
@@ -579,7 +610,7 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         report = suites[name]
         checks.extend(report.checks)
         jobs.extend(report.jobs)
-        remaining.extend(report.remaining_job_ids)
+        (bo_remaining if name == BO_SUITE else remaining).extend(report.remaining_job_ids)
         limitations.extend(report.limitations)
         artifacts.update({f"{name}.{k}": v for k, v in report.artifacts.items()})
         limitations.extend(
@@ -603,6 +634,15 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
             + (f" — {bo_report.stopped_reason}" if bo_report.stopped_reason else "")
             + ". A capability that was attempted and refused is not one that was never "
             "attempted; `BO status: INCOMPLETE` says which of the two happened."
+            + (
+                " Its declared jobs "
+                + ", ".join(f"`{job_id}`" for job_id in sorted(set(bo_remaining)))
+                + " were never reached. They are NOT counted against the oil-water "
+                "job-completeness rule: a black-oil benchmark that did not finish does not "
+                "fail an oil-water deliverable (plan 13.5)."
+                if bo_remaining
+                else ""
+            )
         )
 
     # Which commit each cited run was produced at. `dict.fromkeys` keeps the cited order and
@@ -671,7 +711,8 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         failed_checks=tuple(failed),
         unrun_checks=tuple(unrun),
         jobs=tuple(jobs),
-        remaining_job_ids=tuple(sorted(set(remaining))),
+        remaining_job_ids=tuple(sorted(set(remaining) | set(bo_remaining))),
+        black_oil_remaining_job_ids=tuple(sorted(set(bo_remaining))),
         limitations=tuple(limitations),
         # The OW gate is the STAGE's own predicate, not a second one. It used to be computed
         # from failed/unrun alone, which ignored the `missing` and `remaining` branches
@@ -986,7 +1027,16 @@ def render_e01_report(report: StageReport) -> str:
     if report.remaining_job_ids:
         lines += [
             "**Jobs that were planned and never reached:** "
-            + ", ".join(f"`{j}`" for j in report.remaining_job_ids),
+            + ", ".join(f"`{j}`" for j in report.remaining_job_ids)
+            + (
+                " — of which "
+                + ", ".join(f"`{j}`" for j in report.black_oil_remaining_job_ids)
+                + " belong to the black-oil capability. Its verdict is a separate gate "
+                "(plan 13.5), so they are reported under `BO status` and are not counted "
+                "against the oil-water job-completeness rule."
+                if report.black_oil_remaining_job_ids
+                else ""
+            ),
             "",
         ]
     lines += ["## Restart round trip", ""]
