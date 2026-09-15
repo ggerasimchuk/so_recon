@@ -47,7 +47,9 @@ from so_recon.simulator.suite_record import (
     SUITE_REPORT_FILENAME,
     SuiteReport,
 )
+from so_recon.simulator.suites import BO_RESTART_AFTER_STEP
 from so_recon.validation.physics import (
+    BLACKOIL_GATES,
     DEFAULT_BLACKOIL_TOLERANCES_RELPATH,
     load_blackoil_tolerances,
 )
@@ -304,19 +306,70 @@ def test_the_component_gas_balance_closes_with_the_dissolved_term(
         # and the whole-model statement also holds the gas standing in the wellbores. That
         # difference is a real quantity — 0.31% of the total on the one-cell closed fixture —
         # so it is asserted to be positive rather than assumed away.
-        by_balance = {
-            str(row["balance"]): float(row["initial_inventory_m3_sc"])
-            for row in rows
-            if row["component"] == "gas"
-        }
-        native_initial = by_balance["reservoir_connections"]
-        split = float(free[0] + dissolved[0])
-        relative = abs(split - native_initial) / max(abs(native_initial), 1e-6)
-        assert relative <= tolerances["blackoil_gas_inventory_closure_relative_max"], (
-            job_id,
-            relative,
+        gas = {str(row["balance"]): row for row in rows if row["component"] == "gas"}
+        limit = tolerances["blackoil_gas_inventory_closure_relative_max"]
+        native_initial = float(gas["reservoir_connections"]["initial_inventory_m3_sc"])
+        native_final = float(gas["reservoir_connections"]["final_inventory_m3_sc"])
+
+        def closes(split: float, native: float) -> float:
+            return abs(split - native) / max(abs(native), 1e-6)
+
+        # BOTH ends of the trajectory, and the last one is the load-bearing half. Both
+        # fixtures start undersaturated, so `free[0]` is zero and the FIRST-state closure is
+        # the identity `dissolved(t0) == native(t0)`: a real cross-check of the dissolved
+        # term against the native `TotalMasses`, and silent about the free one.
+        assert closes(float(free[0] + dissolved[0]), native_initial) <= limit, job_id
+        assert closes(float(free[-1] + dissolved[-1]), native_final) <= limit, job_id
+        assert float(gas["full_system_surface"]["initial_inventory_m3_sc"]) >= native_initial, (
+            job_id
         )
-        assert by_balance["full_system_surface"] >= native_initial, job_id
+
+        if job_id != "bo_depletion":
+            continue
+        # …and on the depletion the last-state closure really is weighing the free term: a
+        # published run that dropped it entirely would still satisfy the first-state closure
+        # exactly and would miss the last-state one by orders of magnitude. Asserted on the
+        # real numbers, so this is a check that can fail rather than one that cannot.
+        fraction = float(free[-1]) / float(free[-1] + dissolved[-1])
+        assert fraction > 0.01, (
+            "the last-state closure is measured where free gas is only "
+            f"{fraction:.3g} of the inventory; it would be a statement about the dissolved "
+            "term again"
+        )
+        assert closes(float(dissolved[-1]), native_final) > limit, (
+            "dropping the free term entirely still satisfies the last-state closure; the "
+            "gate cannot detect a free-gas error"
+        )
+        assert closes(float(dissolved[0]), native_initial) <= limit, (
+            "the first-state closure is expected to be blind to the free term — it is the "
+            "reason the last-state one was added"
+        )
+
+
+def test_the_published_capability_check_gates_both_ends_of_the_gas_closure(
+    bo: tuple[Path, SuiteReport],
+) -> None:
+    """The session's own record carries the last-state closure, and it is a GATE there.
+
+    The test above measures the closure from the published states. This one asserts that the
+    session scored it too — a metric only a test computes is a metric the stage gate cannot
+    use (plan 12.9) — and that it is paired with a threshold rather than merely reported.
+    """
+    _run_dir, report = bo
+    check = next(c for c in report.checks if c.name == "black_oil")
+    gated = {metric for metric, _threshold in BLACKOIL_GATES["black_oil"]}
+    for metric in (
+        "blackoil_gas_inventory_closure_relative",
+        "blackoil_gas_inventory_closure_final_relative",
+        "blackoil_final_free_gas_fraction_shortfall",
+    ):
+        assert metric in check.metrics, metric
+        assert metric in gated, f"{metric} is measured and not gated"
+    for metric, threshold in BLACKOIL_GATES["black_oil"]:
+        assert threshold in check.thresholds, threshold
+        assert check.metrics[metric] <= check.thresholds[threshold], (metric, threshold)
+    # Reported beside them, so a reader can see the last-state closure has teeth.
+    assert check.metrics["blackoil_final_free_gas_fraction"] > 0.01
 
 
 def test_the_surface_gas_is_published_in_its_own_table_and_never_as_a_liquid(
@@ -386,6 +439,25 @@ def test_the_continuation_is_the_same_run_on_every_black_oil_quantity(
     assert check.metrics["blackoil_restart_completed_report_step"] >= 1.0
     for component in BO_COMPONENTS:
         assert check.metrics[f"blackoil_continuous_surface_{component}_m3_sc"] > 0.0, component
+
+
+def test_the_two_sides_split_the_restart_after_the_same_report_step(
+    bo: tuple[Path, SuiteReport],
+) -> None:
+    """13.4: the step Python cuts the prefix at is the step the diagnostic proves gas by.
+
+    They are two constants in two languages with the same job. If they drifted, the
+    checkpoint would move to before the phase transition, the continuation would stop
+    exercising `BlackOilX`'s phase state, and every other test here would still pass —
+    because each side asserts against its own copy. `_run_black_oil_restart` refuses the
+    session outright when they disagree; this is the same comparison made against the
+    published record, so a drift is visible in the artifacts as well as at run time.
+    """
+    run_dir, _report = bo
+    diagnostic = json.loads(
+        (run_dir / "verification" / "blackoil.json").read_text(encoding="utf-8")
+    )
+    assert int(diagnostic["restart_after_report_step"]) == BO_RESTART_AFTER_STEP
 
 
 def test_the_checkpoint_the_continuation_read_carried_a_state_that_already_held_gas(

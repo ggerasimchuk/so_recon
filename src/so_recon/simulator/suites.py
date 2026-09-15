@@ -1721,6 +1721,12 @@ BO_RESTART_AFTER_STEP = 4
 #: the tolerance block, and what the gate scores is the SHORTFALL against them.
 BO_MIN_FREE_GAS_SATURATION = 1e-3
 
+#: And how much of the gas inventory has to be FREE at the last published state, for the
+#: last-state closure gate to be weighing the free term rather than the dissolved one. Also
+#: structural: what it guards against is a recalibrated fixture, not a numerical tolerance.
+#: Measured 3.5e-2 on the fixture as it stands.
+BO_MIN_FINAL_FREE_GAS_FRACTION = 1e-2
+
 #: The gate pairs of the two black-oil checks, read from the one place that owns them.
 _BO_GATES = BLACKOIL_GATES["black_oil"]
 _BO_RESTART_GATES = BLACKOIL_GATES["black_oil_restart"]
@@ -1801,10 +1807,19 @@ def _blackoil_capability_metrics(
         0.0, (metrics["blackoil_final_min_pressure_pa"] - bubble) / bubble
     )
 
-    # The dissolved term is a CLAIM, not a definition: the native component gas inventory is
-    # `TotalMasses / rho_g_sc` and knows nothing of the split, so free + dissolved recomputed
-    # from the published states agreeing with it is evidence that the dissolved gas is really
-    # inside the gas component.
+    # The split is a CLAIM, not a definition: the native component gas inventory is
+    # `TotalMasses / rho_g_sc` and knows nothing of free gas from dissolved, so free +
+    # dissolved recomputed from the published states agreeing with it is evidence about both
+    # terms of the split.
+    #
+    # It is measured at the FIRST and at the LAST published state, and both are gated. The
+    # first state alone is not enough and the reason is exact: both fixtures start
+    # undersaturated, so `free_gas[0]` is zero there and the first-state closure is the
+    # identity `dissolved(t0) == native(t0)` — a real cross-check of the DISSOLVED term
+    # against `TotalMasses`, and silent about the free one. Dropping the free term entirely
+    # leaves the first-state closure at exactly 0.0 and moves the last-state closure to
+    # 3.5e-2, seven orders above the limit. `blackoil_final_free_gas_fraction_shortfall`
+    # below keeps that from becoming vacuous again if the fixture is ever recalibrated.
     assert depletion.black_oil is not None
     balances = pq.read_table(run.paths.resolve(str(depletion.balances_path))).to_pylist()
     gas_rows = {str(row["balance"]): row for row in balances if row["component"] == "gas"}
@@ -1819,9 +1834,27 @@ def _blackoil_capability_metrics(
         # which is a real quantity and not an error; it is reported beside this rather than
         # folded into it.
         native_initial = float(reservoir["initial_inventory_m3_sc"])
-        split = depletion.black_oil.free_gas_m3_sc[0] + depletion.black_oil.dissolved_gas_m3_sc[0]
-        metrics["blackoil_gas_inventory_closure_relative"] = _relative(split, native_initial, 1e-6)
+        native_final = float(reservoir["final_inventory_m3_sc"])
+        block = depletion.black_oil
+        split_initial = block.free_gas_m3_sc[0] + block.dissolved_gas_m3_sc[0]
+        split_final = block.free_gas_m3_sc[-1] + block.dissolved_gas_m3_sc[-1]
+        metrics["blackoil_gas_inventory_closure_relative"] = _relative(
+            split_initial, native_initial, 1e-6
+        )
+        metrics["blackoil_gas_inventory_closure_final_relative"] = _relative(
+            split_final, native_final, 1e-6
+        )
         metrics["blackoil_initial_reservoir_gas_inventory_m3_sc"] = native_initial
+        metrics["blackoil_final_reservoir_gas_inventory_m3_sc"] = native_final
+        # How much of the inventory the last-state closure is actually weighing the FREE term
+        # on. Gated as a shortfall against a structural minimum, so a recalibrated fixture
+        # that no longer evolved much gas would fail here rather than turn the closure above
+        # back into a statement about the dissolved term alone.
+        fraction = block.free_gas_m3_sc[-1] / max(split_final, 1e-12)
+        metrics["blackoil_final_free_gas_fraction"] = fraction
+        metrics["blackoil_final_free_gas_fraction_shortfall"] = max(
+            0.0, BO_MIN_FINAL_FREE_GAS_FRACTION - fraction
+        )
         if headline is not None:
             metrics["blackoil_wellbore_gas_inventory_m3_sc"] = (
                 float(headline["initial_inventory_m3_sc"]) - native_initial
@@ -1977,13 +2010,32 @@ def _run_black_oil(run: SuiteRun) -> None:
             },
         )
     )
-    _run_black_oil_restart(run, results.get("bo_depletion"), thresholds)
+    _run_black_oil_restart(run, report, results.get("bo_depletion"), thresholds)
 
 
 def _run_black_oil_restart(
-    run: SuiteRun, continuous: ForwardResult | None, thresholds: Mapping[str, float]
+    run: SuiteRun,
+    report: Mapping[str, Any],
+    continuous: ForwardResult | None,
+    thresholds: Mapping[str, float],
 ) -> None:
     """The prefix and its continuation in a NEW worker, on the published depletion case."""
+    # The split step is decided TWICE — here, to cut the prefix's schedule, and in
+    # `julia/verification/blackoil.jl`, which asserts that gas has appeared by it and publishes
+    # it as `restart_after_report_step`. Two constants with the same job and no link between
+    # them is a bug waiting to happen: if they drifted, the checkpoint would move to before
+    # the phase transition, the continuation would stop exercising `BlackOilX`'s phase state —
+    # which is the whole point of the split (13.4) — and every test would still pass, because
+    # each side asserts against its own copy. The two are compared here, before anything runs,
+    # and a disagreement is a refusal rather than a quieter restart.
+    declared = report.get("restart_after_report_step")
+    if declared is None or int(declared) != BO_RESTART_AFTER_STEP:
+        raise CommandError(
+            f"the black-oil restart is split after report step {BO_RESTART_AFTER_STEP} here and "
+            f"after step {declared!r} in julia/verification/blackoil.jl, which is the side that "
+            "proves gas has appeared by it. The two must be the same step: a checkpoint taken "
+            "before the phase transition would make the continuation a saturation round trip"
+        )
     prefix_job = run.planned("bo_restart_prefix")
     suffix_job = run.planned("bo_restart_suffix_new_worker")
     relative = run.artifacts.get("case.bo_depletion")

@@ -144,6 +144,14 @@ BLACKOIL_GATES: dict[str, tuple[tuple[str, str], ...]] = {
             "blackoil_gas_inventory_closure_relative",
             "blackoil_gas_inventory_closure_relative_max",
         ),
+        # The same closure at the LAST published state. Both are gated against the same
+        # threshold because it is the same claim; only the first one is satisfiable without
+        # the free term, which is why the second exists.
+        (
+            "blackoil_gas_inventory_closure_final_relative",
+            "blackoil_gas_inventory_closure_relative_max",
+        ),
+        ("blackoil_final_free_gas_fraction_shortfall", "blackoil_free_gas_shortfall_max"),
         ("blackoil_free_gas_shortfall", "blackoil_free_gas_shortfall_max"),
         ("blackoil_bubble_point_shortfall", "blackoil_bubble_point_shortfall_max"),
         ("blackoil_closed_saturation_drift", "blackoil_closed_saturation_drift_max"),
