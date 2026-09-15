@@ -53,6 +53,8 @@ from so_recon.simulator.contracts import (
     CELL_AXES,
     TIME_CELL_AXES,
     ArrayRef,
+    BlackOilFluidSpec,
+    BlackOilOutputs,
     CaseBundle,
     CostRecord,
     ForwardResult,
@@ -82,6 +84,18 @@ RESULT_FILENAME = "forward_result.json"
 #: Water and oil, in the phase order the whole of E01 uses (plan 3.1: tuples are
 #: `(water, oil)`), which is also the native `OW_PHASES` order the adapter builds.
 COMPONENTS = ("water", "oil")
+
+#: Task 13: the components a black-oil extraction balances, in the same phase order. It is a
+#: SUPERSET of `COMPONENTS` and never a replacement for it — an oil-water result publishes two
+#: component rows and a black-oil one three, and neither learns the other's shape.
+BO_COMPONENTS = ("water", "oil", "gas")
+
+#: Where a black-oil result's surface gas volumes go: its own table, beside `monthly.parquet`
+#: rather than inside it. A standard cubic metre of gas is not a standard cubic metre of
+#: liquid, so it is never summed into `liquid_prod_m3_sc` and never enters the water cut; and
+#: the oil-water monthly schema — which every published E01 result already uses — does not
+#: grow a column it would have to fill with zeros.
+GAS_MONTHLY_FILENAME = "gas_monthly.parquet"
 
 #: A substep boundary may miss a month edge by this much and still be the edge. The
 #: schedule's own edges are day counts times 86400, so anything above float64 round-off at
@@ -337,6 +351,30 @@ STEP_SCHEMA = pa.schema(
 )
 
 
+def connection_monthly_schema(components: Sequence[str]) -> pa.Schema:
+    """The per-month connection schema for an extraction with these components.
+
+    Identical to `CONNECTION_MONTHLY_SCHEMA` for the oil-water pair — same columns, same
+    order — with `gas_mass_kg` inserted after the oil column for a black-oil one.
+    """
+    return pa.schema(
+        [
+            ("well_id", pa.string()),
+            ("connection_id", pa.int64()),
+            ("cell_id", pa.int64()),
+            ("month_index", pa.int64()),
+            ("start_s", pa.float64()),
+            ("end_s", pa.float64()),
+            *[(f"{c}_mass_kg", pa.float64()) for c in components],
+            ("total_mass_kg", pa.float64()),
+            ("open_s", pa.float64()),
+            ("bhp_min_pa", pa.float64()),
+            ("bhp_mean_pa", pa.float64()),
+            ("bhp_max_pa", pa.float64()),
+        ]
+    )
+
+
 def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float]) -> pa.Table:
     """Integrate the per-substep connection fluxes into one row per connection per month.
 
@@ -348,10 +386,20 @@ def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float])
     pressure is the pressure the well held rather than the last value of it.
     """
     edges = _validated_month_edges(month_edges_s)
-    missing = [name for name in CONNECTION_COLUMNS if name not in connections.column_names]
+    # The components the step table really carries, read off its columns rather than assumed:
+    # a black-oil connection table has a gas column and an oil-water one does not, and
+    # integrating the columns that are there is what stops a third component being dropped.
+    components = tuple(c for c in BO_COMPONENTS if f"{c}_mass_kg_s" in connections.column_names)
+    columns = [
+        *[c for c in CONNECTION_COLUMNS if not c.endswith("_mass_kg_s")],
+        *[f"{c}_mass_kg_s" for c in components],
+        "total_mass_kg_s",
+    ]
+    missing = [name for name in columns if name not in connections.column_names]
     if missing:
         raise ValueError(f"the connection table is missing columns {missing}")
-    rows = connections.select(list(CONNECTION_COLUMNS)).to_pylist()
+    rows = connections.select(columns).to_pylist()
+    zero = {f"{c}_mass_kg": 0.0 for c in components}
 
     keys: dict[tuple[str, int], int] = {}
     totals: dict[tuple[str, int, int], dict[str, float]] = {}
@@ -369,13 +417,11 @@ def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float])
         month = _month_of(start, end, edges)
         keys[(well, connection)] = cell
         bucket = totals.setdefault(
-            (well, connection, month),
-            {"water_mass_kg": 0.0, "oil_mass_kg": 0.0, "total_mass_kg": 0.0, "open_s": 0.0},
+            (well, connection, month), {**zero, "total_mass_kg": 0.0, "open_s": 0.0}
         )
         duration = end - start
         for column, name in (
-            ("water_mass_kg_s", "water_mass_kg"),
-            ("oil_mass_kg_s", "oil_mass_kg"),
+            *[(f"{c}_mass_kg_s", f"{c}_mass_kg") for c in components],
             ("total_mass_kg_s", "total_mass_kg"),
         ):
             value = float(row[column])
@@ -393,8 +439,7 @@ def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float])
     for (well, connection), cell in sorted(keys.items()):
         for month in range(len(edges) - 1):
             bucket = totals.get(
-                (well, connection, month),
-                {"water_mass_kg": 0.0, "oil_mass_kg": 0.0, "total_mass_kg": 0.0, "open_s": 0.0},
+                (well, connection, month), {**zero, "total_mass_kg": 0.0, "open_s": 0.0}
             )
             samples = bhp.get((well, month), [])
             weight = sum(duration for _, duration in samples)
@@ -414,7 +459,7 @@ def integrate_connections(connections: pa.Table, month_edges_s: Sequence[float])
                     "bhp_max_pa": max((v for v, _ in samples), default=None),
                 }
             )
-    return pa.Table.from_pylist(out, schema=CONNECTION_MONTHLY_SCHEMA)
+    return pa.Table.from_pylist(out, schema=connection_monthly_schema(components))
 
 
 #: What each published balance closes over and against, in words a reader of the table can
@@ -662,9 +707,78 @@ def well_step_table(payload: Mapping[str, Any]) -> pa.Table:
     )
 
 
+GAS_MONTHLY_SCHEMA = pa.schema(
+    [
+        ("well_id", pa.string()),
+        ("month_index", pa.int64()),
+        ("start_s", pa.float64()),
+        ("end_s", pa.float64()),
+        ("gas_prod_m3_sc", pa.float64()),
+        ("gas_inj_m3_sc", pa.float64()),
+    ]
+)
+
+
+def gas_monthly_table(payload: Mapping[str, Any], month_edges_s: Sequence[float]) -> pa.Table:
+    """Surface gas volumes per well per month, in m3_sc. Task 13, and black oil only.
+
+    It is the same integration `integrate_monthly` performs — the native surface rate over
+    each accepted substep, split by the sign the substep had, bucketed into the month the
+    substep belongs to — applied to the gas rate and written to a table of its own. Gas is
+    kept out of `monthly.parquet` on purpose: `liquid_prod_m3_sc` and `fw` are liquid
+    quantities, and a gas volume added into either would be a number nobody could interpret.
+    """
+    edges = _validated_month_edges(month_edges_s)
+    chunk = _chunk(payload)
+    wells = payload.get("wells")
+    if not isinstance(wells, dict) or not wells:
+        raise ExtractionError("the extraction names no wells")
+    n = len(chunk["dt_s"])
+    n_months = len(edges) - 1
+    volumes: dict[tuple[str, int], dict[str, float]] = {
+        (well, month): {"gas_prod_m3_sc": 0.0, "gas_inj_m3_sc": 0.0}
+        for well in sorted(wells)
+        for month in range(n_months)
+    }
+    for well_id in sorted(wells):
+        rates = _floats(wells[well_id], "surface_gas_m3_s", where=f"wells[{well_id!r}]")
+        if len(rates) != n:
+            raise ExtractionError(
+                f"well {well_id!r}: {len(rates)} gas surface rates for {n} accepted substeps"
+            )
+        for index, rate in enumerate(rates):
+            start, end = chunk["start_s"][index], chunk["end_s"][index]
+            duration = end - start
+            month = _month_of(start, end, edges)
+            if not math.isfinite(rate):
+                raise ExtractionError(
+                    f"well {well_id!r} substep {index}: the surface gas rate is {rate}"
+                )
+            bucket = volumes[(well_id, month)]
+            if rate < 0.0:
+                bucket["gas_prod_m3_sc"] += -rate * duration
+            else:
+                bucket["gas_inj_m3_sc"] += rate * duration
+    return pa.Table.from_pylist(
+        [
+            {
+                "well_id": well,
+                "month_index": month,
+                "start_s": edges[month],
+                "end_s": edges[month + 1],
+                **volumes[(well, month)],
+            }
+            for well in sorted(wells)
+            for month in range(n_months)
+        ],
+        schema=GAS_MONTHLY_SCHEMA,
+    )
+
+
 def connection_step_table(payload: Mapping[str, Any]) -> pa.Table:
     """The per-substep connection diagnostics exactly as `outputs.jl` extracted them."""
     chunk = _chunk(payload)
+    components = _components_of(payload)
     raw = payload.get("connections")
     if not isinstance(raw, list):
         raise ExtractionError("the extraction carries no `connections` list")
@@ -690,31 +804,37 @@ def connection_step_table(payload: Mapping[str, Any]) -> pa.Table:
                 "cell_id": int(entry["cell_id"]),
                 "start_s": chunk["start_s"][step],
                 "end_s": chunk["end_s"][step],
-                "water_mass_kg_s": float(entry["water_mass_kg_s"]),
-                "oil_mass_kg_s": float(entry["oil_mass_kg_s"]),
                 "total_mass_kg_s": float(entry["total_mass_kg_s"]),
                 "connection_open": bool(entry["connection_open"]),
                 "actual_target": str(entry["actual_target"]),
                 "bhp_pa": float(entry["bhp_pa"]),
+                **{f"{c}_mass_kg_s": float(entry[f"{c}_mass_kg_s"]) for c in components},
             }
         )
-    return pa.Table.from_pylist(
-        rows,
-        schema=pa.schema(
-            [
-                ("well_id", pa.string()),
-                ("connection_id", pa.int64()),
-                ("cell_id", pa.int64()),
-                ("start_s", pa.float64()),
-                ("end_s", pa.float64()),
-                ("water_mass_kg_s", pa.float64()),
-                ("oil_mass_kg_s", pa.float64()),
-                ("total_mass_kg_s", pa.float64()),
-                ("connection_open", pa.bool_()),
-                ("actual_target", pa.string()),
-                ("bhp_pa", pa.float64()),
-            ]
-        ),
+    return pa.Table.from_pylist(rows, schema=connection_step_schema(components))
+
+
+def connection_step_schema(components: Sequence[str]) -> pa.Schema:
+    """The per-substep connection schema of an extraction with these components.
+
+    For the oil-water pair it is exactly the schema it has always been, column for column and
+    in the same order; a black-oil extraction inserts `gas_mass_kg_s` after the oil column.
+    Derived from the component list rather than written twice, so a third component cannot be
+    published in the extraction and quietly dropped from the table.
+    """
+    return pa.schema(
+        [
+            ("well_id", pa.string()),
+            ("connection_id", pa.int64()),
+            ("cell_id", pa.int64()),
+            ("start_s", pa.float64()),
+            ("end_s", pa.float64()),
+            *[(f"{c}_mass_kg_s", pa.float64()) for c in components],
+            ("total_mass_kg_s", pa.float64()),
+            ("connection_open", pa.bool_()),
+            ("actual_target", pa.string()),
+            ("bhp_pa", pa.float64()),
+        ]
     )
 
 
@@ -741,14 +861,28 @@ BALANCE_SYSTEMS: tuple[tuple[str, str, str], ...] = (
 #: is about. The whole-model statement is the headline; the other is beside it in the table.
 HEADLINE_BALANCE = BALANCE_SYSTEMS[0][0]
 
+#: The reservoir-only statement, by name. It is the one a quantity summed over RESERVOIR
+#: cells has to be compared against: the whole-model one also holds what the wellbores are
+#: storing, which is a real quantity and not a discrepancy.
+RESERVOIR_BALANCE = BALANCE_SYSTEMS[1][0]
+
 
 def _components_of(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    """Which components this extraction balances: the oil-water pair or the black-oil trio.
+
+    The list is read from the payload and matched against the two this build knows, in the
+    order they are declared. Anything else is refused rather than truncated: a balance scored
+    over two of three components would close beautifully and mean nothing.
+    """
     components = payload.get("components")
-    if not isinstance(components, list) or [str(c) for c in components] != list(COMPONENTS):
-        raise ExtractionError(
-            f"the extraction must balance {list(COMPONENTS)} in that order, got {components!r}"
-        )
-    return COMPONENTS
+    if isinstance(components, list):
+        found = tuple(str(c) for c in components)
+        if found in (COMPONENTS, BO_COMPONENTS):
+            return found
+    raise ExtractionError(
+        f"the extraction must balance {list(COMPONENTS)} or {list(BO_COMPONENTS)} in that "
+        f"order, got {components!r}"
+    )
 
 
 def extraction_balances(payload: Mapping[str, Any]) -> dict[str, BalanceMetrics]:
@@ -834,7 +968,13 @@ def _state_arrays(payload: Mapping[str, Any]) -> dict[str, NDArray[np.float64]]:
     if any(b <= a for a, b in zip(times, times[1:], strict=False)):
         raise ExtractionError(f"states.times_s must be strictly increasing, got {times}")
     fields = {}
-    for name in ("pressure_pa", "sw", "so", "pore_volume_m3", "bw", "bo"):
+    optional = tuple(name for name in BO_STATE_FIELDS if name in states)
+    if optional and len(optional) != len(BO_STATE_FIELDS):
+        raise ExtractionError(
+            f"a black-oil state publishes {list(BO_STATE_FIELDS)} together; this one carries "
+            f"only {list(optional)}"
+        )
+    for name in ("pressure_pa", "sw", "so", "pore_volume_m3", "bw", "bo", *optional):
         values = _matrix(states, name, where="states")
         if values.shape[0] != len(times):
             raise ExtractionError(
@@ -859,7 +999,16 @@ _STATE_UNITS: dict[str, str] = {
     "pore_volume_m3": "m3",
     "bw": "1",
     "bo": "1",
+    # Task 13. Present only on a black-oil result: gas saturation, dissolved gas-oil ratio
+    # (m3_sc of gas per m3_sc of oil, hence dimensionless), and the gas formation volume
+    # factor. An oil-water states file is unchanged — these datasets are simply not written.
+    "sg": "1",
+    "rs": "1",
+    "bg": "1",
 }
+
+#: The three fields above, as a group. They travel together or not at all.
+BO_STATE_FIELDS: tuple[str, ...] = ("sg", "rs", "bg")
 
 
 def write_forward_outputs(
@@ -876,6 +1025,7 @@ def write_forward_outputs(
     not there (plan 7.7).
     """
     fields = _state_arrays(payload)
+    components = _components_of(payload)
     times = fields.pop("times_s")
     n_cells = int(next(iter(fields.values())).shape[1])
     datasets: dict[str, tuple[NDArray[Any], str, tuple[str, ...]]] = {
@@ -899,17 +1049,26 @@ def write_forward_outputs(
     balances = extraction_balances(payload)
     boundary_source = extraction_boundary_source(payload)
 
-    written: dict[str, str] = {}
-    for filename, table in (
+    tables = [
         (MONTHLY_FILENAME, monthly),
         (CONNECTIONS_FILENAME, connection_months),
         (BALANCES_FILENAME, balance_table(balances, boundary_source)),
         (STEPS_FILENAME, accepted_step_table(payload, schedule)),
-    ):
+    ]
+    # Task 13: a black-oil result publishes its surface gas volumes in a table of their own.
+    # An oil-water result writes exactly the four files it always did.
+    if "gas" in components:
+        tables.append((GAS_MONTHLY_FILENAME, gas_monthly_table(payload, month_edges)))
+    written: dict[str, str] = {}
+    for filename, table in tables:
         written[filename] = _write_parquet(result_dir / filename, table)
 
     return {
-        "states": {name: refs[name] for name in _STATE_UNITS},
+        "states": {name: refs[name] for name in _STATE_UNITS if name in refs},
+        "components": components,
+        "black_oil": (
+            _black_oil_outputs(fields, written, result_dir, paths) if "gas" in components else None
+        ),
         "axes": {name: refs[name] for name in ("time_s", "cell_id")},
         "times_s": tuple(float(t) for t in times),
         "states_path": paths.relative(states_path),
@@ -919,6 +1078,35 @@ def write_forward_outputs(
         "balances": balances,
         "monthly": monthly,
         "connections": connection_months,
+    }
+
+
+def _black_oil_outputs(
+    fields: Mapping[str, NDArray[np.float64]],
+    written: Mapping[str, str],
+    result_dir: Path,
+    paths: ProjectPaths,
+) -> dict[str, Any]:
+    """The gas numbers a black-oil result carries and an oil-water one has no field for.
+
+    Free gas is `Sg * PV / Bg` and dissolved gas is `Rs * So * PV / Bo`, both in standard
+    cubic metres and both per published state time. Their sum is the component gas inventory
+    the balance closes on, which is what makes the dissolved term a claim that can be checked
+    rather than a definition: the balance is computed from the native `TotalMasses`, and this
+    split is computed from the published saturations, ratio and formation volume factors, so
+    the two agreeing is evidence.
+    """
+    pv = fields["pore_volume_m3"]
+    free = np.sum(fields["sg"] * pv / fields["bg"], axis=1)
+    dissolved = np.sum(fields["rs"] * fields["so"] * pv / fields["bo"], axis=1)
+    gas_monthly = result_dir / GAS_MONTHLY_FILENAME
+    produced = pq.read_table(gas_monthly).column("gas_prod_m3_sc").to_pylist()
+    return {
+        "free_gas_m3_sc": tuple(float(v) for v in free),
+        "dissolved_gas_m3_sc": tuple(float(v) for v in dissolved),
+        "surface_gas_m3_sc": float(sum(produced)),
+        "gas_monthly_path": paths.relative(gas_monthly),
+        "gas_monthly_sha256": written[GAS_MONTHLY_FILENAME],
     }
 
 
@@ -1119,6 +1307,25 @@ def publish_forward_result(
     metadata["balance_headline"] = HEADLINE_BALANCE
     metadata["balance_systems"] = json.dumps([name for name, _, _ in BALANCE_SYSTEMS])
 
+    black_oil: BlackOilOutputs | None = None
+    if outputs["black_oil"] is not None:
+        gas = dict(outputs["black_oil"])
+        metadata[f"{GAS_MONTHLY_FILENAME}.sha256"] = str(gas.pop("gas_monthly_sha256"))
+        fluids = case.fluids
+        if not isinstance(fluids, BlackOilFluidSpec):
+            raise ExtractionError(
+                "the extraction balances gas, and the case it names declares fluids.kind "
+                f"{fluids.kind!r}; a black-oil result is published only for a black-oil case"
+            )
+        black_oil = BlackOilOutputs(
+            sg=outputs["states"]["sg"],
+            rs=outputs["states"]["rs"],
+            bg=outputs["states"]["bg"],
+            pvt_source=fluids.pvt_source,
+            pvt_table_hashes=dict(fluids.pvt_table_hashes),
+            **gas,
+        )
+
     times = outputs["times_s"]
     return ForwardResult(
         job_id=job.job_id,
@@ -1134,6 +1341,7 @@ def publish_forward_result(
         connections_path=outputs["files"][CONNECTIONS_FILENAME],
         balances_path=outputs["files"][BALANCES_FILENAME],
         restart=restart,
+        black_oil=black_oil,
         solver_metadata=metadata,
         cost=cost,
         parent_attempt_ids=parent_attempt_ids,
@@ -1266,7 +1474,7 @@ def load_forward_result(path: Path, paths: ProjectPaths) -> ForwardResult:
     if result.status != "COMPLETE":
         return result
 
-    for label, name, digest_key in (
+    checked = [
         ("monthly_path", result.monthly_path, f"{MONTHLY_FILENAME}.sha256"),
         ("connections_path", result.connections_path, f"{CONNECTIONS_FILENAME}.sha256"),
         ("balances_path", result.balances_path, f"{BALANCES_FILENAME}.sha256"),
@@ -1282,7 +1490,18 @@ def load_forward_result(path: Path, paths: ProjectPaths) -> ForwardResult:
             result.solver_metadata.get(f"{STEPS_FILENAME}.path"),
             f"{STEPS_FILENAME}.sha256",
         ),
-    ):
+    ]
+    if result.black_oil is not None:
+        # Task 13: the gas table is named by the record's own black-oil block, so it is
+        # re-proved on read like every other output rather than trusted because it exists.
+        checked.append(
+            (
+                "black_oil.gas_monthly_path",
+                result.black_oil.gas_monthly_path,
+                f"{GAS_MONTHLY_FILENAME}.sha256",
+            )
+        )
+    for label, name, digest_key in checked:
         _verify_published_file(relative, label, name, result, digest_key, paths)
 
     fields = {
@@ -1416,16 +1635,24 @@ def _verify_physical_ranges(relative: str, fields: Mapping[str, NDArray[np.float
     """Refuse a published state that is not a physical one. Nothing is clipped into range."""
     if "pressure_pa" in fields and not (fields["pressure_pa"] > 0.0).all():
         raise ForwardResultIntegrityError(f"{relative}: states['pressure_pa'] is not positive")
-    for name in ("sw", "so"):
+    for name in ("sw", "so", "sg"):
         if name in fields and not ((fields[name] >= 0.0) & (fields[name] <= 1.0)).all():
             raise ForwardResultIntegrityError(f"{relative}: states[{name!r}] lies outside [0,1]")
+    # Every phase the result published, summed. For a black-oil result that is three, and the
+    # sum is `1 + MINIMUM_COMPOSITIONAL_SATURATION` by construction in the pinned engine
+    # (JutulDarcy 0.3.11, `blackoil/variables/varswitch.jl`, constant 1e-10) — far inside the
+    # drift limit below, and still a real failure an order of magnitude above it.
+    phases = [name for name in ("sw", "so", "sg") if name in fields]
     if "sw" in fields and "so" in fields:
-        drift = float(np.max(np.abs(fields["sw"] + fields["so"] - 1.0)))
+        total = sum(fields[name] for name in phases)
+        drift = float(np.max(np.abs(total - 1.0)))
         if drift > _MAX_SATURATION_DRIFT:
             raise ForwardResultIntegrityError(
-                f"{relative}: sw + so departs from 1 by {drift:g}; saturations are refused, "
-                "never renormalised"
+                f"{relative}: {' + '.join(phases)} departs from 1 by {drift:g}; saturations "
+                "are refused, never renormalised"
             )
-    for name in ("pore_volume_m3", "bw", "bo"):
+    if "rs" in fields and not (fields["rs"] >= 0.0).all():
+        raise ForwardResultIntegrityError(f"{relative}: states['rs'] is negative")
+    for name in ("pore_volume_m3", "bw", "bo", "bg"):
         if name in fields and not (fields[name] > 0.0).all():
             raise ForwardResultIntegrityError(f"{relative}: states[{name!r}] is not positive")

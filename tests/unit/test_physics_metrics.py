@@ -1206,3 +1206,20 @@ def test_invalid_month_index_is_unreadable(
     check = compare_refinement(coarse, fine, _support(), tolerances)
     assert check.status == "NOT_RUN"
     assert check.reason is not None and "month_index" in check.reason
+
+
+def test_coarse_sensitivity_is_registered_with_unchanged_refinement_gates() -> None:
+    tolerances = load_tolerances(Path(__file__).resolve().parents[2] / "configs/e01_tolerances.yml")
+    checks = [
+        compare_refinement(
+            {},
+            {},
+            CommonSupport(
+                name=name, n_zones=1, coarse_zone_id=np.array([0]), fine_zone_id=np.array([0])
+            ),
+            tolerances,
+        )
+        for name in ("five_spot_coarse_sensitivity", "five_spot_refinement")
+    ]
+    assert all(c.status == "NOT_RUN" for c in checks)
+    assert checks[0].thresholds == checks[1].thresholds

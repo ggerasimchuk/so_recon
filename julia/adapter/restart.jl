@@ -356,8 +356,11 @@ function merge_extractions(
     wells = Dict{String,Any}()
     accepted, cut, iterations = 0, 0, 0
     state_times = Float64[]
+    # Whatever fields the chunks really published, and not a list written down here: a
+    # black-oil chunk carries `sg`, `rs` and `bg` beside the oil-water six, and a merged
+    # trajectory that quietly dropped them would publish a three-phase run as a two-phase one.
     state_fields = Dict{String,Any}(
-        name => Any[] for name in ("pressure_pa", "sw", "so", "pore_volume_m3", "bw", "bo")
+        String(name) => Any[] for name in keys(head["states"]) if String(name) != "times_s"
     )
     substep_offset = 0
 
@@ -405,23 +408,31 @@ function merge_extractions(
 
         for (name, well) in payload["wells"]
             if !haskey(wells, name)
-                wells[name] = Dict{String,Any}(
+                fresh = Dict{String,Any}(
                     "cells" => well["cells"],
-                    "surface_water_m3_s" => Float64[],
-                    "surface_oil_m3_s" => Float64[],
                     "surface_component_mass_kg_s" =>
                         [Float64[] for _ in well["surface_component_mass_kg_s"]],
                     "bhp_pa" => Float64[],
                     "operating_target" => String[],
                 )
+                # One accumulator per surface rate the chunk published — two for oil-water,
+                # three for black oil — read off the chunk rather than listed here.
+                for key in keys(well)
+                    startswith(String(key), "surface_") && endswith(String(key), "_m3_s") &&
+                        (fresh[String(key)] = Float64[])
+                end
+                wells[name] = fresh
             end
             target = wells[name]
             target["cells"] == well["cells"] || invalid(
                 "merge_extractions: well $(name) perforates $(well["cells"]) in chunk " *
                 "$(index - 1) and $(target["cells"]) earlier; the model changed between chunks",
             )
-            append!(target["surface_water_m3_s"], Float64.(well["surface_water_m3_s"]))
-            append!(target["surface_oil_m3_s"], Float64.(well["surface_oil_m3_s"]))
+            for key in keys(target)
+                k = String(key)
+                (startswith(k, "surface_") && endswith(k, "_m3_s")) || continue
+                append!(target[k], Float64.(well[k]))
+            end
             append!(target["bhp_pa"], Float64.(well["bhp_pa"]))
             append!(target["operating_target"], String.(well["operating_target"]))
             for (component, values) in enumerate(well["surface_component_mass_kg_s"])
@@ -585,7 +596,10 @@ function run_forward_native(
     solver...,
 )
     schedule = compile_intervals(case)
-    physical = build_ow(case, arrays)
+    # The one dispatcher (`model.jl:build_physical`): the chunked driver builds whichever
+    # physical model the case's declared class names, and an unknown class is refused here
+    # exactly as it is on the un-chunked path.
+    physical = build_physical(case, arrays)
     # Before anything is simulated: a `SimpleWell`'s connection pressure drop is an extra
     # STATE field, so without this it is neither extracted nor written into the restart.
     request_extra_outputs!(physical.model)

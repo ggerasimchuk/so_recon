@@ -51,8 +51,37 @@
 #: guesses which version it is looking at is a reader that will one day guess wrong.
 const EXTRACT_SCHEMA_VERSION = "forward-extract-2"
 
-#: Water first, oil second — the order `OW_PHASES` fixes and the whole exchange uses.
+#: Water first, oil second — the order `OW_PHASES` fixes and the whole exchange uses. Task
+#: 13 adds gas third, which is the order `BO_PHASES` fixes.
 const EXTRACT_COMPONENTS = ("water", "oil")
+const BO_EXTRACT_COMPONENTS = ("water", "oil", "gas")
+
+"""
+    extract_components(n_phases) -> Tuple
+
+Which components an extraction of an `n_phases` system names, in phase order.
+
+The count comes from the MODEL's own reference densities, so the names an extraction
+publishes are the phases the solver really carried and never a guess from the case. A phase
+count neither system has is a refusal: publishing two component names for a three-component
+balance would silently drop the gas.
+"""
+function extract_components(n_phases::Int)
+    n_phases == length(EXTRACT_COMPONENTS) && return EXTRACT_COMPONENTS
+    n_phases == length(BO_EXTRACT_COMPONENTS) && return BO_EXTRACT_COMPONENTS
+    invalid(
+        "extract_interval: this build extracts $(length(EXTRACT_COMPONENTS)) components " *
+        "(oil-water) or $(length(BO_EXTRACT_COMPONENTS)) (black oil); the system has " *
+        "$(n_phases)",
+    )
+end
+
+#: The native surface rate target of each component, by phase order. A gas rate is read with
+#: `SurfaceGasRateTarget` and NEVER by reusing an oil or water target: a standard cubic metre
+#: of gas is not a standard cubic metre of liquid, and borrowing the liquid target would
+#: publish a gas volume measured against the wrong reference density.
+const SURFACE_RATE_TARGETS =
+    (SurfaceWaterRateTarget, SurfaceOilRateTarget, SurfaceGasRateTarget)
 
 #: How far a substep boundary may sit from a requested state time and still be it. The
 #: schedule's times are day counts times 86400, so this is far above float64 round-off at
@@ -445,10 +474,7 @@ function extract_interval(
     system = rmodel.system
     rhoS = Float64[d for d in JutulDarcy.reference_densities(system)]
     n_phases = length(rhoS)
-    n_phases == length(EXTRACT_COMPONENTS) || invalid(
-        "extract_interval: this extraction describes $(length(EXTRACT_COMPONENTS)) components, " *
-        "the system has $(n_phases)",
-    )
+    components = extract_components(n_phases)
     cross_terms = reservoir_well_cross_terms(model)
     names = well_names(model)
 
@@ -459,22 +485,24 @@ function extract_interval(
     wells_out = Dict{String,Any}()
     surface_mass = Dict{Symbol,Vector{Vector{Float64}}}()
     for name in names
-        water = well_output(model, states, name, step_forces, SurfaceWaterRateTarget)
-        oil = well_output(model, states, name, step_forces, SurfaceOilRateTarget)
         bhp = well_output(model, states, name, step_forces, BottomHolePressureTarget)
         operating = well_output(model, states, name, step_forces, :control)
         surface_mass[name] = [
             Float64[well_output(model, states, name, step_forces, c)[k] for k in 1:n]
             for c in 1:n_phases
         ]
-        wells_out[String(name)] = Dict{String,Any}(
+        row = Dict{String,Any}(
             "cells" => Int[c - 1 for c in cross_terms[name].reservoir_cells],
-            "surface_water_m3_s" => collect(Float64.(water)),
-            "surface_oil_m3_s" => collect(Float64.(oil)),
             "surface_component_mass_kg_s" => surface_mass[name],
             "bhp_pa" => collect(Float64.(bhp)),
             "operating_target" => String[String(t) for t in operating],
         )
+        # One surface volumetric rate per component, each read with ITS OWN native target.
+        for (c, component) in enumerate(components)
+            rate = well_output(model, states, name, step_forces, SURFACE_RATE_TARGETS[c])
+            row["surface_$(component)_m3_s"] = collect(Float64.(rate))
+        end
+        wells_out[String(name)] = row
     end
 
     # The substeps, one at a time: the inventory at the end of each, the connection flux
@@ -514,41 +542,39 @@ function extract_interval(
             target = String(wells_out[String(name)]["operating_target"][k])
             bhp = wells_out[String(name)]["bhp_pa"][k]
             for i in axes(flux, 2)
-                push!(
-                    connection_rows,
-                    Dict{String,Any}(
-                        "well_id" => String(name),
-                        "connection_id" => i - 1,
-                        "cell_id" => cross_terms[name].reservoir_cells[i] - 1,
-                        "step" => k - 1,
-                        "water_mass_kg_s" => flux[1, i],
-                        "oil_mass_kg_s" => flux[2, i],
-                        "total_mass_kg_s" => sum(view(flux, :, i)),
-                        "connection_open" => mask[i] != 0.0,
-                        "actual_target" => target,
-                        "bhp_pa" => bhp,
-                    ),
+                row = Dict{String,Any}(
+                    "well_id" => String(name),
+                    "connection_id" => i - 1,
+                    "cell_id" => cross_terms[name].reservoir_cells[i] - 1,
+                    "step" => k - 1,
+                    "total_mass_kg_s" => sum(view(flux, :, i)),
+                    "connection_open" => mask[i] != 0.0,
+                    "actual_target" => target,
+                    "bhp_pa" => bhp,
                 )
+                for (c, component) in enumerate(components)
+                    row["$(component)_mass_kg_s"] = flux[c, i]
+                end
+                push!(connection_rows, row)
             end
         end
         # The boundary, on the same substep and with the same native kernel the solver used.
         bcs = interval_boundary_conditions(step_forces[k])
         bc_flux = boundary_component_flux(model, system, evaluated[:Reservoir], bcs)
         for (i, bc) in enumerate(bcs)
-            push!(
-                boundary_rows,
-                Dict{String,Any}(
-                    "boundary_id" => i - 1,
-                    "cell_id" => Int(bc.cell) - 1,
-                    "step" => k - 1,
-                    "pressure_pa" => Float64(bc.pressure),
-                    "trans_flow" => Float64(bc.trans_flow),
-                    # Positive out of the reservoir, exactly as the native kernel returns it.
-                    "water_mass_kg_s" => bc_flux[1, i],
-                    "oil_mass_kg_s" => bc_flux[2, i],
-                    "total_mass_kg_s" => sum(view(bc_flux, :, i)),
-                ),
+            row = Dict{String,Any}(
+                "boundary_id" => i - 1,
+                "cell_id" => Int(bc.cell) - 1,
+                "step" => k - 1,
+                "pressure_pa" => Float64(bc.pressure),
+                "trans_flow" => Float64(bc.trans_flow),
+                "total_mass_kg_s" => sum(view(bc_flux, :, i)),
             )
+            # Positive out of the reservoir, exactly as the native kernel returns it.
+            for (c, component) in enumerate(components)
+                row["$(component)_mass_kg_s"] = bc_flux[c, i]
+            end
+            push!(boundary_rows, row)
         end
         # Into standard volume, like the inventory it is balanced against: the cross term
         # is a component MASS flux in kg/s, and the inventory is `TotalMasses / rho_sc`.
@@ -584,7 +610,7 @@ function extract_interval(
     )
     return Dict{String,Any}(
         "schema_version" => EXTRACT_SCHEMA_VERSION,
-        "components" => collect(EXTRACT_COMPONENTS),
+        "components" => collect(components),
         "reference_densities_kg_m3" => rhoS,
         "stored_extra_state_fields" => stored_extra,
         "chunk" => Dict{String,Any}(
@@ -686,8 +712,16 @@ function requested_states(
     pv = collect(Float64.(pore_volume(model, parameters)))
     n_cells = length(pv)
 
+    n_phases = length(rhoS)
+    components = extract_components(n_phases)
+    black_oil = n_phases == length(BO_EXTRACT_COMPONENTS)
+
     times = Float64[]
     pressure, sw, so, pore, bw, bo = (Vector{Vector{Float64}}() for _ in 1:6)
+    # Task 13: the three fields a black-oil state has that an oil-water one does not. They
+    # stay empty for an oil-water extraction and the payload below does not name them, so an
+    # OW result is byte-for-byte the result it was.
+    sg, rs, bg = (Vector{Vector{Float64}}() for _ in 1:3)
     for requested in state_times_s
         index = findfirst(t -> abs(t - requested) <= TIME_MATCH_TOLERANCE_S, available)
         index === nothing && invalid(
@@ -710,10 +744,26 @@ function requested_states(
         push!(sw, Float64[saturations[1, c] for c in 1:n_cells])
         push!(so, Float64[saturations[2, c] for c in 1:n_cells])
         push!(pore, copy(pv))
-        push!(bw, Float64[rhoS[1] / rho[1, c] for c in 1:n_cells])
-        push!(bo, Float64[rhoS[2] / rho[2, c] for c in 1:n_cells])
+        if black_oil
+            assert_blackoil_phase_properties(evaluated)
+            # `rho_sc / rho(p)` is B only where the phase carries ONE component. A black-oil
+            # oil phase carries dissolved gas — its mass density is
+            # `(rho_o_sc + Rs * rho_g_sc) / Bo` — so reading B off the density would report a
+            # shrinkage factor that is wrong by exactly the dissolved term the capability
+            # exists to show. The native `ShrinkageFactors` variable is `b = 1/B` and is what
+            # the solver itself uses, so it is read instead.
+            shrinkage = evaluated[:ShrinkageFactors]
+            push!(bw, Float64[1.0 / shrinkage[1, c] for c in 1:n_cells])
+            push!(bo, Float64[1.0 / shrinkage[2, c] for c in 1:n_cells])
+            push!(bg, Float64[1.0 / shrinkage[3, c] for c in 1:n_cells])
+            push!(sg, Float64[saturations[3, c] for c in 1:n_cells])
+            push!(rs, collect(Float64.(evaluated[:Rs])))
+        else
+            push!(bw, Float64[rhoS[1] / rho[1, c] for c in 1:n_cells])
+            push!(bo, Float64[rhoS[2] / rho[2, c] for c in 1:n_cells])
+        end
     end
-    return Dict{String,Any}(
+    out = Dict{String,Any}(
         "times_s" => times,
         "pressure_pa" => pressure,
         "sw" => sw,
@@ -722,6 +772,12 @@ function requested_states(
         "bw" => bw,
         "bo" => bo,
     )
+    if black_oil
+        out["sg"] = sg
+        out["rs"] = rs
+        out["bg"] = bg
+    end
+    return out
 end
 
 # --------------------------------------------------------------------------------------
@@ -747,7 +803,7 @@ re-initialised zero.
 """
 function run_forward(case::AbstractDict, arrays::AbstractDict; state_times_s = nothing, solver...)
     schedule = compile_intervals(case)
-    physical = build_ow(case, arrays)
+    physical = build_physical(case, arrays)
     # Before anything is simulated: what is RECORDED has to include the extra state fields
     # the perforation flux reads, or they are gone by the time the result is read.
     request_extra_outputs!(physical.model)

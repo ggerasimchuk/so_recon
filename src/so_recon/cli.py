@@ -117,6 +117,14 @@ def _parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify-physics", help="run registered native physics checks")
     verify.add_argument("--suite", choices=["p0", "p1", "bo"], required=True)
     verify.add_argument("--resume-ledger", type=Path)
+    verify.add_argument(
+        "--replay",
+        action="store_true",
+        help=(
+            "re-run every group and every forward even when --resume-ledger names a session "
+            "that completed them; plan 12.6's explicitly requested replay"
+        ),
+    )
     verify.add_argument("--julia", default=None, help="path to julia executable")
 
     synthetic = sub.add_parser("synthetic-p1", help="render, run and publish P1 parent worlds")
@@ -252,6 +260,7 @@ def _e01(
             paths,
             args.suite,
             resume_ledger=args.resume_ledger,
+            replay=args.replay,
             argv=full_argv,
             julia=args.julia,
             runner=suite_runner,
