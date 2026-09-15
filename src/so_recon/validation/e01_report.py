@@ -980,8 +980,9 @@ def render_e01_report(report: StageReport) -> str:
     lines += [
         f"**BO status: {report.bo_status}.** The black-oil capability is a separate P0 "
         "session and is not part of this stage's evidence. `PASS_WITH_LIMITATIONS` is what "
-        "an accepted oil-water scope carries while it is NOT_RUN; it is never what a failed "
-        "mandatory oil-water, restart or balance check carries.",
+        "an accepted oil-water scope carries while the capability is NOT_RUN **or FAIL** — "
+        "both are limitations on this stage and neither fails it (plan 13.5) — and it is "
+        "never what a failed mandatory oil-water, restart or balance check carries.",
         "",
     ]
     lines += _blackoil_section(report)
