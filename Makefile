@@ -4,7 +4,7 @@ export UV
 export JULIA
 
 .PHONY: setup setup-julia test lint format smoke manifest env-report gate gate-clean \
-	e01-gate e01-p0 e01-p1 e01-report
+	e01-gate e01-p0 e01-p1 e01-report gate-e02-math gate-e02-reduced
 
 setup:
 	$(UV) sync --frozen
@@ -58,3 +58,10 @@ e01-p1:
 # RUNS is the ACTUAL run directories the commands above printed, never an invented run id.
 e01-report:
 	$(UV) run so-recon --config configs/e01.yml e01-report --runs $(RUNS)
+
+gate-e02-math:
+	./scripts/e02_gate.sh --suite math
+
+# Native and fail-closed: requires E02_E01_REPORT from the final physics tree.
+gate-e02-reduced:
+	./scripts/e02_gate.sh --suite reduced

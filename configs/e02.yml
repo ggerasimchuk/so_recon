@@ -1,0 +1,47 @@
+# SO-RECON E02 pure/default session. P1 commands select the approved P1_LOOP preset in code.
+spec_version: "4.0"
+config_version: "E02.1"
+project_name: SO-RECON
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  artifacts: artifacts
+  reports: reports
+  configs: configs
+  julia: julia
+
+sources:
+  files: []
+
+julia:
+  project: julia
+  smoke_script: julia/smoke/smoke_case.jl
+  timeout_s: 1800
+
+resources:
+  profile: P0_VERIFY
+  soft_bytes: 12884901888
+  hard_bytes: 17179869184
+  reserve_bytes: 6442450944
+  disk_budget_bytes: 5368709120
+  wall_budget_s: 600
+  job_timeout_s: 300
+  startup_timeout_s: 300
+  max_new_forward: 64
+  julia_workers: 1
+  julia_threads: 4
+  blas_threads: 1
+  poll_interval_s: 0.25
+  max_swap_growth_bytes: 536870912
+
+inference:
+  n_particles: 32
+  cess_fraction: 0.8
+  resample_fraction: 0.5
+  max_beta_steps: 24
+  moves_per_level: 2
+  seed: 11
+  rw_scale: 0.25
+  pcn_scale: 0.2

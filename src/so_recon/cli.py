@@ -38,6 +38,7 @@ from so_recon.environment.report import (
     write_environment_report,
     write_environment_stamp,
 )
+from so_recon.inference.commands import run_e02, run_e02_report, run_inverse_budget
 from so_recon.paths import ProjectPaths, RepoRootNotFoundError, find_repo_root
 from so_recon.registry.hashing import sha256_bytes
 from so_recon.registry.run import RUN_RECORD_SCHEMA_VERSION, RunContext, RunStatus
@@ -138,6 +139,25 @@ def _parser() -> argparse.ArgumentParser:
 
     report = sub.add_parser("e01-report", help="build reports/stages/E01.md from real runs")
     report.add_argument("--runs", nargs="+", required=True, help="run directories to read")
+
+    inverse = sub.add_parser("verify-inverse", help="run one bounded E02 verification suite")
+    inverse.add_argument("--suite", choices=["math", "reduced"], required=True)
+    inverse.add_argument("--experiment")
+
+    budget = sub.add_parser("inverse-budget", help="forecast E02 physical call counts")
+    budget.add_argument("--experiment", required=True)
+
+    p1_inverse = sub.add_parser("inverse-p1", help="run exactly one requested P1 inverse")
+    p1_inverse.add_argument("--experiment", required=True)
+    p1_inverse.add_argument("--seed", type=int, required=True)
+    p1_inverse.add_argument("--particles", type=int, choices=[32, 64], required=True)
+    p1_inverse.add_argument("--inference-seed", type=int, required=True)
+
+    inverse_resume = sub.add_parser("inverse-resume", help="resume one E02 SMC checkpoint")
+    inverse_resume.add_argument("--checkpoint", type=Path, required=True)
+
+    e02_report = sub.add_parser("e02-report", help="derive E02 status from actual run dirs")
+    e02_report.add_argument("--runs", nargs="+", required=True, help="run directories to read")
     return p
 
 
@@ -299,6 +319,46 @@ def _e01(
     return outcome.exit_code or (0 if outcome.ctx.record.status == "PASS" else 1)
 
 
+def _e02(
+    args: argparse.Namespace,
+    cfg: ProjectConfig,
+    paths: ProjectPaths,
+    full_argv: list[str],
+) -> int | None:
+    """Dispatch E02 commands while preserving technical and scientific exit boundaries."""
+    if args.command == "verify-inverse":
+        ctx = run_e02(
+            cfg,
+            paths,
+            suite=args.suite,
+            experiment=args.experiment,
+            argv=full_argv,
+        )
+    elif args.command == "inverse-budget":
+        ctx = run_inverse_budget(cfg, paths, experiment=args.experiment, argv=full_argv)
+    elif args.command == "inverse-p1":
+        ctx = run_e02(
+            cfg,
+            paths,
+            suite="p1",
+            experiment=args.experiment,
+            argv=full_argv,
+        )
+    elif args.command == "inverse-resume":
+        ctx = run_e02(
+            cfg,
+            paths,
+            suite="resume",
+            resume=args.checkpoint,
+            argv=full_argv,
+        )
+    elif args.command == "e02-report":
+        ctx = run_e02_report(cfg, paths, run_dirs=args.runs, argv=full_argv)
+    else:
+        return None
+    return _report(ctx, paths)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -332,6 +392,9 @@ def main(
         e01 = _e01(args, cfg, paths, full_argv, suite_runner)
         if e01 is not None:
             return e01
+        e02 = _e02(args, cfg, paths, full_argv)
+        if e02 is not None:
+            return e02
 
         if args.command == "smoke":
             factory = launcher_factory or default_launcher

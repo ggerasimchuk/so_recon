@@ -5,6 +5,13 @@
   "particle_counts": [32, 64],
   "max_beta_steps": 24,
   "moves_per_level": 2,
+  "reduced_experiment": {
+    "experiment_id": "reduced-v1",
+    "design_id": "e02-reduced-corey-v1",
+    "truth_seed": 701,
+    "reference_nodes": [17, 33],
+    "resource_profile": "P0_VERIFY"
+  },
   "experiments": [
     {
       "experiment_id": "e02-t1-v1-s141",

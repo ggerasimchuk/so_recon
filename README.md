@@ -106,3 +106,18 @@ digest опубликованного case-манифеста уже имеют 
 этой пары не подтверждает точность грубой сетки или неоднородных P1/E02 моделей.
 Два дополнительных расчёта явно учтены сверх исторического списка заданий.
 Методика и границы приёмки: [завершение E01](docs/superpowers/plans/2026-09-15-e01-completion.md).
+
+### E02: probabilistic inverse
+
+Чистая математическая проверка не запускает Julia:
+
+    uv run so-recon --config configs/e02.yml verify-inverse --suite math
+    uv run so-recon --config configs/e02.yml inverse-budget --experiment reduced-v1
+    uv run so-recon --config configs/e02.yml inverse-budget --experiment e02-t1-v1-s141
+    make gate-e02-math
+
+Native-команды fail-closed и требуют `E02_E01_REPORT` — путь к принятому `E01.json`,
+пересобранному на финальном physics tree. `N64` при 24 уровнях и двух moves имеет верхнюю
+границу 3136 новых forward-вызовов и поэтому не гарантированно помещается в P1 cap 2000;
+checkpoint означает продолжимый расчёт, но не завершённый posterior. Текущий авторитетный
+статус E02 находится в [stage-отчёте](reports/stages/E02.md).
