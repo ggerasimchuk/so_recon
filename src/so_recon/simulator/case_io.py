@@ -49,6 +49,8 @@ from so_recon.registry.atomic import fsync_dir, stage_path
 from so_recon.registry.hashing import sha256_bytes, sha256_file, sha256_json
 from so_recon.registry.run import RunContext
 from so_recon.simulator.contracts import (
+    CASE_SCHEMA_VERSION,
+    CASE_SCHEMA_VERSION_BO,
     SATURATION_SUM_TOLERANCE,
     ArrayRef,
     CaseBundle,
@@ -557,11 +559,55 @@ def write_case(
     return ref
 
 
+#: The case schemas this build reads, newest first. `decode_case_payload` is the only place
+#: that knows what to do with each of them.
+SUPPORTED_CASE_SCHEMAS: tuple[str, ...] = (CASE_SCHEMA_VERSION_BO, CASE_SCHEMA_VERSION)
+
+
+def decode_case_payload(payload: Mapping[str, Any], *, where: str) -> CaseBundle:
+    """The EXPLICIT legacy decoder of Task 13: read a `case-1` or a `case-2` manifest.
+
+    `case-2` adds the black-oil fluid to the `fluids` union and changes nothing else, so a
+    `case-1` manifest is decoded by reading it as what it is — an oil-water case — and NOT by
+    rewriting it. That distinction is the whole point: `schema_version` is the first field of
+    `MODEL_HASH_FIELDS`, so an upgrade in place would change the model hash of every case E01
+    has already published, and with it every ledger key, every case digest and every frozen
+    expectation in the stage. Every OW manifest on disk stays exactly the bytes it was
+    written as.
+
+    The version is read BEFORE the record is validated, so a manifest from a schema this
+    build does not speak is refused by name rather than by a field-by-field mismatch that
+    reads like a corrupt file.
+    """
+    declared = payload.get("schema_version")
+    if declared not in SUPPORTED_CASE_SCHEMAS:
+        raise CaseIntegrityError(
+            f"{where}: case schema_version {declared!r} is not one this build reads "
+            f"({list(SUPPORTED_CASE_SCHEMAS)}); a manifest from an unknown schema is refused, "
+            "never guessed at"
+        )
+    kind = (
+        payload.get("fluids", {}).get("kind")
+        if isinstance(payload.get("fluids"), Mapping)
+        else None
+    )
+    if declared == CASE_SCHEMA_VERSION and kind not in (None, "OW"):
+        raise CaseIntegrityError(
+            f"{where}: a case-1 manifest is an oil-water case by construction, and this one "
+            f"declares fluids.kind {kind!r}; the legacy decoder does not invent a physics "
+            "class the schema cannot carry"
+        )
+    try:
+        return CaseBundle.model_validate(payload)
+    except ValueError as exc:
+        raise CaseIntegrityError(f"{where}: {exc}") from exc
+
+
 def load_case(path: Path, paths: ProjectPaths) -> CaseBundle:
     """Read a case manifest and prove it still hashes to the model it names."""
     relative = paths.relative(path)  # containment; a manifest outside the repo is refused
     payload = json.loads(path.read_text(encoding="utf-8"))
-    case = CaseBundle.model_validate(payload)
+    case = decode_case_payload(payload, where=relative)
     recomputed = compute_model_hash(case)
     if recomputed != case.model_hash:
         raise CaseIntegrityError(
