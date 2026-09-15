@@ -72,6 +72,14 @@ from so_recon.simulator.contracts import (
     ObservationSpec,
     RockSpec,
 )
+from so_recon.synthetic.inverse_designs import (
+    INVERSE_DESIGN_KEY,
+    INVERSE_RENDERER_VERSION,
+    InversePhysicalDesign,
+    inverse_control_segments,
+    inverse_well_specs,
+    render_inverse_coefficients,
+)
 from so_recon.synthetic.p1 import (
     DYNAMIC_CHANNELS,
     GENERATOR_VERSION,
@@ -79,6 +87,7 @@ from so_recon.synthetic.p1 import (
     N_MODES,
     OBSERVATION_SCHEMA,
     PRESSURE_AVAILABLE,
+    P1Design,
     control_segments,
     render_coefficients,
     well_specs,
@@ -121,6 +130,7 @@ def renderer_hash(context: PriorContext) -> str:
             "renderer_version": RENDERER_VERSION,
             "generator_version": GENERATOR_VERSION,
             "e01_renderer_version": E01_RENDERER_VERSION,
+            "inverse_renderer_version": INVERSE_RENDERER_VERSION,
             "transform_version": TRANSFORM_VERSION,
             "schema_id": context.density_schema.schema_id,
             "basis_hash": context.density_schema.basis_hash,
@@ -132,7 +142,10 @@ def renderer_hash(context: PriorContext) -> str:
 
 def _check_context(context: PriorContext) -> None:
     schema = context.density_schema
-    if context.n_geology != N_GEOLOGY or schema.transform_version != TRANSFORM_VERSION:
+    custom = INVERSE_DESIGN_KEY in context.design
+    if not custom and (
+        context.n_geology != N_GEOLOGY or schema.transform_version != TRANSFORM_VERSION
+    ):
         raise ValueError(
             f"this renderer is the {N_GEOLOGY}-coefficient P1 map of {TRANSFORM_VERSION}; "
             f"the context declares {context.n_geology} coefficients under "
@@ -144,12 +157,27 @@ def _check_context(context: PriorContext) -> None:
             f"coordinates, so it needs at least {N_P1_GEOLOGY_IN_V + N_P1_NUISANCE}, "
             f"got {schema.n_v}"
         )
-    if schema.n_residual != N_GEOLOGY_IN_RESIDUAL + context.n_state_residual:
+    geology_residual = context.n_geology - N_P1_GEOLOGY_IN_V
+    if geology_residual < 0:
         raise ValueError(
-            f"z_perp holds the remaining {N_GEOLOGY_IN_RESIDUAL} geology coordinates and "
-            f"{context.n_state_residual} initial-state coordinates, so it needs "
-            f"{N_GEOLOGY_IN_RESIDUAL + context.n_state_residual}, got {schema.n_residual}"
+            f"the renderer needs at least {N_P1_GEOLOGY_IN_V} geology coordinates, "
+            f"got {context.n_geology}"
         )
+    if schema.n_residual != geology_residual + context.n_state_residual:
+        raise ValueError(
+            f"z_perp holds the remaining {geology_residual} geology coordinates and "
+            f"{context.n_state_residual} initial-state coordinates, so it needs "
+            f"{geology_residual + context.n_state_residual}, got {schema.n_residual}"
+        )
+
+
+def _design_for(context: PriorContext, family: int) -> P1Design | InversePhysicalDesign:
+    payload = context.design.get(INVERSE_DESIGN_KEY)
+    if payload is None:
+        return p1_design_for(context, family)
+    if family != 0:
+        raise ValueError(f"the fixed {payload['design_id']} renderer has only family s=0")
+    return InversePhysicalDesign.model_validate(payload)
 
 
 def geology_coefficients(theta: ThetaRecord, context: PriorContext) -> F64:
@@ -160,10 +188,11 @@ def geology_coefficients(theta: ThetaRecord, context: PriorContext) -> F64:
     """
     _check_context(context)
     context.density_schema.validate_theta(theta)
+    geology_residual = context.n_geology - N_P1_GEOLOGY_IN_V
     whitened = np.concatenate(
         [
             np.asarray(theta.v[:N_P1_GEOLOGY_IN_V], dtype=np.float64),
-            np.asarray(theta.z_perp[:N_GEOLOGY_IN_RESIDUAL], dtype=np.float64),
+            np.asarray(theta.z_perp[:geology_residual], dtype=np.float64),
         ]
     )
     coefficients: F64 = context.mean + context.chol @ (context.rotation @ whitened)
@@ -172,16 +201,25 @@ def geology_coefficients(theta: ThetaRecord, context: PriorContext) -> F64:
 
 def render_theta(theta: ThetaRecord, context: PriorContext) -> RenderedParameters:
     """Render one latent point. No file is opened and no truth world is read."""
-    coefficients = geology_coefficients(theta, context).reshape(N_LAYERS, N_MODES)
-    design = p1_design_for(context, theta.s)
+    coefficients = geology_coefficients(theta, context)
+    design = _design_for(context, theta.s)
     try:
-        arrays = render_coefficients(coefficients, design)
+        if isinstance(design, InversePhysicalDesign):
+            state_index = context.n_geology - N_P1_GEOLOGY_IN_V
+            state_coordinate = float(theta.z_perp[state_index]) if context.n_state_residual else 0.0
+            arrays = render_inverse_coefficients(
+                coefficients,
+                design,
+                state_coordinate=state_coordinate,
+            )
+        else:
+            arrays = render_coefficients(coefficients.reshape(N_LAYERS, N_MODES), design)
     except ValueError as error:
         # E01 refused this rock. That is a failed physical evaluation carrying the theta
         # that produced it, and never a statement about the prior's density there.
         raise RendererNumericalError(
-            f"theta {theta_hash(theta)} renders no physical geology in family "
-            f"{design.family!r}: {error}"
+            f"theta {theta_hash(theta)} renders no physical geology in design "
+            f"{design.design_id!r}: {error}"
         ) from error
     return RenderedParameters(
         arrays=arrays,
@@ -189,6 +227,53 @@ def render_theta(theta: ThetaRecord, context: PriorContext) -> RenderedParameter
         family=theta.s,
         renderer_hash=renderer_hash(context),
     )
+
+
+def _theta_for_coefficients(
+    theta: ThetaRecord, context: PriorContext, coefficients: F64
+) -> ThetaRecord:
+    """Express physical coefficients in the context's stored conditional coordinates."""
+    physical_whitened = np.linalg.solve(context.chol, coefficients - context.mean)
+    whitened = context.rotation.T @ physical_whitened
+    geology_residual = context.n_geology - N_P1_GEOLOGY_IN_V
+    residual = [float(value) for value in whitened[N_P1_GEOLOGY_IN_V:]]
+    residual.extend(float(value) for value in theta.z_perp[geology_residual:])
+    updated = theta.model_copy(
+        update={
+            "v": tuple(
+                [float(value) for value in whitened[:N_P1_GEOLOGY_IN_V]]
+                + list(theta.v[N_P1_GEOLOGY_IN_V:])
+            ),
+            "z_perp": tuple(residual),
+        }
+    )
+    context.density_schema.validate_theta(updated)
+    return updated
+
+
+def swap_t2_layers(theta: ThetaRecord, context: PriorContext) -> ThetaRecord:
+    """Create T2's physical layer-exchange pair without permuting latent labels by hand."""
+    design = _design_for(context, theta.s)
+    if not isinstance(design, InversePhysicalDesign) or design.design_id != "e02-t2-v1":
+        raise ValueError("layer exchange is defined only for e02-t2-v1")
+    coefficients = geology_coefficients(theta, context)
+    swapped = np.concatenate([coefficients[N_MODES:], coefficients[:N_MODES]])
+    return _theta_for_coefficients(theta, context, swapped)
+
+
+def with_t4_remote_state(
+    theta: ThetaRecord, context: PriorContext, state_coordinate: float
+) -> ThetaRecord:
+    """Hold all T4 coordinates fixed except the declared remote initial-state residual."""
+    design = _design_for(context, theta.s)
+    if not isinstance(design, InversePhysicalDesign) or design.design_id != "e02-t4-v1":
+        raise ValueError("remote initial-state pairs are defined only for e02-t4-v1")
+    if not np.isfinite(state_coordinate):
+        raise ValueError("remote state coordinate must be finite")
+    residual = (*theta.z_perp[:-1], float(state_coordinate))
+    updated = theta.model_copy(update={"z_perp": residual})
+    context.density_schema.validate_theta(updated)
+    return updated
 
 
 def _array_identity(arrays: dict[str, F64]) -> str:
@@ -220,7 +305,7 @@ def build_inverse_case(
     An empty observation table satisfies the forward exchange contract; observations are
     not an input the solver reads and the actual inverse bundle stays on the Python side.
     """
-    design = p1_design_for(context, rendered.family)
+    design = _design_for(context, rendered.family)
     arrays = rendered.arrays
     identity = sha256_json(
         {
@@ -281,13 +366,25 @@ def build_inverse_case(
         ),
         rock=RockSpec(porosity=geology["porosity"], permeability_m2=geology["permeability_m2"]),
         fluids=FluidSpec(),
-        wells=well_specs(design),
-        controls=control_segments(design),
+        wells=(
+            inverse_well_specs(design)
+            if isinstance(design, InversePhysicalDesign)
+            else well_specs(design)
+        ),
+        controls=(
+            inverse_control_segments(design)
+            if isinstance(design, InversePhysicalDesign)
+            else control_segments(design)
+        ),
         initial=InitialStateSpec(
             kind="explicit",
             pressure_pa=initial["pressure_pa"],
             sw=initial["sw"],
-            meaning="synthetic_initial",
+            meaning=(
+                "developed_state"
+                if isinstance(design, InversePhysicalDesign) and design.design_id == "e02-t4-v1"
+                else "synthetic_initial"
+            ),
         ),
         boundary=BoundarySpec(kind="closed", cells=()),
         observations=ObservationSpec(
@@ -296,7 +393,11 @@ def build_inverse_case(
             dynamic_channels=DYNAMIC_CHANNELS,
             pressure_available=PRESSURE_AVAILABLE,
         ),
-        renderer_version=RENDERER_VERSION,
+        renderer_version=(
+            INVERSE_RENDERER_VERSION
+            if isinstance(design, InversePhysicalDesign)
+            else RENDERER_VERSION
+        ),
         units={
             "pressure": "Pa",
             "permeability": "m2",
@@ -329,5 +430,7 @@ __all__ = [
     "geology_coefficients",
     "render_theta",
     "renderer_hash",
+    "swap_t2_layers",
     "theta_hash",
+    "with_t4_remote_state",
 ]
