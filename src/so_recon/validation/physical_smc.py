@@ -57,6 +57,14 @@ PHYSICAL_COMPARISON_SCHEMA = "e02-physical-smc-comparison-1"
 PHYSICAL_STATE_MONTHS = (0, 12, 24, 36)
 
 
+def prior_context_payload(context: PriorContext) -> dict[str, Any]:
+    """Serialize the typed conditional context without weakening its array validators."""
+    payload = context.model_dump(mode="python")
+    for name in ("mean", "chol", "rotation"):
+        payload[name] = np.asarray(payload[name], dtype=np.float64).tolist()
+    return payload
+
+
 def report_zone_matrix(design_id: str) -> tuple[tuple[str, ...], np.ndarray]:
     """Return the immutable 16x16x2 report zones used by every matrix comparison."""
     if design_id not in {"e02-t1-v1", "e02-t2-v1", "e02-t4-v1"}:
@@ -441,7 +449,7 @@ def prepare_physical_experiment(
     observations = generate_dynamic_history(context, prediction, seed=history_seed)
     allowed = inference_payload(
         {
-            "context": context.model_dump(mode="json"),
+            "context": prior_context_payload(context),
             "G": context.design.get("log_k_observations", []),
             "U": [segment.model_dump(mode="json") for segment in case.controls],
             "observations": observations.model_dump(mode="json"),
@@ -487,7 +495,7 @@ def prepare_physical_experiment(
             "truth_seed": truth_seed,
             "stream_names": ["truth_latent", "static_G", "history_noise", "schedule"],
             "history_seed": history_seed,
-            "context": context.model_dump(mode="json"),
+            "context": prior_context_payload(context),
             "observations": observations.model_dump(mode="json"),
             "inference_input": inference_ref.model_dump(mode="json"),
             "truth": {
@@ -826,6 +834,7 @@ __all__ = [
     "PHYSICAL_SMC_RUN_SCHEMA",
     "convergence_screen",
     "prepare_physical_experiment",
+    "prior_context_payload",
     "publish_physical_comparison",
     "report_zone_matrix",
     "run_physical_smc",

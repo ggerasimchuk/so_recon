@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from so_recon.inference.contracts import DensitySchema, PriorContext
 from so_recon.validation.physical_smc import (
     convergence_screen,
+    prior_context_payload,
     report_zone_matrix,
 )
 
@@ -39,6 +41,32 @@ def test_report_zones_include_layers_quadrants_and_t4_remote_support() -> None:
     assert remote.shape == (13, 512)
     assert remote_names[-3:] == ("remote-east", "remote-east-layer-0", "remote-east-layer-1")
     np.testing.assert_array_equal(remote[-3:].sum(axis=1), [64.0, 32.0, 32.0])
+
+
+def test_prior_context_payload_round_trips_numpy_arrays_through_json_shape() -> None:
+    schema = DensitySchema(
+        schema_id="test",
+        n_v=1,
+        n_residual=0,
+        families=(0,),
+        basis_hash="a" * 64,
+        transform_version="test-1",
+    )
+    context = PriorContext(
+        density_schema=schema,
+        n_geology=1,
+        n_state_residual=0,
+        mean=np.array([0.5]),
+        chol=np.array([[2.0]]),
+        rotation=np.array([[1.0]]),
+        design={},
+        g_hash="b" * 64,
+        information_hash="c" * 64,
+    )
+    payload = prior_context_payload(context)
+    assert payload["mean"] == [0.5]
+    rebuilt = PriorContext.model_validate(payload)
+    np.testing.assert_array_equal(rebuilt.chol, context.chol)
 
 
 def test_convergence_screen_applies_paired_gaps_and_precision_limits() -> None:

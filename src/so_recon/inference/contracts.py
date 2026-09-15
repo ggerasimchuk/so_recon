@@ -454,7 +454,7 @@ class PriorContext(StrictModel):
     g_hash: Sha256
     information_hash: Sha256
 
-    @field_validator("mean", "chol", "rotation")
+    @field_validator("mean", "chol", "rotation", mode="before")
     @classmethod
     def _finite_and_read_only(cls, value: F64, info: ValidationInfo) -> F64:
         array = np.array(value, dtype=np.float64, copy=True)
