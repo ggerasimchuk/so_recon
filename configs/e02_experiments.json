@@ -9,8 +9,9 @@
     "experiment_id": "reduced-v2",
     "design_id": "e02-reduced-corey-v2",
     "truth_seed": 701,
-    "reference_nodes": [17, 33],
-    "resource_profile": "P0_VERIFY"
+    "reference_nodes": [17, 33, 65, 129, 257],
+    "reference_protocol": "e02-reduced-reference-diagnostic-v1",
+    "resource_profile": "P1_LOOP"
   },
   "experiments": [
     {
