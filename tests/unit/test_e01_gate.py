@@ -71,9 +71,33 @@ def _gate_text() -> str:
 
 
 def test_the_gate_runs_the_stage_validators_with_fail_on_skip() -> None:
+    """The validator step names the stage validators and refuses to count a skip as a pass.
+
+    The file list moved into a `validators` array when Task 13 made the black-oil validators
+    conditional on the black-oil suite having run, so the assertion is on the array and on
+    the `pytest` line that expands it rather than on one line carrying both.
+    """
     lines = _gate_text().splitlines()
-    line = next(x for x in lines if "test_e01_stage.py" in x and "pytest" in x)
-    assert "--fail-on-skip" in line, line
+    declared = next(x for x in lines if "validators=(" in x and "test_e01_stage.py" in x)
+    assert "tests/integration/test_e01_stage.py" in declared, declared
+    invocation = next(x for x in lines if "pytest" in x and "validators[@]" in x and "run" in x)
+    assert "--fail-on-skip" in invocation, invocation
+    assert "--run-e01-physics" in invocation, invocation
+
+
+def test_the_black_oil_validators_run_only_when_the_black_oil_suite_did() -> None:
+    """Plan 13.5: an oil-water gate must not fail for want of a black-oil session.
+
+    `tests/integration/test_e01_blackoil.py` reads a published `bo` session and
+    `--fail-on-skip` turns a missing one into a failure, so listing it unconditionally would
+    couple the two gates the capability is kept separate from.
+    """
+    text = _gate_text()
+    assert "test_e01_blackoil.py" in text
+    guard = next(
+        x for x in text.splitlines() if "test_e01_blackoil.py" in x and "validators+=" in x
+    )
+    assert '*" bo "*)' in guard, guard
 
 
 def test_the_gate_names_check_frozen_at_all() -> None:

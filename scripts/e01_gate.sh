@@ -61,6 +61,10 @@ cd "$ROOT"
 
 UV="${UV:-uv}"
 CONFIG="${E01_CONFIG:-configs/e01.yml}"
+# The oil-water matrix. The black-oil capability runs in a SESSION OF ITS OWN (plan 13.4) —
+# `E01_SUITES="bo" scripts/e01_gate.sh`, or `so-recon verify-physics --suite bo` directly —
+# because its early compilation belongs to that session's budget and not to this one's, and
+# because its verdict is a separate gate that must not move the oil-water one.
 SUITES="${E01_SUITES:-p0 p1}"
 
 LOG_DIR="artifacts/gate"
@@ -73,6 +77,10 @@ LOG_FILE="${LOG_DIR}/e01-gate-$(date -u +%Y%m%dT%H%M%SZ).log"
 # must not rebaseline E00 (plan 12.8).
 FROZEN_PATHS=(
   configs/e01_tolerances.yml
+  # Task 13: the black-oil capability's own tolerance block. It is a separate gate (plan
+  # 13.5) with a separate frozen block, and a gate that moved its own thresholds is not a
+  # gate whichever block they live in.
+  configs/e01_blackoil_tolerances.yml
   configs/e01_jobs.json
   configs/smoke_expected.json
   reports/environment_report.md
@@ -195,8 +203,17 @@ main() {
       "$UV" run so-recon --config "$CONFIG" verify-physics --suite "$suite"
   done
 
+  # The black-oil validators are added only when THIS invocation ran the black-oil suite.
+  # They read a published `bo` session and `--fail-on-skip` turns a missing one into a
+  # failure, so listing them unconditionally would make an oil-water gate fail for want of a
+  # capability plan 13.5 keeps deliberately separate from it. `${a[@]+"${a[@]}"}` is the
+  # expansion that is safe for an empty array under `set -u` on bash 3.2.
+  local validators=(tests/integration/test_e01_stage.py)
+  case " $SUITES " in
+    *" bo "*) validators+=(tests/integration/test_e01_blackoil.py) ;;
+  esac
   step "6/8 stage validators on the artifacts those suites saved (no skips allowed)" \
-    "$UV" run pytest tests/integration/test_e01_stage.py --run-e01-physics --fail-on-skip -q
+    "$UV" run pytest ${validators[@]+"${validators[@]}"} --run-e01-physics --fail-on-skip -q
 
   echo "-- 7/8 locating the run directories those suites published --"
   local report_runs
