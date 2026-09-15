@@ -298,6 +298,7 @@ def _weighted_summary(state: SMCState) -> dict[str, float]:
         "evidence": math.exp(state.log_evidence),
         "family_one_probability": family_one,
         "beta": state.beta,
+        "unique_ancestors": len({particle.ancestor_id for particle in state.particles}),
     }
 
 

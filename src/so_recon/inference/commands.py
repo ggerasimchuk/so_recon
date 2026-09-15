@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
+from scipy.special import logsumexp
+from scipy.stats import norm
+
 from so_recon.config.schema import ProjectConfig
+from so_recon.inference.weights import normalize_log_weights
+from so_recon.observation.bins import bin_log_probs, rounding_grid
+from so_recon.observation.logs import log_date_mixture
 from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import write_json_artifact
 from so_recon.registry.run import RunContext, RunStatus
@@ -19,7 +27,12 @@ from so_recon.validation.e02_report import (
     build_e02_report,
     render_e02_report,
 )
-from so_recon.validation.toy_inverse import bimodal_reference, gaussian_reference
+from so_recon.validation.toy_inverse import (
+    bimodal_reference,
+    gaussian_reference,
+    prior_predictive_calibration,
+    toy_suite,
+)
 
 
 def e02_exit_code(algorithm_status: str, convergence_status: str) -> int:
@@ -31,6 +44,89 @@ def forecast_forward_calls(n_particles: int, max_beta_steps: int, moves_per_leve
     if n_particles < 1 or max_beta_steps < 1 or moves_per_level < 1:
         raise ValueError("forecast dimensions must be positive")
     return n_particles + n_particles * max_beta_steps * moves_per_level
+
+
+def _target_summary(run: dict[str, object], name: str) -> dict[str, float]:
+    return cast(dict[str, float], run[name])
+
+
+def _math_acceptance() -> tuple[dict[str, bool], dict[str, Any]]:
+    """Execute the frozen pure E02 acceptance matrix used by the unit gate."""
+    runs64 = [toy_suite(seed, 64) for seed in range(20)]
+    runs32 = [toy_suite(seed, 32) for seed in range(5)]
+    gaussian = [_target_summary(run, "gaussian") for run in runs64]
+    pooled_mean = float(np.mean([row["mean"] for row in gaussian]))
+    pooled_variance = float(
+        np.mean([row["variance"] + (row["mean"] - pooled_mean) ** 2 for row in gaussian])
+    )
+    evidence = np.asarray([row["evidence"] for row in gaussian], dtype=np.float64)
+    reference_mean, reference_variance, reference_logz = gaussian_reference(0.0, 1.0, 2.0, 1.0)
+    reference_evidence = math.exp(reference_logz)
+    gaussian_pass = (
+        abs(pooled_mean - reference_mean) <= 0.08 * math.sqrt(reference_variance)
+        and abs(pooled_variance / reference_variance - 1.0) <= 0.12
+        and abs(float(evidence.mean()) / reference_evidence - 1.0) <= 0.10
+        and all(
+            run["algorithm_status"] == {"gaussian": "COMPLETE", "bimodal": "COMPLETE"}
+            for run in runs64
+        )
+    )
+    family = np.asarray(
+        [_target_summary(run, "bimodal")["family_one_probability"] for run in runs64]
+    )
+    expected_family = cast(tuple[float, ...], bimodal_reference()["family_probabilities"])[1]
+    missed_mode_pass = (
+        abs(float(family.mean()) - expected_family) <= 0.06 and np.count_nonzero(family > 0.0) >= 18
+    )
+    paired_pass = [run["seed"] for run in runs32] == [run["seed"] for run in runs64[:5]]
+
+    calibration = prior_predictive_calibration(20260915, repetitions=200, n_particles=32)
+    smc_interval = cast(tuple[float, float], calibration["smc_coverage_wilson_95"])
+    exact_interval = cast(tuple[float, float], calibration["exact_coverage_wilson_95"])
+    generator_pass = smc_interval[0] <= 0.9 <= smc_interval[1]
+    generator_pass = generator_pass and exact_interval[0] <= 0.9 <= exact_interval[1]
+
+    grid = rounding_grid(0.01)
+    bin_logs = bin_log_probs(grid, mu=0.7, sigma=0.03, nu=5.0)
+    normalized_pass = abs(float(logsumexp(bin_logs))) < 1.0e-12
+    date_pass = math.isclose(
+        log_date_mixture(np.log([0.1, 0.8]), np.array([0.25, 0.75])),
+        math.log(0.625),
+        rel_tol=0.0,
+        abs_tol=1.0e-12,
+    )
+
+    rng = np.random.default_rng(221)
+    particles = rng.normal(3.0, 1.0, size=100_000)
+    corrected, _ = normalize_log_weights(
+        norm.logpdf(particles) + norm.logpdf(2.0, particles, 1.0) - norm.logpdf(particles, 3.0, 1.0)
+    )
+    corrected_mean = float(np.exp(corrected) @ particles)
+    measure_pass = abs(corrected_mean - 1.0) <= 0.03
+    checks = {
+        "likelihood_normalized": bool(normalized_pass),
+        "generator_calibrated": bool(generator_pass),
+        "date_mixture": bool(date_pass),
+        "measure_consistent": bool(measure_pass),
+        "toy_reference": bool(gaussian_pass and missed_mode_pass and paired_pass),
+    }
+    diagnostics: dict[str, Any] = {
+        "pooled_gaussian_mean": pooled_mean,
+        "pooled_gaussian_variance": pooled_variance,
+        "mean_evidence": float(evidence.mean()),
+        "evidence_mc_se": float(evidence.std(ddof=1) / math.sqrt(evidence.size)),
+        "family_one_probability": float(family.mean()),
+        "family_nonzero_runs": int(np.count_nonzero(family > 0.0)),
+        "smc_coverage": calibration["smc_coverage"],
+        "smc_coverage_wilson_95": smc_interval,
+        "exact_coverage": calibration["exact_coverage"],
+        "exact_coverage_wilson_95": exact_interval,
+        "corrected_shifted_proposal_mean": corrected_mean,
+        "unique_ancestors": min(
+            int(_target_summary(run, "gaussian")["unique_ancestors"]) for run in runs64
+        ),
+    }
+    return checks, diagnostics
 
 
 def _publish_status(
@@ -80,11 +176,8 @@ def run_e02(
     def body(ctx: RunContext, log: logging.Logger) -> tuple[RunStatus, list[str]]:
         del log
         if suite == "math":
-            mean, variance, logz = gaussian_reference(0.0, 1.0, 2.0, 1.0)
-            bimodal = bimodal_reference()
-            family_probabilities = cast(tuple[float, ...], bimodal["family_probabilities"])
-            passing = mean == 1.0 and variance == 0.5 and logz < 0.0
-            passing = passing and abs(sum(family_probabilities) - 1.0) < 1.0e-12
+            checks, diagnostics = _math_acceptance()
+            passing = all(checks.values())
             _publish_status(
                 ctx,
                 paths,
@@ -92,14 +185,8 @@ def run_e02(
                 algorithm_status="COMPLETE" if passing else "EVALUATION_FAILURE",
                 convergence_status="PASS" if passing else "FAIL",
                 beta=1.0,
-                checks={
-                    "likelihood_normalized": passing,
-                    "generator_calibrated": passing,
-                    "date_mixture": passing,
-                    "measure_consistent": passing,
-                    "toy_reference": passing,
-                },
-                diagnostics={"unique_ancestors": inference.n_particles},
+                checks=checks,
+                diagnostics=diagnostics,
             )
             return ("PASS" if passing else "FAIL"), []
         note = (
