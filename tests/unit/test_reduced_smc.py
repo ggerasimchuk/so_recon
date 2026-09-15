@@ -37,11 +37,7 @@ def test_reduced_smc_requires_both_seeds_at_both_particle_counts() -> None:
 
 def test_beta_one_is_not_enough_when_reference_statistics_fail() -> None:
     reference = {"mean": 0.70, "quantiles": [0.48, 0.68, 0.98], "logz": -7.75}
-    rows = [
-        _summary(n, seed, 1.2, (0.9, 1.1, 1.4))
-        for n in (32, 64)
-        for seed in (11, 12)
-    ]
+    rows = [_summary(n, seed, 1.2, (0.9, 1.1, 1.4)) for n in (32, 64) for seed in (11, 12)]
 
     result = compare_reduced_smc_summaries(rows, reference)
 

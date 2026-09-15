@@ -142,9 +142,15 @@ def _source_hash(paths: ProjectPaths) -> str:
     return sha256_json({paths.relative(path): sha256_file(path) for path in files})
 
 
-def _output_request(observations: ObservationBundle) -> OutputRequest:
-    requested = {0.0}
+def _output_request(
+    observations: ObservationBundle, state_times_s: tuple[float, ...] = ()
+) -> OutputRequest:
+    requested = {0.0, *state_times_s}
     requested.update(time for row in observations.logs for time in row.date_times_s)
+    if any(not math.isfinite(value) or value < 0.0 for value in requested):
+        raise ValueError("physical output times must be finite and non-negative")
+    if any(value > observations.cutoff_s for value in requested):
+        raise ValueError("physical output times cannot exceed the observation cutoff")
     return OutputRequest(
         state_times_s=tuple(sorted(requested)),
         keep_native_restart=False,
@@ -171,6 +177,7 @@ class PhysicalTarget:
         simulate_fn: SimulateFunction = simulate,
         load_forward_fn: LoadForwardFunction = load_forward_result,
         adapter_hash: str | None = None,
+        state_times_s: tuple[float, ...] = (),
     ) -> None:
         self.prior = prior
         self.proposal = proposal
@@ -185,6 +192,7 @@ class PhysicalTarget:
         self.likelihood_cache = likelihood_cache or ArtifactCache(self.paths, "likelihood")
         self.simulate_fn = simulate_fn
         self.load_forward_fn = load_forward_fn
+        self.state_times_s = tuple(sorted(set(float(value) for value in state_times_s)))
         self.solver_config = SolverConfig(
             max_timestep_days=DEFAULT_MAX_TIMESTEP_DAYS,
             max_nonlinear_iterations=BASE_MAX_NONLINEAR_ITERATIONS,
@@ -210,6 +218,7 @@ class PhysicalTarget:
                 "adapter_hash": self.adapter_hash,
                 "environment_lock_hash": worker.environment_lock_hash,
                 "operator_hash": self.operator_hash,
+                "state_times_s": self.state_times_s,
             }
         )
         self.checkpoint_hashes = {
@@ -222,6 +231,9 @@ class PhysicalTarget:
             "adapter_hash": self.adapter_hash,
             "lock_hash": worker.environment_lock_hash,
             "operator_hash": self.operator_hash,
+            "output_request_hash": sha256_json(
+                _output_request(self.observations, self.state_times_s).model_dump(mode="json")
+            ),
         }
 
     def _publish_forward(self, result: ForwardResult, ctx: RunContext) -> ArtifactRef:
@@ -265,7 +277,7 @@ class PhysicalTarget:
         ctx = self.run_factory("inverse-evaluation", self.parent_run_ids)
         try:
             case = build_inverse_case(rendered, self.context, self.paths, ctx)
-            request = _output_request(self.observations)
+            request = _output_request(self.observations, self.state_times_s)
             f_key = forward_key(
                 physical={**model_hash_payload(case), "cutoff": case.cutoff},
                 solver_hash=self.solver_hash,
@@ -369,9 +381,7 @@ class ReducedPhysicalTarget:
         self.parent_run_ids = parent_run_ids
         self.paths = worker.paths
         self.forward_cache = forward_cache or ArtifactCache(self.paths, "reduced-forward")
-        self.likelihood_cache = likelihood_cache or ArtifactCache(
-            self.paths, "reduced-likelihood"
-        )
+        self.likelihood_cache = likelihood_cache or ArtifactCache(self.paths, "reduced-likelihood")
         self.simulate_fn = simulate_fn
         self.load_forward_fn = load_forward_fn
         self.solver_config = SolverConfig(
@@ -496,9 +506,7 @@ class ReducedPhysicalTarget:
             likelihood_ref = self.likelihood_cache.get(l_key)
             if likelihood_ref is None:
                 predicted = predict_observations(result, self.observations, self.paths)
-                likelihood = evaluate_loglik(
-                    predicted, self.observations, FIXED_NOISE_THETA
-                )
+                likelihood = evaluate_loglik(predicted, self.observations, FIXED_NOISE_THETA)
                 likelihood_ref = write_json_artifact(
                     ctx.run_dir / "likelihood.json",
                     likelihood.model_dump(mode="json"),

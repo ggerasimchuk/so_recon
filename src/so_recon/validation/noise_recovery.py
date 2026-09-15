@@ -166,11 +166,7 @@ def noise_posterior(
     sigma = SIGMA_MIN + SIGMA_SPAN * ndtr(latent)
     rho = RHO_MAX * ndtr(latent)
     log_likelihood = selected_history_loglik_grid(rows, prediction, sigma, rho, grid)
-    log_mass = (
-        log_likelihood
-        + np.log(prior_weights)[:, None]
-        + np.log(prior_weights)[None, :]
-    )
+    log_mass = log_likelihood + np.log(prior_weights)[:, None] + np.log(prior_weights)[None, :]
     log_evidence = float(logsumexp(log_mass))
     weights = np.exp(log_mass - log_evidence)
     sigma_weights = weights.sum(axis=1)
@@ -194,9 +190,7 @@ def noise_posterior(
     }
 
 
-def compare_noise_grids(
-    coarse: Mapping[str, Any], fine: Mapping[str, Any]
-) -> dict[str, Any]:
+def compare_noise_grids(coarse: Mapping[str, Any], fine: Mapping[str, Any]) -> dict[str, Any]:
     sigma_quantile_change = float(
         np.max(
             np.abs(
@@ -225,9 +219,7 @@ def compare_noise_grids(
     return {
         "status": "CONVERGED" if all(checks.values()) else "UNRESOLVED_REFERENCE",
         "checks": checks,
-        "sigma_mean_change": abs(
-            float(fine["sigma_mean"]) - float(coarse["sigma_mean"])
-        ),
+        "sigma_mean_change": abs(float(fine["sigma_mean"]) - float(coarse["sigma_mean"])),
         "rho_mean_change": abs(float(fine["rho_mean"]) - float(coarse["rho_mean"])),
         "sigma_quantile_change": sigma_quantile_change,
         "rho_quantile_change": rho_quantile_change,
@@ -406,9 +398,7 @@ def noise_contract_checks(
     month3 = next(row for row in drawn if row.month_index == 3)
     observed_dry_refused = False
     forced_observed = tuple(
-        row.model_copy(
-            update={"observed_valid": True, "raw_value": 0.0, "bin_index": 0}
-        )
+        row.model_copy(update={"observed_valid": True, "raw_value": 0.0, "bin_index": 0})
         if row.month_index == 3
         else row
         for row in template

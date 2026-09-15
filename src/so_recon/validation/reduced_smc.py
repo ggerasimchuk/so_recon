@@ -71,9 +71,7 @@ def compare_reduced_smc_summaries(
         )
         seeds = [int(cast(int, row["seed"])) for row in rows]
         if seeds != [11, 12]:
-            raise ValueError(
-                f"N{n_particles} comparison requires exactly seeds 11/12, got {seeds}"
-            )
+            raise ValueError(f"N{n_particles} comparison requires exactly seeds 11/12, got {seeds}")
         complete = all(
             row.get("algorithm_status") == "COMPLETE"
             and _finite_number(row["beta"], label="beta") == 1.0

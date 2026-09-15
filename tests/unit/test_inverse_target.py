@@ -27,6 +27,7 @@ from so_recon.inference.target import (
     PhysicalTarget,
     ReducedPhysicalTarget,
     _grids,
+    _output_request,
     require_complete_forward,
 )
 from so_recon.observation.predict import extract_monthly_watercut, predict_observations
@@ -205,6 +206,11 @@ def test_prediction_extracts_exact_saved_support_states(tmp_path: Path) -> None:
     assert result.fw == {("P1", 0): 0.5}
     assert result.so_support[("L1", 0.0)] == pytest.approx(0.5)
     assert result.so_support[("L1", 2.0)] == pytest.approx(0.7)
+
+
+def test_physical_target_can_request_registered_report_states_beside_log_dates() -> None:
+    request = _output_request(_bundle(), (0.0, 1.0, 2.0))
+    assert request.state_times_s == (0.0, 1.0, 2.0)
 
 
 def test_prediction_refuses_a_log_date_the_forward_did_not_save(tmp_path: Path) -> None:
