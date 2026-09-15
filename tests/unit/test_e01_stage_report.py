@@ -346,6 +346,77 @@ def test_the_ow_gate_passes_when_the_whole_matrix_does(tmp_path: Path) -> None:
     assert report.ow_gate == "PASS"
 
 
+# --------------------------------------------------------------------------------------
+# E01.13 — a black-oil capability that FAILED is a limitation, not a silent PASS
+# --------------------------------------------------------------------------------------
+
+
+def _green_ow(paths: ProjectPaths) -> tuple[Path, Path]:
+    """A complete, passing oil-water matrix: p0 and p1, every mandatory check green."""
+    p0 = _green_p0(paths)
+    p1 = _write_run(
+        paths,
+        "20260915T040000Z-verify-physics-eeee",
+        suite="p1",
+        checks=tuple(_check(name) for name in P1_MANDATORY),
+        jobs=(_job("world41", accounting="ledger", group="worlds"),),
+    )
+    return p0, p1
+
+
+def _bo_run(paths: ProjectPaths, *, exit_code: int) -> Path:
+    """A published black-oil session with the given exit code, and nothing else."""
+    return _write_run(
+        paths,
+        "20260915T050000Z-verify-physics-ffff",
+        suite="bo",
+        checks=(_check("black_oil", "PASS" if exit_code == 0 else "FAIL"),),
+        jobs=(_job("bo_closed", group="black_oil"),),
+        exit_code=exit_code,
+    )
+
+
+def test_a_black_oil_capability_that_failed_is_named_and_does_not_read_as_a_clean_pass(
+    tmp_path: Path,
+) -> None:
+    """The three values of `bo_status`, against a complete and passing oil-water matrix.
+
+    Plan 13.5 fixes both halves of this. A black-oil failure must NOT fail the stage — an
+    oil-water deliverable is never removed or failed because a black-oil benchmark failed —
+    and it must not be invisible either. Before Task 13 only the `NOT_RUN` branch could be
+    reached, so `FAIL` fell through to `PASS` with a reason line reading "and black oil ran".
+    """
+    expected = {
+        None: ("PASS_WITH_LIMITATIONS", "NOT_RUN"),
+        0: ("PASS", None),
+        1: ("PASS_WITH_LIMITATIONS", "FAIL"),
+    }
+    for exit_code, (status, named) in expected.items():
+        paths = _paths(tmp_path / f"bo{exit_code}")
+        runs = list(_green_ow(paths))
+        if exit_code is not None:
+            runs.append(_bo_run(paths, exit_code=exit_code))
+        report = build_e01_report(tuple(runs), paths)
+        assert report.status == status, (exit_code, report.status, report.status_reason)
+        # The oil-water gate is untouched by the black-oil verdict either way (13.5).
+        assert report.ow_gate == "PASS", (exit_code, report.ow_gate)
+        if named is None:
+            assert report.bo_status == "PASS", exit_code
+            continue
+        assert report.bo_status == named, exit_code
+        assert named in report.status_reason, (
+            f"the stage status reason for a {named} black-oil capability is "
+            f"{report.status_reason!r}, which never mentions it"
+        )
+
+
+def test_a_failed_black_oil_capability_is_on_the_rendered_page(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    runs = (*_green_ow(paths), _bo_run(paths, exit_code=1))
+    text = render_e01_report(build_e01_report(runs, paths))
+    assert "BO status: FAIL" in text, text[:400]
+
+
 def test_the_rendered_page_prints_the_ow_gate(tmp_path: Path) -> None:
     """12.11 lists the OW gate as an element of the report. It was never rendered."""
     paths = _paths(tmp_path)

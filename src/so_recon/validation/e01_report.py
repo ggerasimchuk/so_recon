@@ -266,10 +266,18 @@ def _status(
         )
     if remaining:
         return "FAIL", f"planned jobs were never reached: {sorted(remaining)}"
-    if bo_status == "NOT_RUN":
+    # A black-oil capability that FAILED is a limitation on this stage, exactly as one that
+    # never ran is. It is not a stage FAIL — plan 13.5 is explicit that an oil-water
+    # deliverable is never removed or failed because a black-oil benchmark is missing or
+    # failed — but it is not a clean PASS either, and the reason line has to NAME it.
+    #
+    # Before Task 13 this branch could not be reached: `bo_status` was `NOT_RUN` for every
+    # session there was, so a FAIL fell through to `return "PASS", "... and black oil ran"`
+    # and the stage read PASS with no mention of the failure anywhere in that line.
+    if bo_status in ("NOT_RUN", "FAIL"):
         return (
             "PASS_WITH_LIMITATIONS",
-            "every mandatory oil-water check passed and the black-oil capability is NOT_RUN",
+            f"every mandatory oil-water check passed and the black-oil capability is {bo_status}",
         )
     return "PASS", "every mandatory check passed and black oil ran"
 
