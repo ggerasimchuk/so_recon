@@ -745,6 +745,7 @@ function requested_states(
         push!(so, Float64[saturations[2, c] for c in 1:n_cells])
         push!(pore, copy(pv))
         if black_oil
+            assert_blackoil_phase_properties(evaluated)
             # `rho_sc / rho(p)` is B only where the phase carries ONE component. A black-oil
             # oil phase carries dissolved gas — its mass density is
             # `(rho_o_sc + Rs * rho_g_sc) / Bo` — so reading B off the density would report a

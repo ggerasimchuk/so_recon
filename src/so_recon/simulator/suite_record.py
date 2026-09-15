@@ -330,6 +330,8 @@ class SuiteReport(StrictModel):
     finished_at: str
     git_commit: str | None
     git_dirty: bool | None
+    resume_input_hash: str | None = None
+    resume_evidence_hashes: dict[str, str] = {}
     environment_lock_hash: str
     tolerances_path: str
     tolerances_sha256: str

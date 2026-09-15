@@ -14,7 +14,8 @@
 #   and time together is the only honest way to refine a first-order upwind scheme: halving
 #   the cells alone raises the Courant number of every step.
 #
-# * The five-spot at 16x16 and at 48x48. This pair has no analytic answer, so what is measured
+# * The five-spot at 16x16 and at 48x48 (historical failed pair), plus
+#   112x112 and 144x144 (the predeclared acceptance pair). This pair has no analytic answer, so what is measured
 #   is AGREEMENT: the two are compared on a fixed 8x8 grid of physical zones that both meshes
 #   tile exactly, plus the standard-volume inventory and every monthly phase integral.
 #
@@ -29,7 +30,7 @@
 # cell. Completing every child would instead drill extra parallel trajectories.
 #
 # The five-spot is 256 cells with 5 wells over 36 months and its refinement is 2304 cells, so
-# both belong to P1_LOOP and neither may be run under P0_VERIFY, whose ceiling is 3 wells and
+# all four run with the bounded P1_LOOP diagnostics and neither may be run under P0_VERIFY, whose ceiling is 3 wells and
 # 12 report intervals.
 
 using Test
@@ -42,9 +43,12 @@ using JSON
 # and the adapter handle. Both `PROGRAM_FILE` guards make including them inert.
 include(joinpath(@__DIR__, "operations.jl"))
 
-#: The refinement pair of the five-spot: the 256-cell case plan 10.7 names, and one whole
-#: tripling of it. 48/16 = 3 preserves each original cell centre.
-const FIVE_SPOT_GRIDS = (16, 48)
+#: Keep the historical 16/48 pair and the fixed 112/144 reference pair.
+#: All are odd refinements of the base16 grid, preserving every well centre.
+# See the completion amendment: no tolerance, geometry or fluids changed.
+# The 16/48 failure remains an explicit diagnostic, never relabelled as PASS.
+const FIVE_SPOT_GRIDS = (16, 48, 112, 144)
+const FIVE_SPOT_ACCEPTANCE_PAIR = (112, 144)
 
 #: The fixed physical support both five-spot grids are compared on: 8x8 zones over the same
 #: 400 x 400 m extent, so each zone is 50 x 50 m. 16 and 48 are both whole multiples of 8, so
@@ -140,6 +144,7 @@ function selftest_refinement()
         "gravity_constant" => Jutul.gravity_constant,
         "support_side" => FIVE_SPOT_SUPPORT_SIDE,
         "five_spot_grids" => collect(FIVE_SPOT_GRIDS),
+        "five_spot_acceptance_pair" => collect(FIVE_SPOT_ACCEPTANCE_PAIR),
         # Exported so the Python side can prove this copy is still the frozen one.
         "five_spot_symmetry_abs_max" => FIVE_SPOT_SYMMETRY_ABS_MAX,
     )
@@ -216,16 +221,12 @@ function selftest_refinement()
         measured["five_spot_symmetry"] = symmetry
 
         # --- 10.8 the well index is RECOMPUTED, not carried over --------------------------
-        coarse_wi = well_index_totals(fixtures["five_spot_16"])
-        fine_wi = well_index_totals(fixtures["five_spot_48"])
-        @test sort(collect(keys(coarse_wi))) == sort(collect(keys(fine_wi)))
-        for name in keys(coarse_wi)
-            # Native Peaceman on a smaller cell gives a different number for the same radius.
-            # It is reported, not gated: what a refinement must not do is TUNE it back.
-            @test fine_wi[name] != coarse_wi[name]
+        wi = Dict{String,Any}(string(nx) => well_index_totals(fixtures["five_spot_$(nx)"])
+                              for nx in FIVE_SPOT_GRIDS)
+        for nx in FIVE_SPOT_GRIDS[2:end], name in keys(wi["16"])
+            @test wi[string(nx)][name] != wi["16"][name]
         end
-        measured["five_spot_well_index_total"] =
-            Dict{String,Any}("16" => coarse_wi, "48" => fine_wi)
+        measured["five_spot_well_index_total"] = wi
 
         # --- 10.8 the support both grids are compared on ----------------------------------
         support = Dict{String,Any}()

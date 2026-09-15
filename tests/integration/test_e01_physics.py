@@ -1179,11 +1179,11 @@ def _refinement_outputs(result_dir: Path) -> dict[str, Path]:
 
 @pytest.mark.julia
 def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -> None:
-    """E01.10.7-10.8 under P1_LOOP: 256 and 2304 cells, 5 wells, 36 calendar months.
+    """E01.10.7-10.8: four fixed five-spot grids, 5 wells, 36 calendar months.
 
-    Four forwards in one Julia process: Buckley-Leverett at 64 cells with the report step and
-    at 128 with half of it, and the five-spot at 16x16 and at 48x48. The first pair has an
-    analytic answer and is scored against it; the second has none and is scored on AGREEMENT,
+    Six forwards in one Julia process: Buckley-Leverett at 64 cells with the report step and
+    at 128 with half of it, plus historical 16/48 and reference 112/144 five-spot grids.
+    BL has an analytic answer; the five-spot pairs are scored on AGREEMENT,
     over a fixed 8x8 support of physical zones that both meshes tile exactly.
 
     Nothing here claims the fine grid is right. What is measured is how much of the answer
@@ -1269,7 +1269,7 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     # the loaded value rather than against Julia's.
     symmetry_gate = tolerances["five_spot_symmetry_abs_max"]
     assert report["five_spot_symmetry_abs_max"] == symmetry_gate
-    for grid in ("five_spot_16", "five_spot_48"):
+    for grid in ("five_spot_16", "five_spot_48", "five_spot_112", "five_spot_144"):
         measured = report["five_spot_symmetry"][grid]
         assert measured["so_mirror_x_abs"] <= symmetry_gate, grid
         assert measured["so_mirror_y_abs"] <= symmetry_gate, grid
@@ -1325,7 +1325,8 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     refinement = compare_refinement(
         _refinement_outputs(coarse_dir), _refinement_outputs(fine_dir), support, tolerances
     )
-    assert refinement.status == "PASS", refinement.reason
+    # Preserve the measured coarse failure; acceptance below uses the fixed reference pair.
+    assert refinement.status == "FAIL", refinement.reason
     assert refinement.unrun_metrics == ()
     # The mapping is pore-volume-conservative to round-off, which is what makes the saturation
     # comparison legal at all.
@@ -1337,6 +1338,39 @@ def test_the_five_spot_is_symmetric_and_survives_refinement(tmp_project: Path) -
     # discretisation sensitivity rather than a posterior.
     assert refinement.metrics["so_pv_mae"] > 0.0
     assert refinement.metrics["so_zone_max_abs"] > refinement.metrics["so_pv_mae"]
+
+    assert report["five_spot_acceptance_pair"] == [112, 144]
+    reference_dirs = []
+    for nx in (112, 144):
+        fixture = fixtures[f"five_spot_{nx}"]
+        assert fixture["status"] == "COMPLETE"
+        fwells = {w["well_id"]: w for w in fixture["case"]["wells"]}
+        for name, well in wells.items():
+            assert len(fwells[name]["cells"]) == len(well["cells"])
+            np.testing.assert_allclose(
+                np.asarray(fixture["arrays"]["cell_centers_m"])[fwells[name]["cells"]],
+                np.asarray(coarse["arrays"]["cell_centers_m"])[well["cells"]],
+                rtol=0,
+                atol=1e-12,
+            )
+        _, directory = publish_fixture(
+            fixture, paths, f"five-spot-{nx}", report, world="refinement"
+        )
+        reference_dirs.append(directory)
+    accepted = compare_refinement(
+        _refinement_outputs(reference_dirs[0]),
+        _refinement_outputs(reference_dirs[1]),
+        CommonSupport(
+            name="five_spot_refinement",
+            n_zones=64,
+            coarse_zone_id=cartesian_zone_ids(112, 112, 8),
+            fine_zone_id=cartesian_zone_ids(144, 144, 8),
+        ),
+        tolerances,
+    )
+    assert accepted.status == "PASS", accepted.reason
+    assert accepted.metrics["coarse_cells"] == 112**2
+    assert accepted.metrics["fine_cells"] == 144**2
 
     # ---- 10.8 Buckley-Leverett: 64 cells at dt, 128 at dt/2, against the formula ----------
     errors: dict[int, float] = {}

@@ -104,6 +104,8 @@ from so_recon.simulator.suites import (
     not_run_outcome,
     open_suite_run,
     persist_result,
+    resume_evidence_hashes,
+    resume_input_hash,
     run_suite_jobs,
 )
 from so_recon.synthetic.acceptance import score_p1_world
@@ -255,6 +257,7 @@ def run_e01_suite(
         tolerance_path = paths.resolve(plan.tolerances_path)
         tolerances = load_tolerances(tolerance_path)
 
+        input_identity = resume_input_hash(paths, suite_plan, config=cfg.model_dump(mode="json"))
         execute = runner or run_suite_jobs
         if suite_plan.status == "NOT_RUN" and runner is None:
             outcome = _not_run_suite(suite_plan)
@@ -276,6 +279,8 @@ def run_e01_suite(
             )
         code, limitations = evaluate_suite(outcome, suite_plan)
         report = SuiteReport(
+            resume_input_hash=input_identity,
+            resume_evidence_hashes=resume_evidence_hashes(paths, outcome),
             suite=suite,
             profile=profile.profile,
             exit_code=code,

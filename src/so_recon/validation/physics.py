@@ -606,6 +606,9 @@ _FIXTURES: dict[str, Fixture] = {
     ),
 }
 
+# The retained coarse-grid diagnostic uses exactly the same equations and tolerances.
+_FIXTURES["five_spot_coarse_sensitivity"] = _FIXTURES["five_spot_refinement"]
+
 #: Reference density of water at standard conditions (plan §3.1). The published `bw` is
 #: `rho_w_sc / rho_w(p)`, so this is what turns it back into the density the flux used.
 RHO_W_SC_KG_M3 = 1000.0

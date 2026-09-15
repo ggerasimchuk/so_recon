@@ -101,7 +101,7 @@ launcher runs with a `--out` path, and each bounded by the profile's job timeout
     julia --project=julia julia/verification/fixtures.jl   --test-controls   # calendar (7 forwards)
     julia --project=julia julia/verification/analytic.jl   --test-analytic   # 9.5-9.7 (7 forwards)
     julia --project=julia julia/verification/operations.jl --test-operations # 10.4-10.6 (9 forwards)
-    julia --project=julia julia/verification/refinement.jl --test-refinement # 10.7-10.8 (4 forwards)
+    julia --project=julia julia/verification/refinement.jl --test-refinement # 10.7-10.8 (6 forwards)
     julia --project=julia julia/verification/blackoil.jl   --test-blackoil   # 13.1-13.4 (2 forwards)
 
 `so-recon verify-physics --suite {p0|p1}` runs the first four, publishes each fixture through
@@ -122,3 +122,5 @@ persistent worker and IS charged to a ledger.
 `julia/worker/main.jl` is the persistent worker. One process per session, at most one alive
 at a time, four Julia threads and one BLAS thread (COMPUTE §5), every job isolated by its
 descriptor. The forwards that go through it ARE charged to a ledger, attempt by attempt.
+
+E01 completion (2026-09-15): the refinement diagnostic retains the failed 16/48 comparison and adds the fixed 112/144 reference pair at the unchanged 1 ml phase-volume tolerance. Acceptance of that pair is not certification of the 16-grid or the heterogeneous P1 generator. See `docs/superpowers/plans/2026-09-15-e01-completion.md`.

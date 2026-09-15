@@ -769,3 +769,51 @@ def test_a_passing_row_still_reports_the_measurement_closest_to_its_gate(tmp_pat
     run = _green_p0(paths)
     row = _matrix_row(render_e01_report(build_e01_report((run,), paths)), "hydrostatic")
     assert "balance_cumulative_relative" in row, row
+
+
+def test_reference_grid_acceptance_keeps_coarse_failure_as_resolution_limitation(
+    tmp_path: Path,
+) -> None:
+    paths = _paths(tmp_path)
+    p0 = _write_run(paths, "p0", suite="p0", checks=tuple(_check(n) for n in P0_MANDATORY))
+    p1 = _write_run(
+        paths,
+        "p1",
+        suite="p1",
+        checks=(
+            *(_check(n) for n in P1_MANDATORY),
+            _check("five_spot_coarse_sensitivity", "FAIL"),
+        ),
+    )
+    bo = _write_run(
+        paths,
+        "bo",
+        suite="bo",
+        checks=(
+            _check("black_oil"),
+            _check("black_oil_restart"),
+        ),
+    )
+    report = build_e01_report((p0, p1, bo), paths)
+    assert report.status == "PASS_WITH_LIMITATIONS"
+    assert "112/144" in report.status_reason
+    assert any(
+        c.name == "five_spot_coarse_sensitivity" and c.status == "FAIL" for c in report.checks
+    )
+
+
+def test_failed_reference_pair_never_claims_acceptance(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    p0 = _write_run(paths, "p0", suite="p0", checks=tuple(_check(n) for n in P0_MANDATORY))
+    p1 = _write_run(
+        paths,
+        "p1",
+        suite="p1",
+        checks=(
+            *(_check(n, "FAIL" if n == "five_spot_refinement" else "PASS") for n in P1_MANDATORY),
+            _check("five_spot_coarse_sensitivity", "FAIL"),
+        ),
+    )
+    report = build_e01_report((p0, p1), paths)
+    assert report.status == "FAIL"
+    assert not any("convergence is accepted" in line for line in report.limitations)

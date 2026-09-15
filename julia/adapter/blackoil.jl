@@ -151,6 +151,61 @@ function blackoil_relperm_export(fluid::AbstractDict)
     )
 end
 
+# Canonical table bytes are written explicitly: a Dict's iteration order is not sorted.
+function blackoil_canonical_json(value)
+    if value isa AbstractDict
+        return "{" * join([
+            JSON.json(String(k)) * ":" * blackoil_canonical_json(value[k])
+            for k in sort(collect(keys(value)); by = String)
+        ], ",") * "}"
+    elseif value isa AbstractVector
+        return "[" * join(blackoil_canonical_json.(value), ",") * "]"
+    end
+    return JSON.json(value)
+end
+
+blackoil_table_digest(value) = bytes2hex(sha256(blackoil_canonical_json(value)))
+
+function blackoil_table_hashes(pvt_export::AbstractDict, relperm_export::AbstractDict)
+    hashes = Dict{String,Any}(
+        name => blackoil_table_digest(pvt_export[name]) for name in ("pvtw", "pvto", "pvdg")
+    )
+    hashes["relperm"] = blackoil_table_digest(relperm_export)
+    hashes["tables"] = blackoil_table_digest(pvt_export)
+    hashes["jutuldarcy_version"] = blackoil_table_digest(Dict(
+        "Jutul" => pvt_export["jutul_version"],
+        "JutulDarcy" => pvt_export["jutuldarcy_version"],
+    ))
+    return hashes
+end
+
+"""Reject nonphysical native phase properties on every extracted BO trajectory state."""
+function assert_blackoil_phase_properties(state)
+    for field in (:PhaseMassDensities, :PhaseViscosities)
+        all(x -> isfinite(x) && x > 0.0, state[field]) ||
+            error("black-oil trajectory: $(field) must be finite and strictly positive")
+    end
+    return nothing
+end
+
+function assert_blackoil_provenance(fluid, pvt)
+    get(fluid, "pvt_source", nothing) == BO_PVT_SOURCE ||
+        invalid("build_blackoil: unsupported pvt_source; expected $(BO_PVT_SOURCE)")
+    actual = blackoil_table_hashes(blackoil_pvt_export(pvt), blackoil_relperm_export(fluid))
+    declared = get(fluid, "pvt_table_hashes", nothing)
+    declared isa AbstractDict || invalid("build_blackoil: missing pvt_table_hashes")
+    for name in ("pvtw", "pvto", "pvdg", "relperm")
+        haskey(declared, name) || invalid("build_blackoil: pvt_table_hashes missing $(name)")
+    end
+    for (name, digest) in declared
+        haskey(actual, name) || invalid("build_blackoil: unsupported pvt_table_hashes entry $(name)")
+        digest == actual[name] || invalid(
+            "build_blackoil: pvt_table_hashes.$(name) does not match the constructed table",
+        )
+    end
+    return actual
+end
+
 """
     assert_physical_blackoil_fluid(fluid)
 
@@ -285,6 +340,8 @@ function build_blackoil(case::AbstractDict, arrays::AbstractDict)
         "declares fluids.kind $(repr(get(fluid, "kind", nothing)))",
     )
     assert_physical_blackoil_fluid(fluid)
+    pvt = blackoil_pvt()
+    assert_blackoil_provenance(fluid, pvt)
 
     @assert Jutul.gravity_constant == STANDARD_GRAVITY_M_S2
     declared_gravity = Float64(case["gravity_m_s2"])
@@ -335,7 +392,6 @@ function build_blackoil(case::AbstractDict, arrays::AbstractDict)
         ) for w in declared_wells
     ]
 
-    pvt = blackoil_pvt()
     declared_rho = Float64.(fluid["density_sc_kg_m3"])
     # The case's own densities have to BE the benchmark's, in phase order. A case that
     # declared something else would be declaring a PVT this constructor does not build: the

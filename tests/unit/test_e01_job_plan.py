@@ -1,9 +1,7 @@
 """E01.12.4 — the planned matrix against the forwards that really run.
 
-A forward with no row is a forward nobody accounted for. The refinement diagnostic runs
-FOUR forwards (`julia/README.md`: "10.7-10.8 (4 forwards)") and the P1 plan listed three,
-so `bl_64` — declared in the P0 table and deferred to P1 — had no `JobOutcome` anywhere and
-the launcher wall time was divided by three instead of four.
+Every diagnostic forward must have an accounting row. The completion amendment adds
+112/144 reference grids while retaining both historical five-spot grids and both BL runs.
 
 These tests read `configs/e01_jobs.json` itself. They are about the PLAN, not about a
 session: nothing here launches anything.
@@ -43,10 +41,17 @@ def _fixtures(jobs: list[dict[str, Any]]) -> set[str]:
 
 
 def test_the_p1_refinement_group_lists_every_forward_the_diagnostic_runs() -> None:
-    """`refinement.jl` runs bl_64, bl_128, five_spot_16 and five_spot_48. All four get a row."""
+    """`refinement.jl` runs two BL and four five-spot forwards. All six get a row."""
     jobs = [j for j in _plan()["suites"]["p1"]["jobs"] if j["group"] == "refinement"]
-    assert _fixtures(jobs) == {"bl_64", "bl_128", "five_spot_16", "five_spot_48"}
-    assert len(jobs) == 4, "one launcher forward per fixture the diagnostic really runs"
+    assert _fixtures(jobs) == {
+        "bl_64",
+        "bl_128",
+        "five_spot_16",
+        "five_spot_48",
+        "five_spot_112",
+        "five_spot_144",
+    }
+    assert len(jobs) == 6, "one launcher forward per fixture the diagnostic really runs"
 
 
 def test_the_deferred_p0_row_is_the_one_executed_in_p1() -> None:
@@ -78,19 +83,19 @@ def test_the_declared_counts_of_the_brief_have_not_moved() -> None:
 
 
 def test_the_plan_accounts_for_every_launcher_forward_the_diagnostics_run() -> None:
-    """7 analytic + 9 operational + 7 controls + 4 refinement = 27 launcher forwards."""
+    """7 analytic + 9 operational + 7 controls + 6 refinement = 29 launcher forwards."""
     plan = _plan()
     counted = plan["counting"]["test_launcher_forwards"]
     assert counted["analytic_fixtures"] + counted["operations_p0"] == 16
     assert counted["controls_diagnostic"] == 7
-    assert counted["refinement_p1"] == 4
+    assert counted["refinement_p1"] == 6
     rows = [
         job
         for suite in ("p0", "p1")
         for job in plan["suites"][suite]["jobs"]
         if job["accounting"] == "launcher" and job.get("deferred_to") is None
     ]
-    assert len(rows) == 27, sorted(job["job_id"] for job in rows)
+    assert len(rows) == 29, sorted(job["job_id"] for job in rows)
 
 
 # --------------------------------------------------------------------------------------

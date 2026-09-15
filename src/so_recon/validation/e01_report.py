@@ -697,6 +697,19 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         bo_status,
         any_evidence=bool(suites),
     )
+    coarse_failed = any(
+        c.name == "five_spot_coarse_sensitivity" and c.status == "FAIL" for c in checks
+    )
+    if coarse_failed:
+        limitation = (
+            "The designated reference comparison uses 112/144 grids; the 16/48 monthly "
+            "phase-volume comparison failed and remains reported. This is not a resolution "
+            "certificate for the 16-grid or heterogeneous P1/E02 models."
+        )
+        limitations.append(limitation)
+        if status in ("PASS", "PASS_WITH_LIMITATIONS"):
+            status = "PASS_WITH_LIMITATIONS"
+            reason += "; " + limitation
     limitations.append(SESSION_CAP_NOTE)
     # Every RESOURCE_FAILURE in the repository, not only the ones inside a cited suite.
     limitations.extend(resource_failures_across_runs(paths, run_dirs))

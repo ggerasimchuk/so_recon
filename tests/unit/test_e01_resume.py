@@ -163,6 +163,14 @@ def _publish_parent(
         launcher_forwards=2,
         ledger_forwards=0,
     )
+    evidence = paths.root / "artifacts" / "case-p0-closed_box.json"
+    evidence.write_text('{"diagnostic": "complete"}')
+    report = report.model_copy(
+        update={
+            "resume_input_hash": suites.resume_input_hash(paths, _plan()),
+            "resume_evidence_hashes": {paths.relative(evidence): sha256_file(evidence)},
+        }
+    )
     (run_dir / SUITE_REPORT_FILENAME).write_text(
         json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -294,7 +302,7 @@ def test_replay_re_enters_every_group(tmp_path: Path, monkeypatch: pytest.Monkey
     assert entered == ["analytic", "operations", "restart"]
 
 
-def test_a_matching_immutable_result_is_reused_without_entering_the_solver(
+def test_a_complete_ledger_without_result_evidence_does_not_reuse(
     tmp_path: Path,
 ) -> None:
     """`BudgetLedger.is_already_complete` gets the production caller it never had."""
@@ -325,9 +333,7 @@ def test_a_matching_immutable_result_is_reused_without_entering_the_solver(
 
     run = _suite_run(paths, tmp_path, resume=state)
     reused = run.reusable_outcome(run.planned("closed_cell"), case)
-    assert reused is not None
-    assert reused.status == "COMPLETE"
-    assert reused.reused_from_run_id == "20260915T000000Z-verify-physics-parent"
+    assert reused is None
 
 
 def test_a_replayed_session_reuses_nothing(tmp_path: Path) -> None:
@@ -601,3 +607,107 @@ def test_a_launcher_published_fixture_is_charged_to_the_session_disk_budget(
     assert run.session.output_bytes == 2048, (
         "a fixture the session published is bytes the session wrote"
     )
+
+
+@pytest.mark.parametrize(
+    "mutation", ["source", "plan", "tolerance", "environment", "missing", "corrupt", "cache_bypass"]
+)
+def test_resume_refuses_stale_or_unverifiable_group(tmp_path: Path, mutation: str) -> None:
+    paths = _paths(tmp_path)
+    ledger = _publish_parent(paths)
+    plan = _plan()
+    if mutation == "source":
+        source = paths.root / "julia" / "adapter" / "model.jl"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("changed native implementation")
+    elif mutation == "plan":
+        plan = plan.model_copy(update={"wall_budget_s": 599})
+    elif mutation == "cache_bypass":
+        plan = plan.model_copy(
+            update={"jobs": tuple(j.model_copy(update={"cache_bypass": True}) for j in plan.jobs)}
+        )
+    elif mutation == "tolerance":
+        (paths.root / "configs" / "e01_tolerances.yml").parent.mkdir(parents=True, exist_ok=True)
+        (paths.root / "configs" / "e01_tolerances.yml").write_text("changed")
+    elif mutation == "environment":
+        (paths.root / "uv.lock").write_text("changed")
+    else:
+        evidence = paths.root / "artifacts" / "case-p0-closed_box.json"
+        if mutation == "corrupt":
+            evidence.write_text("corrupted")
+        elif evidence.exists():
+            evidence.unlink()
+    state = load_resume_state(ledger, suite="p0", plan=plan, paths=paths)
+    assert state is None or not state.completed_groups
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "corrupt"])
+def test_resume_validates_result_outputs_not_only_record_hash(
+    tmp_path: Path, damage: str | None
+) -> None:
+    from tests.unit.test_forward_results import _extraction, _publish
+
+    paths, record = _publish(tmp_path, _extraction())
+    ledger = _publish_parent(paths)
+    report_path = ledger.parent.parent / SUITE_REPORT_FILENAME
+    report = json.loads(report_path.read_text())
+    report["jobs"][0]["accounting"] = "ledger"
+    report["jobs"][0]["result_record_path"] = paths.relative(record)
+    report["resume_evidence_hashes"][paths.relative(record)] = sha256_file(record)
+    report_path.write_text(json.dumps(report))
+    result = suites.load_forward_result(record, paths)
+    if damage == "missing":
+        paths.resolve(result.monthly_path).unlink()
+    elif damage == "corrupt":
+        paths.resolve(result.monthly_path).write_bytes(b"corrupted parquet")
+    state = load_resume_state(ledger, suite="p0", plan=_plan(), paths=paths)
+    assert state is not None
+    assert ("analytic" in state.completed_groups) == (damage is None)
+    if damage is None:
+        case = suites.load_case(paths.artifacts / "case.json", paths)
+        payload = json.loads(ledger.read_text())
+        payload["entries"] = [
+            {
+                "job_id": "verified-parent",
+                "model_hash": case.model_hash,
+                "case_sha256": case_manifest_sha256(case),
+                "attempt": 1,
+                "state": "COMPLETE",
+                "reserved_s": 1.0,
+                "reserved_bytes": 1024,
+                "cost": None,
+            }
+        ]
+        ledger.write_text(json.dumps(payload))
+        state = load_resume_state(ledger, suite="p0", plan=_plan(), paths=paths)
+        run = _suite_run(paths, tmp_path, resume=state)
+        assert run.reusable_outcome(run.planned("closed_cell"), case) is not None
+
+
+def test_cache_bypass_group_is_repeated_even_with_matching_identity(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    ledger = _publish_parent(paths)
+    plan = _plan()
+    plan = plan.model_copy(
+        update={"jobs": tuple(job.model_copy(update={"cache_bypass": True}) for job in plan.jobs)}
+    )
+    report_path = ledger.parent.parent / SUITE_REPORT_FILENAME
+    report = json.loads(report_path.read_text())
+    report["resume_input_hash"] = suites.resume_input_hash(paths, plan)
+    report_path.write_text(json.dumps(report))
+    state = load_resume_state(ledger, suite="p0", plan=plan, paths=paths)
+    assert state is not None
+    assert not state.completed_groups
+
+
+def test_legacy_report_without_identity_is_not_reused(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    ledger = _publish_parent(paths)
+    report_path = ledger.parent.parent / SUITE_REPORT_FILENAME
+    report = json.loads(report_path.read_text())
+    report.pop("resume_input_hash")
+    report_path.write_text(json.dumps(report))
+    state = load_resume_state(ledger, suite="p0", plan=_plan(), paths=paths)
+    assert state is not None
+    assert not state.completed_groups
+    assert not state.outcomes

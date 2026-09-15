@@ -52,8 +52,13 @@ from so_recon.config.schema import ProjectConfig
 from so_recon.environment.resources import ResourceSnapshot
 from so_recon.environment.resources import probe_resources as probe_machine
 from so_recon.paths import ProjectPaths
-from so_recon.registry.hashing import sha256_file
-from so_recon.registry.run import RUN_RECORD_SCHEMA_VERSION, RunContext, RunStatus
+from so_recon.registry.hashing import sha256_file, sha256_json
+from so_recon.registry.run import (
+    RUN_RECORD_SCHEMA_VERSION,
+    RunContext,
+    RunStatus,
+    environment_lock_hash,
+)
 from so_recon.runner import execute_run
 from so_recon.simulator.budget import BudgetLedger, BudgetStop, disk_stop, load_ledger
 from so_recon.simulator.case_io import (
@@ -732,8 +737,50 @@ class ResumeState:
         )
 
 
+def resume_input_hash(paths: ProjectPaths, plan: SuitePlan, *, config: Any = None) -> str:
+    """Bind reuse to actual source/config bytes, including dirty working-tree changes."""
+    files = {}
+    for directory, suffix in (("src", ".py"), ("julia", ".jl"), ("configs", "")):
+        for path in sorted((paths.root / directory).rglob("*")):
+            if path.is_file() and (not suffix or path.suffix == suffix):
+                files[paths.relative(path)] = sha256_file(path)
+    return sha256_json(
+        {
+            "files": files,
+            "environment": environment_lock_hash(paths),
+            "plan": plan.model_dump(mode="json"),
+            "config": config,
+        }
+    )
+
+
+def resume_evidence_hashes(paths: ProjectPaths, outcome: SuiteOutcome) -> dict[str, str]:
+    """Seal every published evidence file; missing evidence cannot become reusable."""
+    names = set(outcome.artifacts.values())
+    names.update(p for c in outcome.checks for p in c.evidence_paths)
+    names.update(j.result_record_path for j in outcome.jobs if j.result_record_path)
+    for name in tuple(names):
+        if Path(name).name in (
+            STATES_FILENAME,
+            MONTHLY_FILENAME,
+            CONNECTIONS_FILENAME,
+            BALANCES_FILENAME,
+        ):
+            names.add(str(Path(name).parent / RESULT_FILENAME))
+    hashes = {}
+    for name in names:
+        path = paths.resolve(paths.relative(Path(name)) if Path(name).is_absolute() else name)
+        candidates = sorted(path.rglob("*")) if path.is_dir() else [path]
+        for candidate in candidates:
+            if candidate.is_file():
+                hashes[paths.relative(candidate)] = sha256_file(candidate)
+            elif not candidate.exists():
+                hashes[paths.relative(candidate)] = "missing"
+    return hashes
+
+
 def load_resume_state(
-    ledger_path: Path, *, suite: str, plan: SuitePlan, paths: ProjectPaths
+    ledger_path: Path, *, suite: str, plan: SuitePlan, paths: ProjectPaths, config: Any = None
 ) -> ResumeState | None:
     """Read the session that printed `ledger_path`, or None when it published no record.
 
@@ -747,6 +794,23 @@ def load_resume_state(
     report = read_suite_report(run_dir)
     if report is None or report.suite != suite:
         return None
+    try:
+        identity_matches = report.resume_input_hash == resume_input_hash(paths, plan, config=config)
+        evidence_matches = bool(report.resume_evidence_hashes) and all(
+            paths.resolve(name).is_file() and sha256_file(paths.resolve(name)) == digest
+            for name, digest in report.resume_evidence_hashes.items()
+        )
+    except (OSError, ValueError):
+        identity_matches = evidence_matches = False
+    if identity_matches and evidence_matches:
+        try:
+            for name in report.resume_evidence_hashes:
+                if Path(name).name == RESULT_FILENAME:
+                    load_forward_result(paths.resolve(name), paths)
+        except (OSError, ValueError, RuntimeError):
+            evidence_matches = False
+    if not identity_matches or not evidence_matches:
+        return ResumeState(run_dir, report.run_id, report.suite, frozenset(), (), (), {}, ())
     ledgers: list[BudgetLedger] = []
     probe = _bounded_probe(run_dir)
     for path in sorted((run_dir / "ledgers").glob("*.json")):
@@ -754,12 +818,24 @@ def load_resume_state(
             ledgers.append(BudgetLedger.read(path, probe=probe))
         except (OSError, ValueError):  # a half-written ledger is not evidence of completion
             continue
-    by_id = {job.job_id: job for job in report.jobs}
+    valid_outcomes = []
+    for job in report.jobs:
+        if job.accounting == "ledger" and job.status == "COMPLETE":
+            try:
+                if job.result_record_path is None:
+                    continue
+                result = load_forward_result(paths.resolve(job.result_record_path), paths)
+                if result.status != job.status:
+                    continue
+            except (OSError, ValueError, RuntimeError):
+                continue
+        valid_outcomes.append(job)
+    by_id = {job.job_id: job for job in valid_outcomes}
     verdicts = {check.name: check for check in report.checks}
     completed: set[str] = set()
     for group in plan.groups:
         planned = plan.group_jobs(group)
-        if not planned:
+        if not planned or any(job.cache_bypass for job in planned):
             continue
         if not all(
             (found := by_id.get(job.job_id)) is not None and found.status == job.expected_outcome
@@ -782,7 +858,7 @@ def load_resume_state(
         run_id=report.run_id,
         suite=report.suite,
         completed_groups=frozenset(completed),
-        outcomes=report.jobs,
+        outcomes=tuple(valid_outcomes),
         checks=report.checks,
         artifacts=dict(report.artifacts),
         ledgers=tuple(ledgers),
@@ -891,6 +967,16 @@ class SuiteRun:
         if not state.already_complete(
             model_hash=case.model_hash, case_sha256=case_manifest_sha256(case)
         ):
+            return None
+        if previous.result_record_path is None:
+            return None
+        try:
+            result = load_forward_result(
+                self.paths.resolve(previous.result_record_path), self.paths
+            )
+            if result.status != "COMPLETE" or result.model_hash != case.model_hash:
+                return None
+        except (OSError, ValueError, RuntimeError):
             return None
         return previous.model_copy(
             update={
@@ -1190,22 +1276,35 @@ def _run_refinement(run: SuiteRun) -> None:
                 peak_rss_bytes=launched.peak_rss_bytes,
             )
         )
-    coarse, fine = directories["five_spot_16"], directories["five_spot_48"]
-    run.checks.append(evaluate_physics("five_spot", _outputs(coarse), run.tolerances))
-    support = CommonSupport(
-        name="five_spot_refinement",
-        n_zones=SUPPORT_SIDE**2,
-        coarse_zone_id=cartesian_zone_ids(16, 16, SUPPORT_SIDE),
-        fine_zone_id=cartesian_zone_ids(48, 48, SUPPORT_SIDE),
-    )
     run.checks.append(
-        compare_refinement(
-            {k: v for k, v in _outputs(coarse).items() if k in ("states", "monthly")},
-            {k: v for k, v in _outputs(fine).items() if k in ("states", "monthly")},
-            support,
-            run.tolerances,
-        )
+        evaluate_physics("five_spot", _outputs(directories["five_spot_16"]), run.tolerances)
     )
+    for nx, ny, name in (
+        (16, 48, "five_spot_coarse_sensitivity"),
+        (112, 144, "five_spot_refinement"),
+    ):
+        support = CommonSupport(
+            name=name,
+            n_zones=SUPPORT_SIDE**2,
+            coarse_zone_id=cartesian_zone_ids(nx, nx, SUPPORT_SIDE),
+            fine_zone_id=cartesian_zone_ids(ny, ny, SUPPORT_SIDE),
+        )
+        run.checks.append(
+            compare_refinement(
+                {
+                    k: v
+                    for k, v in _outputs(directories[f"five_spot_{nx}"]).items()
+                    if k in ("states", "monthly")
+                },
+                {
+                    k: v
+                    for k, v in _outputs(directories[f"five_spot_{ny}"]).items()
+                    if k in ("states", "monthly")
+                },
+                support,
+                run.tolerances,
+            )
+        )
     run.checks.append(_bl_refinement_check(run, report))
 
 
@@ -2375,7 +2474,9 @@ def open_suite_run(
         # takes the path a previous command printed, and a file that is not one is an
         # operator error rather than something to discover halfway through a session.
         load_ledger(resume_ledger)
-        state = load_resume_state(resume_ledger, suite=suite, plan=plan, paths=paths)
+        state = load_resume_state(
+            resume_ledger, suite=suite, plan=plan, paths=paths, config=cfg.model_dump(mode="json")
+        )
         if state is None:
             log.warning(
                 "%s names no published suite record for %s; every group of this session will run",

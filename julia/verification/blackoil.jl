@@ -109,33 +109,9 @@ by the name of the function that returned it would be identified by a name.
 """
 function with_pvt_hashes(fluid::AbstractDict, pvt_export::AbstractDict, relperm_export::AbstractDict)
     out = Dict{String,Any}(fluid)
-    out["pvt_table_hashes"] = Dict{String,Any}(
-        "pvtw" => canonical_sha256(pvt_export["pvtw"]),
-        "pvto" => canonical_sha256(pvt_export["pvto"]),
-        "pvdg" => canonical_sha256(pvt_export["pvdg"]),
-        "relperm" => canonical_sha256(relperm_export),
-        "tables" => canonical_sha256(pvt_export),
-        "jutuldarcy_version" => canonical_sha256(
-            Dict{String,Any}(
-                "Jutul" => pvt_export["jutul_version"],
-                "JutulDarcy" => pvt_export["jutuldarcy_version"],
-            ),
-        ),
-    )
+    out["pvt_table_hashes"] = ADAPTER.blackoil_table_hashes(pvt_export, relperm_export)
     return out
 end
-
-"""SHA-256 of a JSON value in a canonical form: sorted keys, no whitespace."""
-function canonical_sha256(value)
-    return bytes2hex(SHA.sha256(canonical_json(value)))
-end
-
-canonical_json(value) = sprint(io -> JSON.print(io, canonicalise(value)))
-
-canonicalise(v::AbstractDict) =
-    Dict{String,Any}(String(k) => canonicalise(v[k]) for k in sort(collect(String.(keys(v)))))
-canonicalise(v::AbstractVector) = Any[canonicalise(x) for x in v]
-canonicalise(v) = v
 
 # ======================================================================================
 # the fixtures
