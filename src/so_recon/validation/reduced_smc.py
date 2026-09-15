@@ -14,6 +14,7 @@ import numpy as np
 from so_recon.config.inference import InferenceConfig
 from so_recon.inference.checkpoint import save_state
 from so_recon.inference.contracts import ObservationBundle, PosteriorBundle, SMCState
+from so_recon.inference.reduced_density import ReducedGaussianPrior
 from so_recon.inference.smc import infer
 from so_recon.inference.target import ReducedPhysicalTarget, RunFactory
 from so_recon.paths import ProjectPaths
@@ -26,7 +27,7 @@ from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
 from so_recon.simulator.worker import PersistentJuliaWorker
-from so_recon.synthetic.reduced_inverse import ReducedDesign, ReducedGaussianPrior
+from so_recon.synthetic.reduced_inverse import ReducedDesign
 from so_recon.validation.inverse_metrics import weighted_quantile
 
 REDUCED_SMC_RUN_SCHEMA = "e02-reduced-smc-run-1"

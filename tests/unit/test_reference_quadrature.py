@@ -10,15 +10,10 @@ import numpy as np
 import pytest
 from scipy.stats import norm
 
+from so_recon.inference.reduced_density import ReducedGaussianPrior, reduced_density_schema
 from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext
-from so_recon.synthetic.reduced_inverse import (
-    ReducedDesign,
-    ReducedGaussianPrior,
-    build_reduced_case,
-    oil_corey_exponent,
-    reduced_density_schema,
-)
+from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case, oil_corey_exponent
 from so_recon.validation.reference_inverse import (
     QUANTILE_METHOD,
     quadrature_reference,

@@ -21,6 +21,7 @@ from so_recon.inference.contracts import (
     ObservationSupportMismatch,
     ThetaRecord,
 )
+from so_recon.inference.reduced_density import ReducedGaussianPrior
 from so_recon.inference.target import (
     ForwardEvaluationError,
     PhysicalTarget,
@@ -38,7 +39,7 @@ from so_recon.simulator.contracts import TIME_CELL_AXES, CostRecord, ForwardResu
 from so_recon.simulator.results import MONTHLY_SCHEMA
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.p1 import P1Design, render_p1
-from so_recon.synthetic.reduced_inverse import ReducedDesign, ReducedGaussianPrior
+from so_recon.synthetic.reduced_inverse import ReducedDesign
 
 
 class _CaseContext:

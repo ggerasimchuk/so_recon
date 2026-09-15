@@ -23,6 +23,7 @@ from so_recon.inference.contracts import (
     TargetEvaluation,
     ThetaRecord,
 )
+from so_recon.inference.reduced_density import reduced_density_schema
 from so_recon.observation.bins import BinGrid
 from so_recon.observation.history import history_loglik
 from so_recon.observation.logs import logs_loglik
@@ -45,7 +46,6 @@ from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.reduced_inverse import (
     ReducedDesign,
     build_reduced_case,
-    reduced_density_schema,
 )
 
 OBSERVATION_OPERATOR_VERSION = "e02-observation-operator-1"
