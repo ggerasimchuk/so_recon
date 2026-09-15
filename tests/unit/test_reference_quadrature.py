@@ -14,6 +14,7 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext
 from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case, oil_corey_exponent
 from so_recon.validation.reference_inverse import (
+    QUANTILE_METHOD,
     quadrature_reference,
     reference_nodes,
     reference_status,
@@ -39,6 +40,28 @@ def test_nonuniform_quadrature_weights_are_used() -> None:
     )
     assert np.isclose(out["mean"], 0.75)
     np.testing.assert_allclose(out["weights"], [0.25, 0.75])
+
+
+def test_reference_quantiles_invert_the_continuous_piecewise_linear_density() -> None:
+    probabilities = np.array([0.05, 0.5, 0.95])
+    uniform = quadrature_reference(
+        np.array([0.0, 1.0]),
+        np.zeros(2),
+        np.zeros(2),
+        np.array([0.5, 0.5]),
+        quantile_method=QUANTILE_METHOD,
+    )
+    np.testing.assert_allclose(uniform["quantiles"], probabilities, atol=1e-15)
+    np.testing.assert_allclose(uniform["legacy_node_quantiles"], [0.0, 0.0, 1.0])
+
+    linear = quadrature_reference(
+        np.array([0.0, 1.0]),
+        np.array([-math.inf, math.log(2.0)]),
+        np.zeros(2),
+        np.array([0.5, 0.5]),
+        quantile_method=QUANTILE_METHOD,
+    )
+    np.testing.assert_allclose(linear["quantiles"], np.sqrt(probabilities), atol=1e-15)
 
 
 def test_reference_grids_are_exactly_nested_and_add_only_midpoints() -> None:

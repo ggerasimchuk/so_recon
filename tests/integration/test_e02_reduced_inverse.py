@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from so_recon.config.resources import P0_VERIFY_PROFILE
+from so_recon.config.resources import P0_VERIFY_PROFILE, ResourceProfile, resource_profile
 from so_recon.environment.resources import ResourceSnapshot, probe_resources
 from so_recon.inference.contracts import FIXED_NOISE_THETA, HistoryRow, ObservationBundle
 from so_recon.inference.target import require_complete_forward
@@ -104,6 +104,14 @@ def _refinement_inputs(
     return reference_artifact_from_path(reference_path, paths), ledger_path, n_nodes, session_id
 
 
+def _reference_profile() -> ResourceProfile:
+    name = os.environ.get("E02_REDUCED_PROFILE", P0_VERIFY_PROFILE.profile)
+    try:
+        return resource_profile(name)
+    except ValueError as exc:
+        pytest.fail(str(exc))
+
+
 def _blank_observations(design: ReducedDesign) -> ObservationBundle:
     grid = rounding_grid(0.01)
     rows = tuple(
@@ -140,6 +148,7 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
     paths.ensure_dirs()
     dependency = require_e01_ow(_e01_report(paths), paths)
     parent_reference, parent_ledger, n_nodes, session_id = _refinement_inputs(paths)
+    profile = _reference_profile()
     if parent_reference is None:
         design = ReducedDesign()
         inherited_observations = None
@@ -155,7 +164,7 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
     probe = _bounded_probe(session)
     if parent_ledger is None:
         ledger = BudgetLedger.start(
-            profile=P0_VERIFY_PROFILE,
+            profile=profile,
             path=session / "ledger.json",
             session_id=session_id,
             probe=probe,
@@ -166,7 +175,7 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
             path=session / "ledger.json",
             session_id=session_id,
             probe=probe,
-            profile=P0_VERIFY_PROFILE,
+            profile=profile,
         )
 
     def run_factory(command: str, parent_run_ids: tuple[str, ...]) -> RunContext:
@@ -180,7 +189,7 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
         )
 
     with PersistentJuliaWorker(
-        _julia(), ROOT / "julia", session, P0_VERIFY_PROFILE, paths=paths, probe=probe
+        _julia(), ROOT / "julia", session, profile, paths=paths, probe=probe
     ) as worker:
         if inherited_observations is None:
             truth_z = float(np.random.default_rng(701).standard_normal())

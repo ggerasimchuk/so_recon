@@ -27,12 +27,15 @@ from so_recon.simulator.forward import SolverConfig, simulate
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case
 
-REFERENCE_SCHEMA_VERSION = "e02-reduced-reference-2"
+REFERENCE_SCHEMA_VERSION = "e02-reduced-reference-3"
 SUPPORTED_REFERENCE_SCHEMA_VERSIONS = (
     "e02-reduced-reference-1",
+    "e02-reduced-reference-2",
     REFERENCE_SCHEMA_VERSION,
 )
 REFERENCE_LIMIT = 7.0
+QUANTILE_METHOD = "piecewise-linear-density-cdf-1"
+LEGACY_QUANTILE_METHOD = "node-mass-cdf-1"
 
 
 class RunFactory(Protocol):
@@ -171,6 +174,11 @@ def _reusable_nodes(
         )
     if payload.get("status") != "UNRESOLVED_REFERENCE":
         raise ValueError("only an UNRESOLVED_REFERENCE may be refined")
+    if (
+        payload.get("schema_version") == REFERENCE_SCHEMA_VERSION
+        and payload.get("quantile_method") != QUANTILE_METHOD
+    ):
+        raise ValueError("parent reference uses an incompatible continuous quantile method")
     _same_payload(payload.get("design"), design.model_dump(mode="json"), label="design")
     _same_payload(
         payload.get("observations"),
@@ -234,11 +242,51 @@ def _log_values(values: F64, *, label: str) -> F64:
     return array
 
 
+def _continuous_quantiles(nodes: F64, log_density: F64, probabilities: F64) -> F64:
+    """Invert the CDF of the nonnegative piecewise-linear density on ``nodes``."""
+    if (
+        probabilities.ndim != 1
+        or not np.isfinite(probabilities).all()
+        or np.any(probabilities <= 0.0)
+        or np.any(probabilities >= 1.0)
+    ):
+        raise ValueError("quantile probabilities must be finite and strictly inside (0,1)")
+    anchor = float(np.max(log_density))
+    if not math.isfinite(anchor):
+        raise ValueError("quadrature has no target support on its nodes")
+    density = np.exp(log_density - anchor)
+    gaps = np.diff(nodes)
+    areas = 0.5 * (density[:-1] + density[1:]) * gaps
+    total = float(np.sum(areas))
+    if not math.isfinite(total) or total <= 0.0:
+        raise ValueError("piecewise-linear quadrature density has no finite mass")
+    cumulative = np.concatenate((np.zeros(1, dtype=np.float64), np.cumsum(areas)))
+    cumulative[-1] = total
+    quantiles = np.empty(probabilities.size, dtype=np.float64)
+    for output_index, probability in enumerate(probabilities):
+        target = float(probability * total)
+        interval = int(np.searchsorted(cumulative, target, side="right") - 1)
+        interval = min(interval, areas.size - 1)
+        remaining = target - float(cumulative[interval])
+        gap = float(gaps[interval])
+        left = float(density[interval])
+        slope = float((density[interval + 1] - density[interval]) / gap)
+        discriminant = max(0.0, left * left + 2.0 * slope * remaining)
+        denominator = left + math.sqrt(discriminant)
+        if denominator <= 0.0:
+            raise ValueError("piecewise-linear quantile falls in a zero-density interval")
+        offset = 2.0 * remaining / denominator
+        quantiles[output_index] = float(nodes[interval]) + min(max(offset, 0.0), gap)
+    return quantiles
+
+
 def quadrature_reference(
     nodes: F64,
     prior_log_density: F64,
     log_likelihood: F64,
     integration_weights: F64,
+    *,
+    quantile_method: str = LEGACY_QUANTILE_METHOD,
 ) -> dict[str, F64 | float]:
     """Normalize explicit quadrature masses and return moments, quantiles and evidence."""
     points = np.asarray(nodes, dtype=np.float64)
@@ -260,7 +308,8 @@ def quadrature_reference(
         raise ValueError("quadrature nodes must be finite and strictly increasing")
     if not np.isfinite(widths).all() or np.any(widths <= 0.0):
         raise ValueError("quadrature integration weights must be finite and positive")
-    logmass = prior + likelihood + np.log(widths)
+    log_density = prior + likelihood
+    logmass = log_density + np.log(widths)
     logz = float(logsumexp(logmass))
     if not math.isfinite(logz):
         raise ValueError("quadrature has no target support on its nodes")
@@ -269,13 +318,24 @@ def quadrature_reference(
     variance = float(weights @ ((points - mean) ** 2))
     cdf = np.cumsum(weights)
     cdf[-1] = 1.0
-    indices = np.searchsorted(cdf, np.array([0.05, 0.5, 0.95]), side="left")
-    quantiles: F64 = points[indices]
+    probabilities = np.array([0.05, 0.5, 0.95], dtype=np.float64)
+    indices = np.searchsorted(cdf, probabilities, side="left")
+    legacy_quantiles: F64 = points[indices]
+    if quantile_method == LEGACY_QUANTILE_METHOD:
+        quantiles = legacy_quantiles
+    elif quantile_method == QUANTILE_METHOD:
+        expected_widths = trapezoid_weights(points)
+        if not np.array_equal(widths, expected_widths):
+            raise ValueError("piecewise-linear quantiles require exact trapezoid weights")
+        quantiles = _continuous_quantiles(points, log_density, probabilities)
+    else:
+        raise ValueError(f"unsupported reference quantile method {quantile_method!r}")
     return {
         "weights": weights,
         "mean": mean,
         "variance": variance,
         "quantiles": quantiles,
+        "legacy_node_quantiles": legacy_quantiles,
         "logz": logz,
     }
 
@@ -414,13 +474,20 @@ def run_reduced_reference(
             raise
 
     prior = norm.logpdf(nodes)
-    fine = quadrature_reference(nodes, prior, log_likelihood, trapezoid_weights(nodes))
+    fine = quadrature_reference(
+        nodes,
+        prior,
+        log_likelihood,
+        trapezoid_weights(nodes),
+        quantile_method=QUANTILE_METHOD,
+    )
     coarse_nodes = nodes[::2]
     coarse = quadrature_reference(
         coarse_nodes,
         prior[::2],
         log_likelihood[::2],
         trapezoid_weights(coarse_nodes),
+        quantile_method=QUANTILE_METHOD,
     )
     metrics = _comparison(coarse, fine)
     status = reference_status(metrics)
@@ -434,6 +501,8 @@ def run_reduced_reference(
     cumulative_totals = ledger.cumulative_totals()
     payload = {
         "schema_version": REFERENCE_SCHEMA_VERSION,
+        "diagnostic_protocol": "e02-reduced-reference-diagnostic-v1",
+        "quantile_method": QUANTILE_METHOD,
         "status": status,
         "design": design.model_dump(mode="json"),
         "observations": observations.model_dump(mode="json"),
@@ -443,6 +512,7 @@ def run_reduced_reference(
             "mean": coarse["mean"],
             "variance": coarse["variance"],
             "quantiles": np.asarray(coarse["quantiles"]).tolist(),
+            "legacy_node_quantiles": np.asarray(coarse["legacy_node_quantiles"]).tolist(),
             "logz": coarse["logz"],
         },
         "fine": {
@@ -452,6 +522,7 @@ def run_reduced_reference(
             "mean": fine["mean"],
             "variance": fine["variance"],
             "quantiles": np.asarray(fine["quantiles"]).tolist(),
+            "legacy_node_quantiles": np.asarray(fine["legacy_node_quantiles"]).tolist(),
             "logz": fine["logz"],
         },
         "refinement": metrics,
@@ -487,6 +558,8 @@ def run_reduced_reference(
 
 
 __all__ = [
+    "LEGACY_QUANTILE_METHOD",
+    "QUANTILE_METHOD",
     "REFERENCE_SCHEMA_VERSION",
     "quadrature_reference",
     "reference_artifact_from_path",
