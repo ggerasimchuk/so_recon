@@ -32,15 +32,9 @@ from so_recon.validation.physical_smc import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _bounded_probe(session: Path) -> Callable[[], ResourceSnapshot]:
+def _resource_probe(session: Path) -> Callable[[], ResourceSnapshot]:
     def probe() -> ResourceSnapshot:
-        return probe_resources(None, session).model_copy(
-            update={
-                "total_bytes": 64 * 1024**3,
-                "available_bytes": 32 * 1024**3,
-                "swap_used_bytes": 0,
-            }
-        )
+        return probe_resources(None, session)
 
     return probe
 
@@ -81,39 +75,67 @@ def test_registered_physical_matrix_action() -> None:
     action = _required("E02_PHYSICAL_ACTION")
     experiment = _experiment()
     experiment_id = str(experiment["experiment_id"])
-    if action not in {"setup", "smc"}:
-        pytest.fail("E02_PHYSICAL_ACTION must be setup or smc")
+    if action not in {"setup", "smc", "resume"}:
+        pytest.fail("E02_PHYSICAL_ACTION must be setup, smc or resume")
     if action == "setup":
         suffix = "setup"
         parent_ids: tuple[str, ...] = ()
         parent_ref = None
+        resume_ref = None
+        parent_ledger_path = None
     else:
         parent_path = _path("E02_PHYSICAL_PARENT", paths)
         parent_run = json.loads((parent_path.parent / "run.json").read_text(encoding="utf-8"))
-        parent_ref = ArtifactRef.model_validate(parent_run["outputs"]["physical_experiment"])
-        if paths.resolve(parent_ref.path) != parent_path:
-            pytest.fail("E02_PHYSICAL_PARENT does not match its producer run")
         parent_payload = json.loads(parent_path.read_text(encoding="utf-8"))
-        if (
-            parent_payload.get("schema_version") != PHYSICAL_EXPERIMENT_SCHEMA
-            or parent_payload.get("experiment_id") != experiment_id
-        ):
-            pytest.fail("E02_PHYSICAL_PARENT belongs to another experiment or schema")
-        particles = int(_required("E02_PHYSICAL_PARTICLES"))
-        inference_seed = int(_required("E02_PHYSICAL_INFERENCE_SEED"))
+        if action == "smc":
+            parent_ref = ArtifactRef.model_validate(parent_run["outputs"]["physical_experiment"])
+            resume_ref = None
+            parent_ledger_path = None
+            if paths.resolve(parent_ref.path) != parent_path:
+                pytest.fail("E02_PHYSICAL_PARENT does not match its producer run")
+            if parent_payload.get("schema_version") != PHYSICAL_EXPERIMENT_SCHEMA:
+                pytest.fail("E02_PHYSICAL_PARENT is not a physical experiment")
+            particles = int(_required("E02_PHYSICAL_PARTICLES"))
+            inference_seed = int(_required("E02_PHYSICAL_INFERENCE_SEED"))
+        else:
+            if parent_payload.get("schema_version") != PHYSICAL_SMC_RUN_SCHEMA:
+                pytest.fail("resume parent is not a physical SMC run")
+            parent_ref = ArtifactRef.model_validate(parent_payload["experiment"])
+            resume_ref = ArtifactRef.model_validate(parent_payload["checkpoint"])
+            previous_ledger = ArtifactRef.model_validate(parent_run["outputs"]["budget_ledger"])
+            parent_ledger_path = paths.resolve(previous_ledger.path)
+            config_payload = cast(dict[str, object], parent_payload["config"])
+            particles = int(cast(int | str, config_payload["n_particles"]))
+            inference_seed = int(cast(int | str, config_payload["seed"]))
+        if parent_payload.get("experiment_id") != experiment_id:
+            pytest.fail("E02_PHYSICAL_PARENT belongs to another experiment")
         if particles not in {32, 64} or inference_seed not in {11, 12}:
             pytest.fail("registered physical SMC matrix is N32/N64 with seeds 11/12")
-        suffix = f"n{particles}-s{inference_seed}"
-        parent_ids = (parent_ref.producer_run_id,)
+        suffix = f"{'resume-' if action == 'resume' else ''}n{particles}-s{inference_seed}"
+        parent_ids = (
+            (resume_ref.producer_run_id, parent_ref.producer_run_id)
+            if resume_ref is not None
+            else (parent_ref.producer_run_id,)
+        )
 
     session_id = os.environ.get("E02_PHYSICAL_SESSION_ID", f"{experiment_id}-{suffix}")
     session = paths.artifacts / session_id
-    probe = _bounded_probe(session)
-    ledger = BudgetLedger.start(
-        profile=P1_LOOP_PROFILE,
-        path=session / "ledger.json",
-        session_id=session_id,
-        probe=probe,
+    probe = _resource_probe(session)
+    ledger = (
+        BudgetLedger.start(
+            profile=P1_LOOP_PROFILE,
+            path=session / "ledger.json",
+            session_id=session_id,
+            probe=probe,
+        )
+        if parent_ledger_path is None
+        else BudgetLedger.resume(
+            parent_path=parent_ledger_path,
+            profile=P1_LOOP_PROFILE,
+            path=session / "ledger.json",
+            session_id=session_id,
+            probe=probe,
+        )
     )
     raw_inputs = {
         "e01_dependency": sha256_json(dependency),
@@ -176,6 +198,7 @@ def test_registered_physical_matrix_action() -> None:
                     ledger=ledger,
                     run_factory=run_factory,
                     config=config,
+                    resume_checkpoint_ref=resume_ref,
                 )
                 payload = json.loads(paths.resolve(ref.path).read_text(encoding="utf-8"))
                 passed = payload["algorithm_status"] == "COMPLETE" and payload["beta"] == 1.0

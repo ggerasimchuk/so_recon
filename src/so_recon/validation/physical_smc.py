@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from so_recon.config.inference import InferenceConfig
 from so_recon.geology.density import GaussianConditionalPrior
 from so_recon.geology.renderer import swap_t2_layers, with_t4_remote_state
-from so_recon.inference.checkpoint import save_state
+from so_recon.inference.checkpoint import load_state, save_state
 from so_recon.inference.contracts import (
     HistoryRow,
     ObservationBundle,
@@ -24,7 +24,7 @@ from so_recon.inference.contracts import (
     TargetEvaluation,
     ThetaRecord,
 )
-from so_recon.inference.smc import infer
+from so_recon.inference.smc import SMCBudgetStop, continue_inference, infer
 from so_recon.inference.target import PhysicalTarget, RunFactory, require_complete_forward
 from so_recon.observation.bins import rounding_grid
 from so_recon.observation.predict import predict_observations
@@ -32,7 +32,7 @@ from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import ArtifactRef, register_artifact, write_json_artifact
 from so_recon.registry.hashing import sha256_file, sha256_json
 from so_recon.registry.run import RunContext
-from so_recon.simulator.budget import BudgetLedger
+from so_recon.simulator.budget import BudgetLedger, BudgetStop
 from so_recon.simulator.case_io import compute_model_hash, read_array
 from so_recon.simulator.contracts import CaseBundle, ControlSegment, ForwardResult, OutputRequest
 from so_recon.simulator.forward import (
@@ -695,19 +695,26 @@ def prepare_physical_experiment(
     return ref
 
 
-class _InitialCaptureTarget:
-    def __init__(self, target: PhysicalTarget, count: int) -> None:
+class _BudgetAwareTarget:
+    """Translate a session resource refusal into a resumable SMC stop."""
+
+    def __init__(self, target: PhysicalTarget) -> None:
         self._target = target
-        self._count = count
-        self.initial: list[TargetEvaluation] = []
         self.fingerprint = target.fingerprint
         self.checkpoint_hashes = target.checkpoint_hashes
 
     def evaluate(self, theta: ThetaRecord) -> TargetEvaluation:
-        evaluation = self._target.evaluate(theta)
-        if len(self.initial) < self._count:
-            self.initial.append(evaluation)
-        return evaluation
+        try:
+            return self._target.evaluate(theta)
+        except BudgetStop as exc:
+            raise SMCBudgetStop(str(exc)) from exc
+
+
+def _stored_initial_evaluations(state: SMCState, count: int) -> tuple[TargetEvaluation, ...]:
+    raw = state.diagnostics.get("initial_evaluations")
+    if not isinstance(raw, list) or len(raw) != count:
+        raise ValueError("physical SMC checkpoint has no complete persisted prior ensemble")
+    return tuple(TargetEvaluation.model_validate(item) for item in raw)
 
 
 def _evaluation_states(
@@ -817,6 +824,7 @@ def run_physical_smc(
     ledger: BudgetLedger,
     run_factory: RunFactory,
     config: InferenceConfig,
+    resume_checkpoint_ref: ArtifactRef | None = None,
 ) -> ArtifactRef:
     """Run one separately budgeted physical SMC start and publish state-aware evidence."""
     paths = worker.paths
@@ -846,15 +854,34 @@ def run_physical_smc(
         parent_run_ids=(ctx.run_id, experiment_ref.producer_run_id),
         state_times_s=tuple(float(value) for value in experiment["state_times_s"]),
     )
-    target = _InitialCaptureTarget(physical, config.n_particles)
-    state = infer(
-        target,
-        prior,
-        prior.context.density_schema,
-        config,
-        ctx.run_dir / "working",
-        lambda: False,
-    )
+    target = _BudgetAwareTarget(physical)
+    if resume_checkpoint_ref is None:
+        state = infer(
+            target,
+            prior,
+            prior.context.density_schema,
+            config,
+            ctx.run_dir / "working",
+            lambda: False,
+        )
+    else:
+        expected_hashes = {
+            "target_hash": physical.fingerprint,
+            "proposal_hash": prior.fingerprint,
+            "basis_hash": prior.context.density_schema.basis_hash,
+            "config_hash": sha256_json(config.model_dump(mode="json")),
+            **physical.checkpoint_hashes,
+        }
+        previous = load_state(resume_checkpoint_ref, paths, expected_hashes)
+        state = continue_inference(
+            previous,
+            target,
+            prior,
+            prior.context.density_schema,
+            config,
+            ctx.run_dir / "working",
+            lambda: False,
+        )
     checkpoint_ref = save_state(state, ctx.run_dir / "checkpoint/manifest.json", paths, ctx)
     ledger_ref = register_artifact(
         ledger.path,
@@ -868,11 +895,9 @@ def run_physical_smc(
     if state.algorithm_status != "COMPLETE" or state.beta != 1.0:
         state_summary: dict[str, Any] | None = None
     else:
-        if len(target.initial) != config.n_particles:
-            raise ValueError("physical prior ensemble was not captured completely")
         state_summary = _state_summary(
             state=state,
-            initial=target.initial,
+            initial=_stored_initial_evaluations(state, config.n_particles),
             truth=truth,
             truth_case=truth_case,
             design_id=str(experiment["design_id"]),
@@ -899,6 +924,9 @@ def run_physical_smc(
         "config": config.model_dump(mode="json"),
         "target_hashes": physical.checkpoint_hashes,
         "checkpoint": checkpoint_ref.model_dump(mode="json"),
+        "resumed_from_checkpoint": (
+            None if resume_checkpoint_ref is None else resume_checkpoint_ref.model_dump(mode="json")
+        ),
         "budget": {
             "session": ledger.session_totals().model_dump(mode="json"),
             "cumulative": ledger.cumulative_totals().model_dump(mode="json"),
@@ -918,7 +946,11 @@ def run_physical_smc(
         paths,
         schema_version=PHYSICAL_SMC_RUN_SCHEMA,
         producer_run_id=ctx.run_id,
-        parent_artifact_ids=(experiment_ref.artifact_id, checkpoint_ref.artifact_id),
+        parent_artifact_ids=(
+            experiment_ref.artifact_id,
+            *(() if resume_checkpoint_ref is None else (resume_checkpoint_ref.artifact_id,)),
+            checkpoint_ref.artifact_id,
+        ),
         now=datetime.now(UTC),
     )
     ctx.add_output("physical_smc", ref)

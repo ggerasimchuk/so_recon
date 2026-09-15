@@ -18,7 +18,7 @@ from so_recon.inference.contracts import (
     TargetEvaluation,
     ThetaRecord,
 )
-from so_recon.inference.smc import continue_inference, infer
+from so_recon.inference.smc import SMCBudgetStop, continue_inference, infer
 from so_recon.registry.hashing import sha256_json
 from so_recon.validation.toy_inverse import GaussianToyTarget
 
@@ -153,6 +153,44 @@ def test_target_failure_suspends_the_engine_instead_of_becoming_mh_rejection(
     assert state.phase == "initialize"
     assert state.pending_proposal is not None
     assert "injected physical failure" in str(state.diagnostics["evaluation_failure"])
+
+
+def test_budget_stop_preserves_pending_evaluation_for_a_later_session(tmp_path: Path) -> None:
+    target, proposal, config = problem()
+
+    class OnceBudgetedTarget:
+        fingerprint = target.fingerprint
+        checkpoint_hashes: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.stop = True
+
+        def evaluate(self, theta: ThetaRecord) -> TargetEvaluation:
+            if self.stop:
+                raise SMCBudgetStop("P1 session exhausted")
+            return target.evaluate(theta)
+
+    bounded = OnceBudgetedTarget()
+    state = infer(bounded, proposal, SCHEMA, config, tmp_path / "budget-stop", never_stop)
+    assert state.algorithm_status == "INCOMPLETE_BUDGET"
+    assert state.phase == "initialize"
+    assert state.pending_proposal is not None
+    assert state.diagnostics["stop_reason"] == "P1 session exhausted"
+
+    bounded.stop = False
+    resumed = continue_inference(
+        state, bounded, proposal, SCHEMA, config, tmp_path / "budget-stop", never_stop
+    )
+    uninterrupted = infer(target, proposal, SCHEMA, config, tmp_path / "full", never_stop)
+    assert resumed.model_dump(mode="json") == uninterrupted.model_dump(mode="json")
+
+
+def test_initial_ensemble_is_persisted_before_rejuvenation(tmp_path: Path) -> None:
+    target, proposal, config = problem()
+    state = infer(target, proposal, SCHEMA, config, tmp_path / "initial", stop_on(26))
+    initial = state.diagnostics["initial_evaluations"]
+    assert len(initial) == config.n_particles
+    assert initial == [particle.evaluation.model_dump(mode="json") for particle in state.particles]
 
 
 def test_all_zero_target_support_has_its_own_status(tmp_path: Path) -> None:

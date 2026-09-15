@@ -41,6 +41,10 @@ from so_recon.registry.hashing import sha256_json
 LATEST_STATE_FILENAME = "latest.json"
 
 
+class SMCBudgetStop(RuntimeError):
+    """A target could not book more work in this session and may be retried unchanged."""
+
+
 class Target(Protocol):
     fingerprint: str
 
@@ -181,6 +185,16 @@ def _fail_evaluation(state: SMCState, exc: Exception, checkpoint_dir: Path) -> S
     return failed
 
 
+def _stop_budget(state: SMCState, exc: SMCBudgetStop, checkpoint_dir: Path) -> SMCState:
+    stopped = _replace(
+        state,
+        algorithm_status="INCOMPLETE_BUDGET",
+        diagnostics=_diagnostics(state, stop_reason=str(exc)),
+    )
+    _persist(stopped, checkpoint_dir)
+    return stopped
+
+
 def _fail_support(state: SMCState, exc: Exception, checkpoint_dir: Path) -> SMCState:
     failed = _replace(
         state,
@@ -222,7 +236,13 @@ def _drive(
     stop_requested: Callable[[], bool],
 ) -> SMCState:
     rng = _rng_from(state)
-    state = _replace(state, algorithm_status="INCOMPLETE_BUDGET")
+    diagnostics = dict(state.diagnostics)
+    diagnostics.pop("stop_reason", None)
+    state = _replace(
+        state,
+        algorithm_status="INCOMPLETE_BUDGET",
+        diagnostics=diagnostics,
+    )
     probabilities = kernel_probabilities(schema)
     while True:
         if stop_requested():
@@ -243,6 +263,8 @@ def _drive(
                 continue
             try:
                 result = _evaluation(target, proposal, state.pending_proposal)
+            except SMCBudgetStop as exc:
+                return _stop_budget(state, exc, checkpoint_dir)
             except Exception as exc:
                 return _fail_evaluation(state, exc, checkpoint_dir)
             particle = Particle(
@@ -262,6 +284,12 @@ def _drive(
                     cursor=0,
                     pending_proposal=None,
                     pending_log_u=None,
+                    diagnostics=_diagnostics(
+                        state,
+                        initial_evaluations=[
+                            item.evaluation.model_dump(mode="json") for item in particles
+                        ],
+                    ),
                 )
             else:
                 state = _replace(
@@ -419,6 +447,8 @@ def _drive(
             )
             try:
                 proposed = _evaluation(target, proposal, move.proposed)
+            except SMCBudgetStop as exc:
+                return _stop_budget(state, exc, checkpoint_dir)
             except Exception as exc:
                 return _fail_evaluation(state, exc, checkpoint_dir)
             assert state.pending_log_u is not None
@@ -498,4 +528,4 @@ def continue_inference(
     return _drive(state, target, proposal, schema, config, checkpoint_dir, stop_requested)
 
 
-__all__ = ["Target", "continue_inference", "infer"]
+__all__ = ["SMCBudgetStop", "Target", "continue_inference", "infer"]
