@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -14,15 +16,22 @@ from scipy.stats import norm
 from so_recon.inference.contracts import F64, FIXED_NOISE_THETA, ObservationBundle
 from so_recon.inference.target import evaluate_loglik, require_complete_forward
 from so_recon.observation.predict import predict_observations
+from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import ArtifactRef, write_json_artifact
-from so_recon.registry.run import RunContext
+from so_recon.registry.hashing import sha256_file, sha256_json
+from so_recon.registry.run import RunContext, RunRecord
 from so_recon.simulator.budget import BudgetLedger
+from so_recon.simulator.case_io import load_case
 from so_recon.simulator.contracts import ForwardResult, OutputRequest
 from so_recon.simulator.forward import SolverConfig, simulate
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case
 
-REFERENCE_SCHEMA_VERSION = "e02-reduced-reference-1"
+REFERENCE_SCHEMA_VERSION = "e02-reduced-reference-2"
+SUPPORTED_REFERENCE_SCHEMA_VERSIONS = (
+    "e02-reduced-reference-1",
+    REFERENCE_SCHEMA_VERSION,
+)
 REFERENCE_LIMIT = 7.0
 
 
@@ -31,6 +40,189 @@ class RunFactory(Protocol):
 
 
 SimulateFunction = Callable[..., ForwardResult]
+
+
+def reference_nodes(n_nodes: int) -> F64:
+    """Return one of the pre-registered nested ``2^k + 1`` reference grids."""
+    intervals = n_nodes - 1
+    if intervals < 16 or intervals & (intervals - 1):
+        raise ValueError("reference node count must be 2^k + 1 with at least 17 nodes")
+    return np.linspace(-REFERENCE_LIMIT, REFERENCE_LIMIT, n_nodes, dtype=np.float64)
+
+
+def reference_artifact_from_path(path: Path, paths: ProjectPaths) -> ArtifactRef:
+    """Recover and verify the immutable reference named by its producer run."""
+    resolved = path if path.is_absolute() else paths.resolve(str(path))
+    relative = paths.relative(resolved)
+    run_path = resolved.parent / "run.json"
+    try:
+        run = RunRecord.model_validate_json(run_path.read_text(encoding="utf-8"))
+        ref = run.outputs["reference"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise ValueError(f"{relative}: cannot recover its reference ArtifactRef: {exc}") from exc
+    if paths.resolve(ref.path) != resolved:
+        raise ValueError(f"{relative}: producer run names {ref.path!r} as its reference output")
+    _verify_artifact(ref, paths, label="parent reference")
+    return ref
+
+
+def _verify_artifact(ref: ArtifactRef, paths: ProjectPaths, *, label: str) -> Path:
+    try:
+        path = paths.resolve(ref.path)
+    except ValueError as exc:
+        raise ValueError(f"{label} names an invalid path {ref.path!r}: {exc}") from exc
+    if not path.is_file():
+        raise ValueError(f"{label} is missing at {ref.path}")
+    digest = sha256_file(path)
+    size = path.stat().st_size
+    if digest != ref.sha256 or ref.artifact_id != ref.sha256 or size != ref.size_bytes:
+        raise ValueError(
+            f"{label} failed immutable identity check: digest={digest}, size={size}, "
+            f"declared digest={ref.sha256}, artifact_id={ref.artifact_id}, "
+            f"size={ref.size_bytes}"
+        )
+    return path
+
+
+def _same_payload(actual: object, expected: object, *, label: str) -> None:
+    if sha256_json(actual) != sha256_json(expected):
+        raise ValueError(f"parent reference {label} does not match this refinement")
+
+
+def _result_record(
+    node: Mapping[str, Any],
+    *,
+    ledger: BudgetLedger,
+    paths: ProjectPaths,
+) -> tuple[str, str]:
+    """Re-prove one reused physical node against its run, case, result and ledger."""
+    run_id = str(node.get("run_id", ""))
+    job_id = str(node.get("job_id", ""))
+    model_hash = str(node.get("model_hash", ""))
+    run_path = paths.runs / run_id / "run.json"
+    try:
+        run = RunRecord.model_validate_json(run_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"reused node run {run_id!r} is unreadable: {exc}") from exc
+    if run.run_id != run_id or run.command != "e02-reduced-reference-node" or run.status != "PASS":
+        raise ValueError(
+            f"reused node run {run_id!r} is not a completed reduced-reference-node run"
+        )
+    try:
+        case_ref = run.outputs["case"]
+    except KeyError as exc:
+        raise ValueError(f"reused node run {run_id!r} has no published case") from exc
+    case_path = _verify_artifact(case_ref, paths, label=f"reused node {run_id} case")
+    case = load_case(case_path, paths)
+    if case.model_hash != model_hash:
+        raise ValueError(
+            f"reused node {run_id!r} declares model {model_hash}, case has {case.model_hash}"
+        )
+    matching = [
+        entry
+        for entry in (*ledger.record.inherited_entries, *ledger.record.entries)
+        if entry.job_id == job_id
+    ]
+    if len(matching) != 1:
+        raise ValueError(
+            f"reused node {run_id!r}/{job_id!r} has {len(matching)} matching ledger entries"
+        )
+    entry = matching[0]
+    if (
+        entry.state != "COMPLETE"
+        or entry.status != "COMPLETE"
+        or entry.model_hash != model_hash
+        or entry.case_sha256 != case_ref.sha256
+    ):
+        raise ValueError(f"reused node {run_id!r}/{job_id!r} is not ledger-complete for its case")
+    result_path = paths.runs / run_id / job_id / "result.json"
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"reused node result {result_path} is unreadable: {exc}") from exc
+    if not isinstance(result, dict) or (
+        result.get("status") != "COMPLETE"
+        or result.get("job_id") != job_id
+        or result.get("model_hash") != model_hash
+        or result.get("case_sha256") != case_ref.sha256
+    ):
+        raise ValueError(f"reused node result {result_path} has inconsistent physical identity")
+    return case_ref.sha256, sha256_file(result_path)
+
+
+def _reusable_nodes(
+    parent_ref: ArtifactRef,
+    nodes: F64,
+    design: ReducedDesign,
+    observations: ObservationBundle,
+    ledger: BudgetLedger,
+    paths: ProjectPaths,
+) -> dict[float, dict[str, Any]]:
+    path = _verify_artifact(parent_ref, paths, label="parent reference")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"parent reference {parent_ref.path} is unreadable: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") not in (
+        SUPPORTED_REFERENCE_SCHEMA_VERSIONS
+    ):
+        raise ValueError(
+            f"parent reference has unsupported schema {payload.get('schema_version')!r}"
+        )
+    if payload.get("status") != "UNRESOLVED_REFERENCE":
+        raise ValueError("only an UNRESOLVED_REFERENCE may be refined")
+    _same_payload(payload.get("design"), design.model_dump(mode="json"), label="design")
+    _same_payload(
+        payload.get("observations"),
+        observations.model_dump(mode="json"),
+        label="observations",
+    )
+    _same_payload(payload.get("noise"), FIXED_NOISE_THETA.model_dump(mode="json"), label="noise")
+    fine = payload.get("fine")
+    records = payload.get("nodes")
+    if not isinstance(fine, dict) or not isinstance(records, list):
+        raise ValueError("parent reference has no complete fine grid and node records")
+    try:
+        parent_count = int(fine["n_nodes"])
+        parent_nodes = np.asarray(fine["nodes"], dtype=np.float64)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"parent reference grid is invalid: {exc}") from exc
+    if nodes.size != 2 * (parent_count - 1) + 1:
+        raise ValueError(
+            f"refinement must add one nested level: parent has {parent_count}, "
+            f"target has {nodes.size}"
+        )
+    if parent_nodes.shape != (parent_count,) or not np.array_equal(nodes[::2], parent_nodes):
+        raise ValueError("parent reference nodes are not the exact nested subset of target nodes")
+    if len(records) != parent_count:
+        raise ValueError(
+            f"parent reference has {len(records)} node records for {parent_count} nodes"
+        )
+    reused: dict[float, dict[str, Any]] = {}
+    for source_index, raw in enumerate(records):
+        if not isinstance(raw, dict):
+            raise ValueError(f"parent node {source_index} is not an object")
+        z = float(raw.get("z", math.nan))
+        if z != float(parent_nodes[source_index]) or z in reused:
+            raise ValueError(f"parent node {source_index} has inconsistent or duplicate z={z}")
+        in_support = raw.get("log_likelihood_in_support")
+        value = raw.get("log_likelihood")
+        if (
+            in_support is not True
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"parent node {source_index} lacks a finite in-support likelihood")
+        case_sha256, result_sha256 = _result_record(raw, ledger=ledger, paths=paths)
+        reused[z] = {
+            **raw,
+            "source_index": source_index,
+            "source_reference_artifact_id": parent_ref.artifact_id,
+            "evaluation_source": "reused",
+            "case_sha256": case_sha256,
+            "result_sha256": result_sha256,
+        }
+    return reused
 
 
 def _log_values(values: F64, *, label: str) -> F64:
@@ -143,14 +335,34 @@ def run_reduced_reference(
     *,
     parent_run_ids: tuple[str, ...] = (),
     simulate_fn: SimulateFunction = simulate,
+    n_nodes: int = 33,
+    parent_reference: ArtifactRef | None = None,
 ) -> ArtifactRef:
-    """Run the 33-node physical reference and independently compare its 17-node subset.
+    """Run one nested physical reference and compare it with the preceding grid.
 
     This routine deliberately does not import SMC particles, temperatures or weight helpers.
     A failed physical node is an execution failure, while a numerically insufficient grid is
-    a published ``UNRESOLVED_REFERENCE`` scientific outcome.
+    a published ``UNRESOLVED_REFERENCE`` scientific outcome. Refinement accepts exactly one
+    immutable parent level and re-proves each reused node against its run, case, native result
+    and the inherited ledger before trusting the stored likelihood.
     """
-    nodes = np.linspace(-REFERENCE_LIMIT, REFERENCE_LIMIT, 33, dtype=np.float64)
+    nodes = reference_nodes(n_nodes)
+    if parent_reference is None and n_nodes != 33:
+        raise ValueError("a reference above 33 nodes requires its immediate parent reference")
+    if parent_reference is not None and ledger.record.parent_ledger_sha256 is None:
+        raise ValueError("reference refinement requires a resumed ledger with a parent digest")
+    reused = (
+        {}
+        if parent_reference is None
+        else _reusable_nodes(
+            parent_reference,
+            nodes,
+            design,
+            observations,
+            ledger,
+            worker.paths,
+        )
+    )
     log_likelihood = np.empty(nodes.size, dtype=np.float64)
     node_records: list[dict[str, Any]] = []
     request = OutputRequest(
@@ -160,6 +372,11 @@ def run_reduced_reference(
     )
     solver = SolverConfig(max_timestep_days=5.0, max_nonlinear_iterations=15)
     for index, z in enumerate(nodes):
+        reused_record = reused.get(float(z))
+        if reused_record is not None:
+            log_likelihood[index] = float(reused_record["log_likelihood"])
+            node_records.append({**reused_record, "index": index})
+            continue
         ctx = run_factory("e02-reduced-reference-node", parent_run_ids)
         try:
             case = build_reduced_case(float(z), design, worker.paths, ctx)
@@ -185,6 +402,10 @@ def run_reduced_reference(
                     "run_id": ctx.run_id,
                     "log_likelihood": scored.value if scored.value_in_support else None,
                     "log_likelihood_in_support": scored.value_in_support,
+                    "evaluation_source": "native",
+                    "case_sha256": result.case_sha256,
+                    "result_path": result.solver_metadata.get("result_path"),
+                    "result_sha256": result.solver_metadata.get("result_sha256"),
                 }
             )
             ctx.finish("PASS")
@@ -203,9 +424,14 @@ def run_reduced_reference(
     )
     metrics = _comparison(coarse, fine)
     status = reference_status(metrics)
+    node_parent_ids = tuple(dict.fromkeys(str(record["run_id"]) for record in node_records))
+    reference_parent_ids = () if parent_reference is None else (parent_reference.producer_run_id,)
     parent = run_factory(
-        "e02-reduced-reference", tuple(record["run_id"] for record in node_records)
+        "e02-reduced-reference", (*parent_run_ids, *reference_parent_ids, *node_parent_ids)
     )
+    ledger_sha256 = sha256_file(ledger.path)
+    session_totals = ledger.session_totals()
+    cumulative_totals = ledger.cumulative_totals()
     payload = {
         "schema_version": REFERENCE_SCHEMA_VERSION,
         "status": status,
@@ -213,14 +439,14 @@ def run_reduced_reference(
         "observations": observations.model_dump(mode="json"),
         "noise": FIXED_NOISE_THETA.model_dump(mode="json"),
         "coarse": {
-            "n_nodes": 17,
+            "n_nodes": int(coarse_nodes.size),
             "mean": coarse["mean"],
             "variance": coarse["variance"],
             "quantiles": np.asarray(coarse["quantiles"]).tolist(),
             "logz": coarse["logz"],
         },
         "fine": {
-            "n_nodes": 33,
+            "n_nodes": int(nodes.size),
             "nodes": nodes.tolist(),
             "weights": np.asarray(fine["weights"]).tolist(),
             "mean": fine["mean"],
@@ -230,6 +456,22 @@ def run_reduced_reference(
         },
         "refinement": metrics,
         "nodes": node_records,
+        "lineage": {
+            "parent_reference": (
+                None if parent_reference is None else parent_reference.model_dump(mode="json")
+            ),
+            "parent_ledger_sha256": ledger.record.parent_ledger_sha256,
+            "parent_session_id": ledger.record.parent_session_id,
+            "ledger_path": worker.paths.relative(ledger.path),
+            "ledger_sha256": ledger_sha256,
+            "session_id": ledger.record.session_id,
+            "reused_node_count": len(reused),
+            "new_node_count": int(nodes.size - len(reused)),
+        },
+        "budget": {
+            "session": session_totals.model_dump(mode="json"),
+            "cumulative": cumulative_totals.model_dump(mode="json"),
+        },
     }
     ref = write_json_artifact(
         parent.run_dir / "reduced_reference.json",
@@ -237,6 +479,7 @@ def run_reduced_reference(
         worker.paths,
         schema_version=REFERENCE_SCHEMA_VERSION,
         producer_run_id=parent.run_id,
+        parent_artifact_ids=(() if parent_reference is None else (parent_reference.artifact_id,)),
         now=datetime.now(UTC),
     )
     parent.finish("PASS" if status == "CONVERGED" else "FAIL", outputs={"reference": ref})
@@ -246,6 +489,8 @@ def run_reduced_reference(
 __all__ = [
     "REFERENCE_SCHEMA_VERSION",
     "quadrature_reference",
+    "reference_artifact_from_path",
+    "reference_nodes",
     "reference_status",
     "run_reduced_reference",
     "trapezoid_weights",

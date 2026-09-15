@@ -15,6 +15,7 @@ from so_recon.registry.run import RunContext
 from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case, oil_corey_exponent
 from so_recon.validation.reference_inverse import (
     quadrature_reference,
+    reference_nodes,
     reference_status,
     trapezoid_weights,
 )
@@ -38,6 +39,22 @@ def test_nonuniform_quadrature_weights_are_used() -> None:
     )
     assert np.isclose(out["mean"], 0.75)
     np.testing.assert_allclose(out["weights"], [0.25, 0.75])
+
+
+def test_reference_grids_are_exactly_nested_and_add_only_midpoints() -> None:
+    nodes33 = reference_nodes(33)
+    nodes65 = reference_nodes(65)
+    nodes129 = reference_nodes(129)
+    np.testing.assert_array_equal(nodes65[::2], nodes33)
+    np.testing.assert_array_equal(nodes129[::2], nodes65)
+    assert len(set(nodes65) - set(nodes33)) == 32
+    assert len(set(nodes129) - set(nodes65)) == 64
+
+
+@pytest.mark.parametrize("n_nodes", [2, 16, 34, 66, 130])
+def test_reference_grid_refuses_non_nested_sizes(n_nodes: int) -> None:
+    with pytest.raises(ValueError, match=r"2\^k \+ 1"):
+        reference_nodes(n_nodes)
 
 
 def test_gaussian_grid_recovers_normalization_and_moments() -> None:

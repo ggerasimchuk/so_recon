@@ -25,7 +25,7 @@ from so_recon.observation.bins import rounding_grid
 from so_recon.observation.noise import draw_history
 from so_recon.observation.predict import predict_observations
 from so_recon.paths import ProjectPaths
-from so_recon.registry.artifact import write_json_artifact
+from so_recon.registry.artifact import ArtifactRef, write_json_artifact
 from so_recon.registry.hashing import sha256_json
 from so_recon.registry.run import RunContext
 from so_recon.simulator.budget import BudgetLedger
@@ -35,7 +35,10 @@ from so_recon.simulator.julia_bridge import JuliaNotFoundError, find_julia
 from so_recon.simulator.worker import PersistentJuliaWorker
 from so_recon.synthetic.reduced_inverse import ReducedDesign, build_reduced_case
 from so_recon.validation.e01_dependency import require_e01_ow
-from so_recon.validation.reference_inverse import run_reduced_reference
+from so_recon.validation.reference_inverse import (
+    reference_artifact_from_path,
+    run_reduced_reference,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -69,6 +72,36 @@ def _julia() -> Path:
         return find_julia()
     except JuliaNotFoundError as exc:
         pytest.fail(f"native reduced gate requires Julia: {exc}")
+
+
+def _optional_project_path(name: str, paths: ProjectPaths) -> Path | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    candidate = Path(raw)
+    return candidate if candidate.is_absolute() else paths.root / candidate
+
+
+def _refinement_inputs(
+    paths: ProjectPaths,
+) -> tuple[ArtifactRef | None, Path | None, int, str]:
+    reference_path = _optional_project_path("E02_REDUCED_PARENT_REFERENCE", paths)
+    ledger_path = _optional_project_path("E02_REDUCED_PARENT_LEDGER", paths)
+    raw_nodes = os.environ.get("E02_REDUCED_NODES")
+    supplied = (reference_path is not None, ledger_path is not None, raw_nodes is not None)
+    if any(supplied) and not all(supplied):
+        pytest.fail(
+            "reference refinement requires E02_REDUCED_PARENT_REFERENCE, "
+            "E02_REDUCED_PARENT_LEDGER and E02_REDUCED_NODES together"
+        )
+    if reference_path is None or ledger_path is None or raw_nodes is None:
+        return None, None, 33, "e02-reduced-native"
+    try:
+        n_nodes = int(raw_nodes)
+    except ValueError as exc:
+        pytest.fail(f"E02_REDUCED_NODES must be an integer: {exc}")
+    session_id = os.environ.get("E02_REDUCED_SESSION_ID", f"e02-reduced-native-{n_nodes}")
+    return reference_artifact_from_path(reference_path, paths), ledger_path, n_nodes, session_id
 
 
 def _blank_observations(design: ReducedDesign) -> ObservationBundle:
@@ -106,15 +139,35 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
     paths = ProjectPaths.default(ROOT)
     paths.ensure_dirs()
     dependency = require_e01_ow(_e01_report(paths), paths)
-    design = ReducedDesign()
-    session = paths.artifacts / "e02-reduced-native"
+    parent_reference, parent_ledger, n_nodes, session_id = _refinement_inputs(paths)
+    if parent_reference is None:
+        design = ReducedDesign()
+        inherited_observations = None
+        reference_parent_ids: tuple[str, ...] = ()
+    else:
+        parent_payload = json.loads(
+            paths.resolve(parent_reference.path).read_text(encoding="utf-8")
+        )
+        design = ReducedDesign.model_validate(parent_payload["design"])
+        inherited_observations = ObservationBundle.model_validate(parent_payload["observations"])
+        reference_parent_ids = (parent_reference.producer_run_id,)
+    session = paths.artifacts / session_id
     probe = _bounded_probe(session)
-    ledger = BudgetLedger.start(
-        profile=P0_VERIFY_PROFILE,
-        path=session / "ledger.json",
-        session_id="e02-reduced-native",
-        probe=probe,
-    )
+    if parent_ledger is None:
+        ledger = BudgetLedger.start(
+            profile=P0_VERIFY_PROFILE,
+            path=session / "ledger.json",
+            session_id=session_id,
+            probe=probe,
+        )
+    else:
+        ledger = BudgetLedger.resume(
+            parent_path=parent_ledger,
+            path=session / "ledger.json",
+            session_id=session_id,
+            probe=probe,
+            profile=P0_VERIFY_PROFILE,
+        )
 
     def run_factory(command: str, parent_run_ids: tuple[str, ...]) -> RunContext:
         return RunContext.start(
@@ -126,70 +179,77 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
             raw_input_hashes={"e01_dependency": sha256_json(dependency)},
         )
 
-    truth_z = float(np.random.default_rng(701).standard_normal())
-    blank = _blank_observations(design)
     with PersistentJuliaWorker(
         _julia(), ROOT / "julia", session, P0_VERIFY_PROFILE, paths=paths, probe=probe
     ) as worker:
-        truth_ctx = run_factory("e02-reduced-truth", ())
-        truth_case = build_reduced_case(truth_z, design, paths, truth_ctx)
-        truth = require_complete_forward(
-            simulate(
-                truth_case,
-                OutputRequest(
-                    state_times_s=design.report_edges_s,
-                    keep_native_restart=False,
-                    chunk_months=1,
-                ),
-                worker=worker,
-                ctx=truth_ctx,
-                ledger=ledger,
-                solver_config=SolverConfig(max_timestep_days=5.0, max_nonlinear_iterations=15),
+        if inherited_observations is None:
+            truth_z = float(np.random.default_rng(701).standard_normal())
+            blank = _blank_observations(design)
+            truth_ctx = run_factory("e02-reduced-truth", ())
+            truth_case = build_reduced_case(truth_z, design, paths, truth_ctx)
+            truth = require_complete_forward(
+                simulate(
+                    truth_case,
+                    OutputRequest(
+                        state_times_s=design.report_edges_s,
+                        keep_native_restart=False,
+                        chunk_months=1,
+                    ),
+                    worker=worker,
+                    ctx=truth_ctx,
+                    ledger=ledger,
+                    solver_config=SolverConfig(max_timestep_days=5.0, max_nonlinear_iterations=15),
+                )
             )
-        )
-        prediction = predict_observations(truth, blank, paths)
-        observed_rows = draw_history(
-            blank.history,
-            prediction.fw,
-            FIXED_NOISE_THETA,
-            {"watercut-0.01": rounding_grid(0.01)},
-            np.random.default_rng(8000),
-        )
-        observations = blank.model_copy(
-            update={
-                "history": observed_rows,
-                "observation_hash": sha256_json(
-                    {
-                        "rows": [row.model_dump(mode="json") for row in observed_rows],
-                        "truth_seed": 701,
-                        "noise_seed": 8000,
-                    }
-                ),
+            prediction = predict_observations(truth, blank, paths)
+            observed_rows = draw_history(
+                blank.history,
+                prediction.fw,
+                FIXED_NOISE_THETA,
+                {"watercut-0.01": rounding_grid(0.01)},
+                np.random.default_rng(8000),
+            )
+            observations = blank.model_copy(
+                update={
+                    "history": observed_rows,
+                    "observation_hash": sha256_json(
+                        {
+                            "rows": [row.model_dump(mode="json") for row in observed_rows],
+                            "truth_seed": 701,
+                            "noise_seed": 8000,
+                        }
+                    ),
+                }
+            )
+            values = np.asarray(
+                [value for value in prediction.fw.values() if value is not None],
+                dtype=np.float64,
+            )
+            informative = bool(values.size and np.ptp(values) >= 0.01 and values.max() >= 0.01)
+            design_payload = {
+                "schema_version": "e02-reduced-design-check-1",
+                "status": "INFORMATIVE" if informative else "DESIGN_NOT_INFORMATIVE",
+                "truth_z": truth_z,
+                "model_hash": truth.model_hash,
+                "watercut": values.tolist(),
+                "watercut_range": float(np.ptp(values)) if values.size else None,
+                "observations": observations.model_dump(mode="json"),
             }
-        )
-        values = np.asarray(
-            [value for value in prediction.fw.values() if value is not None], dtype=np.float64
-        )
-        informative = bool(values.size and np.ptp(values) >= 0.01 and values.max() >= 0.01)
-        design_payload = {
-            "schema_version": "e02-reduced-design-check-1",
-            "status": "INFORMATIVE" if informative else "DESIGN_NOT_INFORMATIVE",
-            "truth_z": truth_z,
-            "model_hash": truth.model_hash,
-            "watercut": values.tolist(),
-            "watercut_range": float(np.ptp(values)) if values.size else None,
-            "observations": observations.model_dump(mode="json"),
-        }
-        design_ref = write_json_artifact(
-            truth_ctx.run_dir / "design_check.json",
-            design_payload,
-            paths,
-            schema_version="e02-reduced-design-check-1",
-            producer_run_id=truth_ctx.run_id,
-            now=datetime.now(UTC),
-        )
-        truth_ctx.finish("PASS" if informative else "FAIL", outputs={"design_check": design_ref})
-        assert informative, json.dumps(design_payload, sort_keys=True)
+            design_ref = write_json_artifact(
+                truth_ctx.run_dir / "design_check.json",
+                design_payload,
+                paths,
+                schema_version="e02-reduced-design-check-1",
+                producer_run_id=truth_ctx.run_id,
+                now=datetime.now(UTC),
+            )
+            truth_ctx.finish(
+                "PASS" if informative else "FAIL", outputs={"design_check": design_ref}
+            )
+            assert informative, json.dumps(design_payload, sort_keys=True)
+            reference_parent_ids = (truth_ctx.run_id,)
+        else:
+            observations = inherited_observations
 
         reference_ref = run_reduced_reference(
             design,
@@ -197,10 +257,19 @@ def test_reduced_physical_inverse_matches_an_independent_reference() -> None:
             worker,
             ledger,
             run_factory,
-            parent_run_ids=(truth_ctx.run_id,),
+            parent_run_ids=reference_parent_ids,
+            n_nodes=n_nodes,
+            parent_reference=parent_reference,
         )
 
     reference = json.loads(paths.resolve(reference_ref.path).read_text(encoding="utf-8"))
     assert reference["status"] == "CONVERGED", reference["refinement"]
-    assert len(reference["nodes"]) == 33
-    assert ledger.session_totals().forwards == 34
+    assert len(reference["nodes"]) == n_nodes
+    if parent_reference is None:
+        assert ledger.session_totals().forwards == 34
+    else:
+        parent_count = int(reference["coarse"]["n_nodes"])
+        assert reference["lineage"]["reused_node_count"] == parent_count
+        assert reference["lineage"]["new_node_count"] == n_nodes - parent_count
+        assert ledger.session_totals().forwards == n_nodes - parent_count
+        assert ledger.cumulative_totals().forwards == n_nodes + 1
