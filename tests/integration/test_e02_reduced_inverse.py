@@ -91,7 +91,13 @@ def _blank_observations(design: ReducedDesign) -> ObservationBundle:
         bin_edges_by_group={"watercut-0.01": tuple(float(v) for v in grid.edges)},
         cutoff_s=design.report_edges_s[-1],
         information_hash=sha256_json({"design": design.model_dump(mode="json"), "G": []}),
-        observation_hash="0" * 64,
+        observation_hash=sha256_json(
+            {
+                "status": "PENDING_TRUTH_FORWARD",
+                "rows": [row.model_dump(mode="json") for row in rows],
+                "design": design.model_dump(mode="json"),
+            }
+        ),
     )
 
 
