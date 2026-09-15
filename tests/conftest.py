@@ -8,7 +8,7 @@ starts seventeen P1 trajectories. Without the option they SKIP, saying so.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,13 @@ import pytest
 
 E01_PHYSICS_OPTION = "--run-e01-physics"
 E01_PHYSICS_MARKER = "e01_physics"
+
+#: Plan 12.9: «Stage gate требует присутствия всех mandatory checks и нуля skipped/unrun в
+#: его собственной matrix; обычный pytest PASS с skips недостаточен.» `pytest -q` exits 0
+#: with skips, so a gate that only read the exit code greenlighted a validator that had
+#: skipped itself for want of the artifact it was supposed to check. With this option a
+#: skip in the gate's own matrix is a failure, which is what 12.9 says it is.
+FAIL_ON_SKIP_OPTION = "--fail-on-skip"
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -28,6 +35,40 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "`so-recon verify-physics` session published"
         ),
     )
+    parser.addoption(
+        FAIL_ON_SKIP_OPTION,
+        action="store_true",
+        default=False,
+        help=(
+            "treat any skipped test as a failure; used by scripts/e01_gate.sh, where a "
+            "validator that skipped itself is an unrun gate rather than a pass (plan 12.9)"
+        ),
+    )
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """Under `--fail-on-skip`, a skip is reported as a failure.
+
+    An expected failure keeps its own outcome: `wasxfail` is a recorded prediction that
+    came true, not a check nobody ran.
+    """
+    report = yield
+    if not item.config.getoption(FAIL_ON_SKIP_OPTION):
+        return report
+    if not report.skipped or hasattr(report, "wasxfail"):
+        return report
+    detail = report.longrepr[2] if isinstance(report.longrepr, tuple) else report.longrepr
+    report.outcome = "failed"
+    report.longrepr = (
+        f"{item.nodeid} was SKIPPED while {FAIL_ON_SKIP_OPTION} is in force.\n"
+        f"reason: {detail}\n"
+        "Plan 12.9: the stage gate needs every mandatory check present and zero skipped or "
+        "unrun in its own matrix; an ordinary pytest PASS with skips is not enough."
+    )
+    return report
 
 
 def pytest_configure(config: pytest.Config) -> None:

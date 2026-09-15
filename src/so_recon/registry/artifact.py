@@ -118,6 +118,19 @@ def write_artifact(
     )
 
 
+def json_artifact_bytes(obj: object) -> bytes:
+    """The exact bytes `write_json_artifact` publishes for `obj`.
+
+    Named so that a caller which needs the DIGEST of a manifest it has not published yet —
+    a resumed session matching a case against the previous session's ledger, for instance —
+    can compute it from the same encoder rather than from a second copy of these arguments
+    that would silently drift from this one.
+    """
+    return (
+        json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
+    ).encode("utf-8")
+
+
 def write_json_artifact(
     path: Path,
     obj: object,
@@ -128,9 +141,7 @@ def write_json_artifact(
     parent_artifact_ids: Sequence[str] = (),
     now: datetime,
 ) -> ArtifactRef:
-    payload = (
-        json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False, allow_nan=False) + "\n"
-    ).encode("utf-8")
+    payload = json_artifact_bytes(obj)
     return write_artifact(
         path,
         payload,

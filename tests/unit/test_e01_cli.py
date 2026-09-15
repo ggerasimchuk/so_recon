@@ -31,15 +31,15 @@ from so_recon.cli import main
 from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext
 from so_recon.simulator.case_io import CASE_MANIFEST_FILENAME, write_case
-from so_recon.simulator.commands import (
+from so_recon.simulator.suite_record import (
     MANDATORY_CHECKS,
     SUITE_REPORT_FILENAME,
     JobOutcome,
     SuiteOutcome,
-    SuiteRun,
     forward_exit_code,
     suite_exit_code,
 )
+from so_recon.simulator.suites import SuiteRun
 from so_recon.synthetic.p1 import P1Design, render_p1
 from so_recon.synthetic.world_io import build_p1_case
 from so_recon.validation.physics import PhysicsCheck
@@ -516,6 +516,24 @@ def test_a_resume_ledger_that_is_not_a_ledger_records_a_fail(e01_project: Path) 
     code = main(_argv(e01_project, "verify-physics", "--suite", "p0", "--resume-ledger", str(bad)))
     assert code != 0
     assert _last_record(e01_project)["status"] == "FAIL"
+
+
+def test_replay_is_registered_and_does_not_disturb_the_option_order(e01_project: Path) -> None:
+    """12.6's explicit replay: the one thing that makes a resumed session run it all again."""
+
+    def clean(run: SuiteRun) -> SuiteOutcome:
+        return SuiteOutcome(
+            jobs=(_job("closed_cell"),),
+            checks=_p0_mandatory(),
+            remaining_job_ids=(),
+            stopped_reason=None,
+        )
+
+    argv = _argv(e01_project, "verify-physics", "--suite", "p0", "--replay")
+    assert main(argv, suite_runner=clean) == 0
+    recorded = _last_record(e01_project)["argv"]
+    assert recorded[:2] == ["so-recon", "--root"] and recorded[3] == "--config"
+    assert recorded[5] == "verify-physics" and "--replay" in recorded
 
 
 def test_suite_exit_code_of_a_directory_with_no_report_is_not_zero(tmp_path: Path) -> None:

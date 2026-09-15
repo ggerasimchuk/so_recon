@@ -202,6 +202,7 @@ def world(tmp_path: Path) -> World:
         "job_plan_sha256": "",
         "source_manifest": {},
         "git_commit": accepted,
+        "git_commits": [accepted],
         "git_dirty": False,
         "commands": [
             _command(P0_RUN, "verify-physics", accepted),
@@ -215,6 +216,7 @@ def world(tmp_path: Path) -> World:
         "unrun_checks": [],
         "jobs": [_job("p0_bl64")],
         "remaining_job_ids": [],
+        "black_oil_remaining_job_ids": [],
         "limitations": [],
         "ow_gate": "PASS",
         "bo_status": "NOT_RUN",

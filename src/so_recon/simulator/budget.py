@@ -558,12 +558,14 @@ class BudgetLedger:
         path: Path,
         probe: Callable[[], ResourceSnapshot],
         baseline: ResourceSnapshot,
+        readonly: bool = False,
     ) -> None:
         self._record = record
         self._path = path
         self._probe = probe
         self._started_monotonic_s = baseline.monotonic_s
         self._baseline_swap_bytes = baseline.swap_used_bytes
+        self._readonly = readonly
 
     # ---------------------------------------------------------------- construction
 
@@ -592,6 +594,18 @@ class BudgetLedger:
         ledger = cls(record, path=path, probe=probe, baseline=baseline)
         ledger._write()
         return ledger
+
+    @classmethod
+    def read(cls, path: Path, *, probe: Callable[[], ResourceSnapshot]) -> BudgetLedger:
+        """Open an EXISTING ledger to ask questions of it, writing nothing.
+
+        `start` and `resume` both open a NEW session and record it; a reader must do
+        neither. A resumed session asking `is_already_complete` about a previous session's
+        account is reading an immutable record, and opening it is not an event in it — so
+        the instance returned here refuses every write rather than trusting its callers.
+        """
+        record = load_ledger(path)
+        return cls(record, path=path, probe=probe, baseline=probe(), readonly=True)
 
     @classmethod
     def resume(
@@ -684,6 +698,12 @@ class BudgetLedger:
     # ---------------------------------------------------------------------- writes
 
     def _write(self) -> None:
+        if self._readonly:
+            raise BudgetStop(
+                "PROTOCOL_FAILURE",
+                f"ledger {self._path} was opened for reading; a previous session's account "
+                "is an immutable record and this session writes its own",
+            )
         write_json_atomic(self._path, self._record.model_dump(mode="json"))
 
     def _replace(self, **fields: object) -> None:

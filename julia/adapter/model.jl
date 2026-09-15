@@ -440,6 +440,31 @@ function well_cells(well::AbstractDict, n_cells::Int)
 end
 
 """
+    build_physical(case, arrays) -> (; model, parameters, state0)
+
+THE dispatcher: which physical constructor a case's declared class reaches.
+
+There is exactly one of these and every driver goes through it — `run_forward`,
+`run_forward_native` and the verification diagnostics alike — so a case cannot reach one
+constructor down one path and another down a second. `fluids.kind` is data the case declares
+and is never inferred from the fields that happen to be present: a class this build does not
+have is an `InvalidCaseInput`, which the worker reports as `INVALID_INPUT`, and never a
+default to the oil-water model.
+"""
+function build_physical(case::AbstractDict, arrays::AbstractDict)
+    fluid = get(case, "fluids", Dict{String,Any}())
+    kind = String(get(fluid, "kind", ""))
+    kind == "OW" && return build_ow(case, arrays)
+    kind == BO_FLUID_KIND && return build_blackoil(case, arrays)
+    invalid(
+        "build_physical: fluids.kind $(repr(get(fluid, "kind", nothing))) names no physical " *
+        "model this build has; it builds 'OW' (educational oil-water) and " *
+        "'$(BO_FLUID_KIND)' (educational black-oil capability). An unknown physics class is " *
+        "refused, never defaulted",
+    )
+end
+
+"""
 Refuse a model whose pore volume could move with pressure.
 
 `pore_volume` reads `FluidVolume`, which JutulDarcy sets up as a PARAMETER. Replacing it
@@ -624,8 +649,19 @@ function describe_model(physical)
         is_well = JutulDarcy.model_or_domain_is_well(submodel)
         is_well && push!(wells, string(name))
         if name == :Reservoir || is_well
-            viscosity = physical.parameters[name][:PhaseViscosities]
-            viscosities[string(name)] = Float64[viscosity[i, 1] for i in 1:PHASE_COUNT]
+            # The oil-water model carries one viscosity per phase as a PARAMETER, set from
+            # the case. A black-oil model carries `DeckPhaseViscosities` as a secondary
+            # VARIABLE instead — viscosity is a function of pressure and of the dissolved
+            # ratio there — so there is no constant to describe, and the description says so
+            # rather than inventing one. The phase count comes from the array that exists, not
+            # from `PHASE_COUNT`, because this function describes whichever model was built.
+            parameters = physical.parameters[name]
+            viscosities[string(name)] = if haskey(parameters, :PhaseViscosities)
+                viscosity = parameters[:PhaseViscosities]
+                Float64[viscosity[i, 1] for i in 1:size(viscosity, 1)]
+            else
+                nothing
+            end
         end
     end
     depths = vec(JutulDarcy.reservoir_domain(model)[:cell_centroids][3, :])

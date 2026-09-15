@@ -34,6 +34,17 @@ from so_recon.paths import validate_relative_path
 
 # Annotated as Literal so the record defaults below stay the literal type they declare.
 CASE_SCHEMA_VERSION: Literal["case-1"] = "case-1"
+
+#: Task 13: the schema a black-oil case declares. `case-2` is a SUPERSET of `case-1` — it
+#: adds `BlackOilFluidSpec` to the `fluids` union and nothing else — and the two versions
+#: coexist deliberately.
+#:
+#: `schema_version` is the first field of `MODEL_HASH_FIELDS`, so moving every oil-water case
+#: to `case-2` would change every published OW model hash and with it every case digest,
+#: every ledger key and every frozen expectation in the stage. An oil-water case therefore
+#: stays `case-1` for good, a black-oil case is `case-2`, and `decode_case_payload` below is
+#: the explicit legacy decoder that reads either. No OW manifest is rewritten.
+CASE_SCHEMA_VERSION_BO: Literal["case-2"] = "case-2"
 JOB_SCHEMA_VERSION: Literal["job-1"] = "job-1"
 FORWARD_SCHEMA_VERSION: Literal["forward-1"] = "forward-1"
 
@@ -326,6 +337,121 @@ class FluidSpec(StrictModel):
         return v
 
 
+#: Task 13: the three phases of the educational black-oil capability, in the native order
+#: `StandardBlackOilSystem` is built with — aqueous, liquid, vapour.
+BO_PHASES = ("water", "oil", "gas")
+
+
+class BlackOilFluidSpec(StrictModel):
+    """The educational three-phase black-oil fluid of Task 13. Tuples are (water, oil, gas).
+
+    This is a CAPABILITY fluid and not a field one. Its PVT is an academic benchmark table
+    that ships inside the pinned JutulDarcy — `JutulDarcy.blackoil_bench_pvt(:spe1)` — not a
+    Romashka PVT, and the three-phase relative permeability is an explicit approximation
+    (independent Corey curves, no hysteresis) rather than the Stone or LET model a field
+    decision would choose. Both facts are fields here rather than prose somewhere, because a
+    later stage must be able to read off the record that this capability did not choose the
+    physics of a field case (plan 13.5).
+
+    `rv` is fixed at zero: the pinned constructor is given PVTO and PVDG and no PVTG, so the
+    gas carries no vaporised oil and a case that declared otherwise would be declaring a
+    model this adapter does not build.
+    """
+
+    kind: Literal["BO"] = "BO"
+    #: Which native call produced the tables, spelled exactly as it is called.
+    pvt_source: str = Field(min_length=1)
+    #: SHA-256 of each exported PVT table's canonical numbers, plus the JutulDarcy tree and
+    #: version they came out of. A table is a table's numbers, not the name of a function.
+    pvt_table_hashes: dict[str, str]
+    #: (water, oil, gas) surface densities, in the phase order the system is built with.
+    density_sc_kg_m3: tuple[float, float, float]
+    #: Dissolved gas-oil ratio the case starts at, m3_sc gas per m3_sc oil, uniform over the
+    #: grid. It lives with the PVT it has to be consistent with: `InitialStateSpec` is shared
+    #: with every oil-water case and a field added there would move every OW model hash.
+    initial_rs_m3_m3: float = Field(ge=0.0)
+    #: No vaporised oil. Stated, and refused if it is anything else.
+    rv: float = 0.0
+    p_sc_pa: float = Field(default=101325.0, gt=0.0)
+    t_sc_k: float = Field(default=288.15, gt=0.0)
+    #: Independent Corey curves per phase, (water, oil, gas).
+    corey_exponents: tuple[float, float, float] = (2.0, 2.0, 2.0)
+    residual_saturations: tuple[float, float, float] = (0.1, 0.1, 0.0)
+    kr_endpoints: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    #: The relperm definition this capability registers, by name. Hashed with the PVT.
+    relperm_definition: str = (
+        "BrooksCoreyRelativePermeabilities(3, [2,2,2], [0.1,0.1,0.0], [1,1,1])"
+    )
+    hysteresis: Literal["none"] = "none"
+    pc_model: Literal["zero"] = "zero"
+    educational: bool = True
+    #: True because the PVT is a published academic benchmark rather than a field sample.
+    academic_benchmark: bool = True
+    analytical_limit: bool = False
+
+    @field_validator("density_sc_kg_m3", "corey_exponents", "kr_endpoints")
+    @classmethod
+    def _positive_triple(cls, v: tuple[float, float, float]) -> tuple[float, float, float]:
+        if any(x <= 0.0 for x in v):
+            raise ValueError(f"must be positive for all three phases, got {v}")
+        return v
+
+    @field_validator("kr_endpoints")
+    @classmethod
+    def _endpoints_are_relative(cls, v: tuple[float, float, float]) -> tuple[float, float, float]:
+        if any(x > 1.0 for x in v):
+            raise ValueError(f"relative permeability endpoints must not exceed 1, got {v}")
+        return v
+
+    @field_validator("rv")
+    @classmethod
+    def _no_vaporised_oil(cls, v: float) -> float:
+        if v != 0.0:
+            raise ValueError(
+                "the educational black-oil capability is disgas-only: the pinned constructor "
+                f"is given PVTO and PVDG and no PVTG, so rv must be exactly 0.0, got {v}"
+            )
+        return v
+
+    @field_validator("residual_saturations")
+    @classmethod
+    def _leaves_a_mobile_range(cls, v: tuple[float, float, float]) -> tuple[float, float, float]:
+        if any(not 0.0 <= x < 1.0 for x in v):
+            raise ValueError(f"residual_saturations must lie in [0,1), got {v}")
+        if sum(v) >= 1.0:
+            raise ValueError(
+                f"residual_saturations {v}: Swc + Sorw + Sgc must be below 1, or the three "
+                "phases have no state they can share; invalid input is refused, not clipped"
+            )
+        return v
+
+    @field_validator("pvt_table_hashes")
+    @classmethod
+    def _tables_are_hashed(cls, v: dict[str, str]) -> dict[str, str]:
+        missing = sorted({"pvtw", "pvto", "pvdg", "relperm"} - set(v))
+        if missing:
+            raise ValueError(
+                f"pvt_table_hashes must name every table this fluid is built from; missing "
+                f"{missing}. A PVT identified only by the function that returned it is not "
+                "identified by its numbers"
+            )
+        for name, digest in sorted(v.items()):
+            if not (len(digest) == 64 and all(c in "0123456789abcdef" for c in digest)):
+                raise ValueError(f"pvt_table_hashes[{name!r}] is not a SHA-256 digest: {digest!r}")
+        return v
+
+    @property
+    def mobile_saturation_range(self) -> tuple[float, float]:
+        """[Swc, 1 - Sorw]: the interval a water saturation has to stay inside."""
+        swc, sorw, _sgc = self.residual_saturations
+        return swc, 1.0 - sorw
+
+
+#: Every fluid a case may declare, discriminated by the class it names. An unknown class is
+#: a refusal and never a default: `INVALID_INPUT` is what the adapter reports for one.
+AnyFluidSpec = Annotated[FluidSpec | BlackOilFluidSpec, Field(discriminator="kind")]
+
+
 class WellSpec(StrictModel):
     well_id: str = Field(min_length=1)
     cells: tuple[int, ...]
@@ -539,7 +665,7 @@ def _parse_iso_date(label: str, value: str) -> date:
 class CaseBundle(StrictModel):
     """Everything the forward operator F needs, with nothing that F does not read."""
 
-    schema_version: Literal["case-1"] = CASE_SCHEMA_VERSION
+    schema_version: Literal["case-1", "case-2"] = CASE_SCHEMA_VERSION
     spec_version: Literal["4.0"] = "4.0"
     case_id: str = Field(min_length=1)
     world_id: str = Field(min_length=1)
@@ -550,7 +676,7 @@ class CaseBundle(StrictModel):
     report_edges_s: tuple[float, ...]
     grid: GridSpec
     rock: RockSpec
-    fluids: FluidSpec
+    fluids: AnyFluidSpec
     wells: tuple[WellSpec, ...]
     controls: tuple[ControlSegment, ...]
     initial: InitialStateSpec
@@ -613,12 +739,28 @@ class CaseBundle(StrictModel):
 
     @model_validator(mode="after")
     def _cross_record_consistency(self) -> CaseBundle:
+        self._check_schema_version()
         self._check_dates()
         self._check_gravity()
         self._check_cell_counts()
         self._check_wells()
         self._check_controls()
         return self
+
+    def _check_schema_version(self) -> None:
+        """The declared schema and the declared physics class say the same thing.
+
+        `case-2` exists only because the black-oil fluid does. An oil-water case that
+        declared it would change its own model hash for nothing, and a black-oil case that
+        declared `case-1` would claim to be readable by a build that has no `BlackOilFluidSpec`
+        at all. Both are refused here rather than discovered downstream.
+        """
+        wanted = CASE_SCHEMA_VERSION_BO if self.fluids.kind == "BO" else CASE_SCHEMA_VERSION
+        if self.schema_version != wanted:
+            raise ValueError(
+                f"a case whose fluids.kind is {self.fluids.kind!r} declares schema_version "
+                f"{wanted!r}, got {self.schema_version!r}"
+            )
 
     def _check_dates(self) -> None:
         start = _parse_iso_date("start_date", self.start_date)
@@ -783,6 +925,53 @@ class CostRecord(StrictModel):
     measurement_method: str = Field(min_length=1)
 
 
+class BlackOilOutputs(StrictModel):
+    """Task 13: what a black-oil result carries that an oil-water one has no field for.
+
+    `ForwardResult` keeps every oil-water field exactly as it was and gains this ONE
+    nullable block, so an oil-water record's bytes are unchanged and a black-oil record says
+    in the record — not in a reader's assumption — which gas numbers it is publishing.
+
+    The two gas inventories are the split the capability exists to demonstrate: free gas is
+    `Sg * PV / Bg` and dissolved gas is `Rs * So * PV / Bo`, both in standard cubic metres,
+    both per published state time. Their sum is the component gas inventory the balance is
+    closed on. Gas is NOT summed into `liquid_prod_m3_sc` anywhere: a standard cubic metre of
+    gas and one of oil are not the same physical quantity and the OW tables' liquid columns
+    do not learn to hold one.
+    """
+
+    #: `states` keys of the extra fields: gas saturation, dissolved GOR, gas formation volume
+    #: factor. They live in the same states file as the oil-water fields.
+    sg: ArrayRef
+    rs: ArrayRef
+    bg: ArrayRef
+    #: Per published state time, in m3_sc.
+    free_gas_m3_sc: tuple[float, ...]
+    dissolved_gas_m3_sc: tuple[float, ...]
+    #: Cumulative surface gas produced (positive) over the published horizon, m3_sc.
+    surface_gas_m3_sc: float
+    #: Where the per-month surface gas volumes are, project-relative. Its own table, and not
+    #: a column bolted into the oil-water monthly schema.
+    gas_monthly_path: RelativePath
+    pvt_source: str = Field(min_length=1)
+    pvt_table_hashes: dict[str, str]
+
+    @model_validator(mode="after")
+    def _the_two_inventories_are_the_same_axis(self) -> BlackOilOutputs:
+        if len(self.free_gas_m3_sc) != len(self.dissolved_gas_m3_sc):
+            raise ValueError(
+                "free_gas_m3_sc and dissolved_gas_m3_sc are the same time axis; got "
+                f"{len(self.free_gas_m3_sc)} and {len(self.dissolved_gas_m3_sc)} entries"
+            )
+        for name, values in (
+            ("free_gas_m3_sc", self.free_gas_m3_sc),
+            ("dissolved_gas_m3_sc", self.dissolved_gas_m3_sc),
+        ):
+            if any(v < 0.0 for v in values):
+                raise ValueError(f"{name} holds a negative inventory: {values}")
+        return self
+
+
 class ForwardResult(StrictModel):
     schema_version: Literal["forward-1"] = FORWARD_SCHEMA_VERSION
     job_id: str = Field(min_length=1)
@@ -798,6 +987,10 @@ class ForwardResult(StrictModel):
     connections_path: RelativePath | None = None
     balances_path: RelativePath | None = None
     restart: RestartRef | None = None
+    #: Task 13. None for every oil-water result, which is every result E01 published before
+    #: the black-oil capability existed; those records are unchanged by this field's
+    #: existence because a default of None dumps as `null` and nothing hashes a result.
+    black_oil: BlackOilOutputs | None = None
     solver_metadata: dict[str, str]
     cost: CostRecord
     parent_attempt_ids: tuple[str, ...]
@@ -810,6 +1003,24 @@ class ForwardResult(StrictModel):
         if any(b <= a for a, b in zip(v, v[1:], strict=False)):
             raise ValueError(f"times_s must be strictly increasing, got {v}")
         return v
+
+    @model_validator(mode="after")
+    def _black_oil_block_belongs_to_a_black_oil_result(self) -> ForwardResult:
+        if self.black_oil is not None and self.physics_class != "BO":
+            raise ValueError(
+                f"a result whose physics_class is {self.physics_class!r} carries a black-oil "
+                "output block; the block names the class it belongs to rather than being "
+                "attachable to any result"
+            )
+        if self.black_oil is None:
+            return self
+        for name in ("sg", "rs", "bg"):
+            if name not in self.states:
+                raise ValueError(
+                    f"the black-oil block names states[{name!r}], which the result does not "
+                    "publish; a named output that is not there is not an output"
+                )
+        return self
 
     @model_validator(mode="after")
     def _completeness_matches_the_status(self) -> ForwardResult:

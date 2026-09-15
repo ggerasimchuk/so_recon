@@ -97,6 +97,116 @@ REQUIRED_TOLERANCE_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: Task 13: where the BLACK-OIL capability's own tolerance block lives, and what it declares.
+#:
+#: It is a separate file from the oil-water block because the capability is a separate gate
+#: (plan 13.5). Adding keys to `configs/e01_tolerances.yml` would have changed that file's
+#: digest, and every P0 and P1 suite report already published names that digest as the
+#: agreement it was scored against — so the oil-water evidence would have been invalidated by
+#: a capability that has nothing to do with it.
+DEFAULT_BLACKOIL_TOLERANCES_RELPATH = "configs/e01_blackoil_tolerances.yml"
+BLACKOIL_TOLERANCE_SCHEMA_VERSION = "e01-blackoil-tolerances-1"
+
+REQUIRED_BLACKOIL_TOLERANCE_KEYS: frozenset[str] = frozenset(
+    {
+        "blackoil_saturation_sum_abs_max",
+        "blackoil_gas_balance_relative_max",
+        "blackoil_gas_inventory_closure_relative_max",
+        "blackoil_free_gas_shortfall_max",
+        "blackoil_bubble_point_shortfall_max",
+        "blackoil_closed_saturation_drift_max",
+        "blackoil_closed_gas_inventory_relative_max",
+        "blackoil_restart_saturation_abs_max",
+        "blackoil_restart_pressure_relative_max",
+        "blackoil_restart_rs_relative_max",
+        "blackoil_restart_inventory_relative_max",
+        "blackoil_restart_surface_volume_relative_max",
+    }
+)
+
+
+#: Which measured number each black-oil check is GATED on, and against which threshold.
+#:
+#: It lives here, beside the thresholds themselves, because two modules need the same answer:
+#: `simulator/suites.py` scores against it and `validation/e01_report.py` renders the
+#: measured-against-threshold column from it. A renderer that guessed the pairing from the
+#: names would print "reported, not gated" beside a number that IS gated — which is the one
+#: mistake a table like that must not make.
+#:
+#: A metric that appears in a check and NOT here is reported and not gated, deliberately: an
+#: inventory, a bubble point or a surface volume is context for the gated numbers, and pairing
+#: it with a threshold would name a comparison nobody makes.
+BLACKOIL_GATES: dict[str, tuple[tuple[str, str], ...]] = {
+    "black_oil": (
+        ("blackoil_saturation_sum_drift", "blackoil_saturation_sum_abs_max"),
+        ("blackoil_gas_balance_cumulative_relative", "blackoil_gas_balance_relative_max"),
+        (
+            "blackoil_gas_inventory_closure_relative",
+            "blackoil_gas_inventory_closure_relative_max",
+        ),
+        # The same closure at the LAST published state. Both are gated against the same
+        # threshold because it is the same claim; only the first one is satisfiable without
+        # the free term, which is why the second exists.
+        (
+            "blackoil_gas_inventory_closure_final_relative",
+            "blackoil_gas_inventory_closure_relative_max",
+        ),
+        ("blackoil_final_free_gas_fraction_shortfall", "blackoil_free_gas_shortfall_max"),
+        ("blackoil_free_gas_shortfall", "blackoil_free_gas_shortfall_max"),
+        ("blackoil_bubble_point_shortfall", "blackoil_bubble_point_shortfall_max"),
+        ("blackoil_closed_saturation_drift", "blackoil_closed_saturation_drift_max"),
+        ("blackoil_closed_gas_inventory_relative", "blackoil_closed_gas_inventory_relative_max"),
+    ),
+    "black_oil_restart": (
+        ("blackoil_restart_saturation_abs", "blackoil_restart_saturation_abs_max"),
+        ("blackoil_restart_pressure_relative", "blackoil_restart_pressure_relative_max"),
+        ("blackoil_restart_rs_relative", "blackoil_restart_rs_relative_max"),
+        ("blackoil_restart_free_gas_relative", "blackoil_restart_inventory_relative_max"),
+        ("blackoil_restart_dissolved_gas_relative", "blackoil_restart_inventory_relative_max"),
+        (
+            "blackoil_restart_surface_volume_relative",
+            "blackoil_restart_surface_volume_relative_max",
+        ),
+    ),
+}
+
+
+def load_blackoil_tolerances(path: Path) -> dict[str, float]:
+    """Read the black-oil capability's fixed tolerance block, or refuse it.
+
+    The same exact-key-set rule as `load_tolerances`, against a different key set and a
+    different schema version. Nothing here falls back on the oil-water block: a black-oil
+    threshold that silently borrowed a liquid one would be a gas number measured against a
+    liquid agreement.
+    """
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: a tolerance config is a mapping, got {type(payload).__name__}")
+    declared = payload.get("schema_version")
+    if declared != BLACKOIL_TOLERANCE_SCHEMA_VERSION:
+        raise ValueError(
+            f"{path}: declares schema_version {declared!r}; this build reads "
+            f"{BLACKOIL_TOLERANCE_SCHEMA_VERSION!r}"
+        )
+    values = {key: value for key, value in payload.items() if key != "schema_version"}
+    missing = sorted(REQUIRED_BLACKOIL_TOLERANCE_KEYS - set(values))
+    unknown = sorted(set(values) - REQUIRED_BLACKOIL_TOLERANCE_KEYS)
+    if missing or unknown:
+        raise ValueError(
+            f"{path}: the black-oil tolerance block is not the one this build scores against. "
+            f"Missing {missing}, unknown {unknown}; a missing threshold is never defaulted and "
+            "an unknown one is never ignored"
+        )
+    out: dict[str, float] = {}
+    for key, value in sorted(values.items()):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError(f"{path}: {key} must be a number, got {value!r}")
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{path}: {key} must be finite and positive, got {value!r}")
+        out[key] = float(value)
+    return out
+
+
 #: The plan's relative denominators, stated once (Task 9.1).
 VOLUME_DENOMINATOR_FLOOR = 1e-6
 PRESSURE_DENOMINATOR_FLOOR_PA = 1.0
@@ -495,6 +605,9 @@ _FIXTURES: dict[str, Fixture] = {
         horizon_s=SECONDS_PER_DAY,
     ),
 }
+
+# The retained coarse-grid diagnostic uses exactly the same equations and tolerances.
+_FIXTURES["five_spot_coarse_sensitivity"] = _FIXTURES["five_spot_refinement"]
 
 #: Reference density of water at standard conditions (plan §3.1). The published `bw` is
 #: `rho_w_sc / rho_w(p)`, so this is what turns it back into the density the flux used.
