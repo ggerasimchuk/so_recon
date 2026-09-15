@@ -907,10 +907,16 @@ class SMCState(StrictModel):
     def _state_is_self_consistent(self) -> SMCState:
         _reject_nonfinite(self.rng_state, label="rng_state")
         _reject_nonfinite(self.diagnostics, label="diagnostics")
-        if len(self.log_weights) != len(self.particles):
+        partial_initialization = self.phase == "initialize" and not self.log_weights
+        if not partial_initialization and len(self.log_weights) != len(self.particles):
             raise ValueError(
                 f"log_weights has {len(self.log_weights)} entries for "
                 f"{len(self.particles)} particles"
+            )
+        if self.phase == "initialize" and self.log_weights:
+            raise ValueError(
+                "a partial initialization has no ensemble weights; they are assigned only "
+                "after all requested particles have been evaluated"
             )
         if len(self.log_weights_in_support) != len(self.log_weights):
             raise ValueError(
@@ -920,10 +926,18 @@ class SMCState(StrictModel):
         for index, weight in enumerate(self.log_weights):
             _log_value(weight, label=f"log_weights[{index}]")
         _log_value(self.log_evidence, label="log_evidence")
-        if (self.pending_proposal is None) != (self.pending_log_u is None):
+        if self.pending_proposal is None and self.pending_log_u is not None:
             raise ValueError(
-                "a pending proposal is stored with the pending log u it is compared "
-                "against; one without the other re-randomises the accept decision"
+                "pending_log_u cannot exist without the proposal it is compared against"
+            )
+        if (
+            self.pending_proposal is not None
+            and self.pending_log_u is None
+            and self.phase != "initialize"
+        ):
+            raise ValueError(
+                "only initialization stores a pending draw without a Metropolis log u; "
+                "a rejuvenation proposal without it would re-randomise acceptance"
             )
         if self.pending_log_u is not None and not math.isfinite(self.pending_log_u):
             raise ValueError(

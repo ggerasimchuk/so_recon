@@ -193,6 +193,30 @@ class PhysicalTarget:
             }
         )
         self.observation_semantic_hash = sha256_json(self.observations.model_dump(mode="json"))
+        self.fingerprint = sha256_json(
+            {
+                "kind": "physical-target-1",
+                "prior": prior.fingerprint,
+                "proposal": proposal.fingerprint,
+                "information_hash": context.information_hash,
+                "observation_semantic_hash": self.observation_semantic_hash,
+                "solver_hash": self.solver_hash,
+                "adapter_hash": self.adapter_hash,
+                "environment_lock_hash": worker.environment_lock_hash,
+                "operator_hash": self.operator_hash,
+            }
+        )
+        self.checkpoint_hashes = {
+            "prior_hash": prior.fingerprint,
+            "proposal_hash": proposal.fingerprint,
+            "basis_hash": context.density_schema.basis_hash,
+            "information_hash": context.information_hash,
+            "observation_hash": self.observation_semantic_hash,
+            "solver_hash": self.solver_hash,
+            "adapter_hash": self.adapter_hash,
+            "lock_hash": worker.environment_lock_hash,
+            "operator_hash": self.operator_hash,
+        }
 
     def _publish_forward(self, result: ForwardResult, ctx: RunContext) -> ArtifactRef:
         path = ctx.run_dir / RESULT_FILENAME
@@ -213,6 +237,24 @@ class PhysicalTarget:
         self.context.density_schema.validate_theta(theta)
         log_p0 = self.prior.log_prob(theta)
         log_r = self.proposal.log_prob(theta)
+        if not self.observations.history and not self.observations.logs:
+            return TargetEvaluation(
+                theta=theta,
+                log_p0=log_p0,
+                log_p0_in_support=log_p0 != -math.inf,
+                log_l=0.0,
+                log_l_in_support=True,
+                log_r=log_r,
+                log_r_in_support=log_r != -math.inf,
+                forward_ref=None,
+                cache_key=sha256_json(
+                    {
+                        "target": self.fingerprint,
+                        "theta": theta.model_dump(mode="json"),
+                        "empty_observations": True,
+                    }
+                ),
+            )
         rendered = render_theta(theta, self.context)
         ctx = self.run_factory("inverse-evaluation", self.parent_run_ids)
         try:

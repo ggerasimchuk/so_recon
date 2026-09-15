@@ -399,6 +399,49 @@ def test_physical_target_reuses_f_but_recomputes_l_for_noise_only_change(tmp_pat
     assert all(ctx.record.status == "PASS" for ctx in contexts)
 
 
+def test_empty_observations_do_not_call_the_physical_forward(tmp_path: Path) -> None:
+    from so_recon.inference.contracts import PriorContext
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    paths = ProjectPaths.default(root)
+    context = _prior_context()
+    assert isinstance(context, PriorContext)
+    prior = GaussianConditionalPrior(context)
+    worker = SimpleNamespace(paths=paths, environment_lock_hash="a" * 64)
+    called = False
+
+    def forbidden_forward(*args: object, **kwargs: object) -> ForwardResult:
+        nonlocal called
+        del args, kwargs
+        called = True
+        raise AssertionError("an empty likelihood does not need F")
+
+    empty = ObservationBundle(
+        history=(),
+        logs=(),
+        bin_edges_by_group={},
+        cutoff_s=1.0,
+        information_hash="c" * 64,
+        observation_hash="d" * 64,
+    )
+    target = PhysicalTarget(
+        prior,
+        prior,
+        context,
+        empty,
+        cast(PersistentJuliaWorker, worker),
+        cast(BudgetLedger, object()),
+        lambda command, parents: cast(RunContext, _TargetContext(root, 0)),
+        simulate_fn=forbidden_forward,
+        adapter_hash="b" * 64,
+    )
+    result = target.evaluate(_theta(context))
+    assert called is False
+    assert result.log_l == 0.0
+    assert result.forward_ref is None
+
+
 @pytest.mark.parametrize("status", ["TIMEOUT", "RESOURCE_FAILURE", "NUMERICAL_FAILURE"])
 def test_forward_failure_is_an_exception_not_zero_likelihood(status: str) -> None:
     result = ForwardResult(
