@@ -102,6 +102,7 @@ def _write_run(
     jobs: tuple[JobOutcome, ...] = (),
     exit_code: int = 0,
     artifacts: dict[str, str] | None = None,
+    git_commit: str | None = None,
 ) -> Path:
     run_dir = paths.runs / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +115,7 @@ def _write_run(
                 "status": "PASS" if exit_code == 0 else "FAIL",
                 "created_at": "2026-09-15T00:00:00+00:00",
                 "finished_at": "2026-09-15T00:01:00+00:00",
-                "git_commit": "d2b2247",
+                "git_commit": git_commit or "d2b2247",
                 "git_dirty": False,
                 "spec_version": "4.0",
                 "config_version": "E01.1",
@@ -364,7 +365,7 @@ def _green_ow(paths: ProjectPaths) -> tuple[Path, Path]:
     return p0, p1
 
 
-def _bo_run(paths: ProjectPaths, *, exit_code: int) -> Path:
+def _bo_run(paths: ProjectPaths, *, exit_code: int, git_commit: str | None = None) -> Path:
     """A published black-oil session with the given exit code, and nothing else."""
     return _write_run(
         paths,
@@ -373,6 +374,7 @@ def _bo_run(paths: ProjectPaths, *, exit_code: int) -> Path:
         checks=(_check("black_oil", "PASS" if exit_code == 0 else "FAIL"),),
         jobs=(_job("bo_closed", group="black_oil"),),
         exit_code=exit_code,
+        git_commit=git_commit,
     )
 
 
@@ -415,6 +417,91 @@ def test_a_failed_black_oil_capability_is_on_the_rendered_page(tmp_path: Path) -
     runs = (*_green_ow(paths), _bo_run(paths, exit_code=1))
     text = render_e01_report(build_e01_report(runs, paths))
     assert "BO status: FAIL" in text, text[:400]
+
+
+def test_a_refused_black_oil_session_does_not_read_as_one_that_never_ran(
+    tmp_path: Path,
+) -> None:
+    """`evaluate_suite` exit 2 is an INCOMPLETE session, not an absent one.
+
+    The black-oil group refuses its own session with exactly that code when the two sides of
+    the restart split disagree, so a capability that was attempted and REFUSED used to land
+    on `NOT_RUN` — indistinguishable on the page from one nobody ever ran. It is a limitation
+    either way and neither is a stage FAIL (13.5); what changed is that the page now says
+    which of the two happened.
+    """
+    paths = _paths(tmp_path)
+    runs = (*_green_ow(paths), _bo_run(paths, exit_code=2))
+    report = build_e01_report(runs, paths)
+    assert report.bo_status == "INCOMPLETE", report.bo_status
+    assert report.status == "PASS_WITH_LIMITATIONS", report.status_reason
+    assert report.ow_gate == "PASS"
+    assert "INCOMPLETE" in report.status_reason, report.status_reason
+    assert any("REFUSED or left incomplete" in item for item in report.limitations), (
+        report.limitations
+    )
+    assert "BO status: INCOMPLETE" in render_e01_report(report)
+
+
+def test_the_black_oil_exit_code_mapping_is_covered_end_to_end(tmp_path: Path) -> None:
+    """Every exit code a black-oil session can publish maps to a distinct, named status."""
+    expected = {None: "NOT_RUN", 0: "PASS", 1: "FAIL", 2: "INCOMPLETE", 3: "INCOMPLETE"}
+    seen: dict[str, int | None] = {}
+    for exit_code, status in expected.items():
+        paths = _paths(tmp_path / f"map{exit_code}")
+        runs = list(_green_ow(paths))
+        if exit_code is not None:
+            runs.append(_bo_run(paths, exit_code=exit_code))
+        report = build_e01_report(tuple(runs), paths)
+        assert report.bo_status == status, (exit_code, report.bo_status)
+        seen.setdefault(status, exit_code)
+    # Distinct statuses, so none of the four cases can be read as another.
+    assert set(seen) == {"NOT_RUN", "PASS", "FAIL", "INCOMPLETE"}
+
+
+# --------------------------------------------------------------------------------------
+# E01.13 fix round 2 — the page states which commit each cited run belongs to
+# --------------------------------------------------------------------------------------
+
+
+def test_a_report_whose_runs_span_commits_says_so_instead_of_naming_one(
+    tmp_path: Path,
+) -> None:
+    """12.11 makes «проверенный commit/dirty» an element of this page.
+
+    `git_commit` is the FIRST cited run's, and its sibling `git_dirty` aggregates over all of
+    them with `any(...)` — which is what made a single commit read as a claim about the whole
+    page. A report that cites a session republished after a later commit beside sessions from
+    an earlier one has two, and before this the page printed one of them and showed nothing
+    else anywhere.
+    """
+    paths = _paths(tmp_path)
+    p0, p1 = _green_ow(paths)
+    bo = _bo_run(paths, exit_code=0, git_commit="bbbbbbbbbbbbbbbb")
+    report = build_e01_report((bo, p0, p1), paths)
+    assert report.git_commits == ("bbbbbbbbbbbbbbbb", "d2b2247"), report.git_commits
+    assert any("not all produced at one commit" in item for item in report.limitations), (
+        report.limitations
+    )
+    text = render_e01_report(report)
+    assert "mixed — the cited runs span" in text
+    # And every run's own commit is on the page, in the Commands table.
+    assert "| commit |" in text
+    for commit in ("bbbbbbbbbbbb", "d2b2247"):
+        assert commit in text, commit
+
+
+def test_a_report_whose_runs_share_a_commit_states_that_one_commit_plainly(
+    tmp_path: Path,
+) -> None:
+    """The common case must not grow a caveat it does not need."""
+    paths = _paths(tmp_path)
+    report = build_e01_report(_green_ow(paths), paths)
+    assert report.git_commits == ("d2b2247",)
+    assert not any("one commit" in item for item in report.limitations), report.limitations
+    text = render_e01_report(report)
+    assert "| git_commit | `d2b2247` |" in text
+    assert "mixed" not in text
 
 
 def test_the_rendered_page_prints_the_ow_gate(tmp_path: Path) -> None:

@@ -111,6 +111,27 @@ MANIFEST_NAMING_NOTE = (
 )
 
 
+#: What the black-oil capability's own session came back as, as the stage page reports it.
+#:
+#: `NOT_RUN` means there is no published black-oil session at all. The other three are that
+#: session's own exit code, and the third one matters: `evaluate_suite` returns 2 for a
+#: session that did not reach every declared job — including one REFUSED outright, which is
+#: what the black-oil group does when the two sides of the restart split disagree. Folding
+#: that into `NOT_RUN` would let a capability that was attempted and refused read as one
+#: nobody ever attempted, which is the same defect class as a failed one reading as a pass.
+BlackOilStatus = Literal["NOT_RUN", "PASS", "FAIL", "INCOMPLETE"]
+
+#: The exit codes `evaluate_suite` produces, and what each says about the capability.
+_BO_STATUS_BY_EXIT: dict[int, BlackOilStatus] = {0: "PASS", 1: "FAIL"}
+
+
+def _bo_status(report: SuiteReport | None) -> BlackOilStatus:
+    """The black-oil verdict, from the session's own exit code and nothing else."""
+    if report is None:
+        return "NOT_RUN"
+    return _BO_STATUS_BY_EXIT.get(report.exit_code, "INCOMPLETE")
+
+
 class CommandRecord(StrictModel):
     """One command that ran, as its own run record describes it."""
 
@@ -182,6 +203,16 @@ class StageReport(StrictModel):
     job_plan_sha256: str
     source_manifest: dict[str, str]
     git_commit: str | None
+    #: Every DISTINCT commit the cited runs were produced at, in cited order.
+    #:
+    #: `git_commit` above is the first cited run's, and for most reports every cited run
+    #: shares it — but a report that cites a session republished after a later commit beside
+    #: sessions from an earlier one has two, and a single field cannot say so. Its sibling
+    #: `git_dirty` already aggregates with `any(...)`, which is exactly what made the single
+    #: `git_commit` read as a stage-wide claim it was not. 12.11 names «проверенный
+    #: commit/dirty» an element of this page, so the split is recorded here, rendered in the
+    #: Identity table and in the Commands table, and named as a limitation.
+    git_commits: tuple[str, ...]
     git_dirty: bool | None
 
     commands: tuple[CommandRecord, ...]
@@ -196,7 +227,7 @@ class StageReport(StrictModel):
     limitations: tuple[str, ...]
 
     ow_gate: str
-    bo_status: Literal["NOT_RUN", "PASS", "FAIL"]
+    bo_status: BlackOilStatus
     physical_class: str
     fluid_claim: str
     restart_round_trip: dict[str, Any]
@@ -266,15 +297,19 @@ def _status(
         )
     if remaining:
         return "FAIL", f"planned jobs were never reached: {sorted(remaining)}"
-    # A black-oil capability that FAILED is a limitation on this stage, exactly as one that
-    # never ran is. It is not a stage FAIL — plan 13.5 is explicit that an oil-water
-    # deliverable is never removed or failed because a black-oil benchmark is missing or
-    # failed — but it is not a clean PASS either, and the reason line has to NAME it.
+    # A black-oil capability that FAILED, or that was REFUSED and left incomplete, is a
+    # limitation on this stage exactly as one that never ran is. None of the three is a stage
+    # FAIL — plan 13.5 is explicit that an oil-water deliverable is never removed or failed
+    # because a black-oil benchmark is missing or failed — but none of them is a clean PASS
+    # either, and the reason line has to NAME which one happened.
     #
-    # Before Task 13 this branch could not be reached: `bo_status` was `NOT_RUN` for every
-    # session there was, so a FAIL fell through to `return "PASS", "... and black oil ran"`
-    # and the stage read PASS with no mention of the failure anywhere in that line.
-    if bo_status in ("NOT_RUN", "FAIL"):
+    # Before Task 13 only `NOT_RUN` was reachable: every session there was had that status, so
+    # a FAIL fell through to `return "PASS", "... and black oil ran"` and the stage read PASS
+    # with no mention of the failure anywhere in that line. `INCOMPLETE` became reachable when
+    # the black-oil group gained a refusal of its own — the split-step guard, which exits 2 —
+    # and folding it into `NOT_RUN` would have made a refused capability read as an
+    # unattempted one.
+    if bo_status in ("NOT_RUN", "FAIL", "INCOMPLETE"):
         return (
             "PASS_WITH_LIMITATIONS",
             f"every mandatory oil-water check passed and the black-oil capability is {bo_status}",
@@ -560,11 +595,28 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
     unrun = sorted({c.name for c in checks if c.status == "NOT_RUN" and c.name in MANDATORY_CHECKS})
     complete = sorted({c.name for c in checks if c.status == "PASS"})
     bo_report = suites.get("bo")
-    bo_status: Literal["NOT_RUN", "PASS", "FAIL"] = "NOT_RUN"
-    if bo_report is not None and bo_report.exit_code == 0:
-        bo_status = "PASS"
-    elif bo_report is not None and bo_report.exit_code == 1:
-        bo_status = "FAIL"
+    bo_status: BlackOilStatus = _bo_status(bo_report)
+    if bo_status == "INCOMPLETE" and bo_report is not None:
+        limitations.append(
+            f"bo: the black-oil session {bo_report.run_id} was REFUSED or left incomplete "
+            f"(exit {bo_report.exit_code})"
+            + (f" — {bo_report.stopped_reason}" if bo_report.stopped_reason else "")
+            + ". A capability that was attempted and refused is not one that was never "
+            "attempted; `BO status: INCOMPLETE` says which of the two happened."
+        )
+
+    # Which commit each cited run was produced at. `dict.fromkeys` keeps the cited order and
+    # drops repeats, so a report whose runs all share a commit has exactly one entry.
+    git_commits = tuple(dict.fromkeys(c.git_commit for c in commands if c.git_commit))
+    if len(git_commits) > 1:
+        limitations.append(
+            "the cited runs were not all produced at one commit: "
+            + "; ".join(
+                f"{c.run_id} at {c.git_commit}" for c in commands if c.git_commit is not None
+            )
+            + ". The Identity table's `git_commit` is the first cited run's and says so; "
+            "the commit column of the Commands table names each run's own."
+        )
 
     status, reason = _status(
         sorted(present & MANDATORY_CHECKS),
@@ -609,6 +661,7 @@ def build_e01_report(run_dirs: tuple[Path, ...], paths: ProjectPaths) -> StageRe
         job_plan_sha256=anchor.job_plan_sha256 if anchor else "unavailable",
         source_manifest=manifests,
         git_commit=commands[0].git_commit if commands else None,
+        git_commits=git_commits,
         git_dirty=any(bool(c.git_dirty) for c in commands) if commands else None,
         commands=tuple(commands),
         suites={name: f"exit {report.exit_code}" for name, report in sorted(suites.items())},
@@ -740,6 +793,23 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> list[str]:
     return out
 
 
+def _commit_cell(report: StageReport) -> str:
+    """The Identity table's commit cell: one commit, or every one the cited runs span.
+
+    A single value here reads as a claim about the whole page, because the field beside it
+    aggregates. When the cited runs really do share a commit that claim is true and the cell
+    is the bare digest it always was; when they do not, the cell says so and points at the
+    per-run column rather than picking one of them and staying silent.
+    """
+    if len(report.git_commits) <= 1:
+        return f"`{report.git_commit}`"
+    return (
+        "mixed — the cited runs span "
+        + ", ".join(f"`{commit[:12]}`" for commit in report.git_commits)
+        + "; see the commit column of the Commands table"
+    )
+
+
 def _number(value: float | None, digits: int = 3) -> str:
     return "—" if value is None else f"{value:.{digits}g}"
 
@@ -800,7 +870,7 @@ def render_e01_report(report: StageReport) -> str:
             ("config_version", report.config_version),
             ("resolved_config_hash", f"`{report.resolved_config_hash}`"),
             ("environment_lock_hash", f"`{report.environment_lock_hash}`"),
-            ("git_commit", f"`{report.git_commit}`"),
+            ("git_commit", _commit_cell(report)),
             ("git_dirty", report.git_dirty),
             ("physical_class", report.physical_class),
             ("tolerances", f"`{report.tolerances_path}` sha256 `{report.tolerances_sha256}`"),
@@ -818,11 +888,12 @@ def render_e01_report(report: StageReport) -> str:
     )
     lines += ["## Commands and exit status", ""]
     lines += _table(
-        ("command", "run_id", "record", "exit", "argv"),
+        ("command", "run_id", "commit", "record", "exit", "argv"),
         [
             (
                 f"`{c.command}`",
                 f"`{c.run_id}`",
+                "—" if c.git_commit is None else f"`{c.git_commit[:12]}`",
                 c.status,
                 "—" if c.exit_code is None else c.exit_code,
                 "`" + " ".join(c.argv) + "`" if c.argv else "—",
@@ -979,10 +1050,13 @@ def render_e01_report(report: StageReport) -> str:
     lines += ["## Black oil", ""]
     lines += [
         f"**BO status: {report.bo_status}.** The black-oil capability is a separate P0 "
-        "session and is not part of this stage's evidence. `PASS_WITH_LIMITATIONS` is what "
-        "an accepted oil-water scope carries while the capability is NOT_RUN **or FAIL** — "
-        "both are limitations on this stage and neither fails it (plan 13.5) — and it is "
-        "never what a failed mandatory oil-water, restart or balance check carries.",
+        "session and is not part of this stage's evidence. The four values are distinct on "
+        "purpose: `NOT_RUN` is no session at all, `PASS` and `FAIL` are its verdict, and "
+        "`INCOMPLETE` is a session that was attempted and REFUSED or left unfinished — a "
+        "capability nobody ran and one that refused to run are not the same fact. "
+        "`PASS_WITH_LIMITATIONS` is what an accepted oil-water scope carries under any of the "
+        "three that are not `PASS`; none of them fails this stage (plan 13.5), and none of "
+        "them is what a failed mandatory oil-water, restart or balance check carries.",
         "",
     ]
     lines += _blackoil_section(report)
