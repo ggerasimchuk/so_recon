@@ -302,12 +302,12 @@ def make_inverse_world(
     is therefore explicitly empty rather than carrying guessed watercut.  The truth artifact
     is a separate evaluator output and is never embedded in that bundle.
     """
-    if design_id in {"e02-t2-v1", "e02-t4-v1"}:
+    if design_id in {"e02-t2-v1", "e02-t2-v2", "e02-t4-v1"}:
         return _make_custom_inverse_world(design_id, seed, paths, ctx)
     if design_id != "e02-t1-v1":
         raise ValueError(
             f"design {design_id!r} has no registered renderer; available generators are "
-            "'e02-t1-v1', 'e02-t2-v1', and 'e02-t4-v1'"
+            "'e02-t1-v1', 'e02-t2-v1', 'e02-t2-v2', and 'e02-t4-v1'"
         )
     design = P1Design(family="base")
     world = render_p1(seed, design)

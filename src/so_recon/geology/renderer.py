@@ -254,8 +254,8 @@ def _theta_for_coefficients(
 def swap_t2_layers(theta: ThetaRecord, context: PriorContext) -> ThetaRecord:
     """Create T2's physical layer-exchange pair without permuting latent labels by hand."""
     design = _design_for(context, theta.s)
-    if not isinstance(design, InversePhysicalDesign) or design.design_id != "e02-t2-v1":
-        raise ValueError("layer exchange is defined only for e02-t2-v1")
+    if not isinstance(design, InversePhysicalDesign) or not design.is_t2:
+        raise ValueError("layer exchange is defined only for E02 T2 designs")
     coefficients = geology_coefficients(theta, context)
     swapped = np.concatenate([coefficients[N_MODES:], coefficients[:N_MODES]])
     return _theta_for_coefficients(theta, context, swapped)
@@ -266,8 +266,8 @@ def with_t4_remote_state(
 ) -> ThetaRecord:
     """Hold all T4 coordinates fixed except the declared remote initial-state residual."""
     design = _design_for(context, theta.s)
-    if not isinstance(design, InversePhysicalDesign) or design.design_id != "e02-t4-v1":
-        raise ValueError("remote initial-state pairs are defined only for e02-t4-v1")
+    if not isinstance(design, InversePhysicalDesign) or not design.is_t4:
+        raise ValueError("remote initial-state pairs are defined only for E02 T4 designs")
     if not np.isfinite(state_coordinate):
         raise ValueError("remote state coordinate must be finite")
     residual = (*theta.z_perp[:-1], float(state_coordinate))
@@ -382,7 +382,7 @@ def build_inverse_case(
             sw=initial["sw"],
             meaning=(
                 "developed_state"
-                if isinstance(design, InversePhysicalDesign) and design.design_id == "e02-t4-v1"
+                if isinstance(design, InversePhysicalDesign) and design.is_t4
                 else "synthetic_initial"
             ),
         ),

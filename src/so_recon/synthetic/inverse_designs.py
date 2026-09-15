@@ -55,7 +55,7 @@ class InverseSupport(NamedTuple):
 class InversePhysicalDesign(StrictModel):
     """A frozen physical definition for either layer symmetry (T2) or remote ambiguity (T4)."""
 
-    design_id: Literal["e02-t2-v1", "e02-t4-v1"]
+    design_id: Literal["e02-t2-v1", "e02-t2-v2", "e02-t4-v1"]
     shape: tuple[int, int, int] = (16, 16, 2)
     extent_m: tuple[float, float, float] = (100.0, 100.0, 20.0)
     n_months: int = 36
@@ -96,16 +96,24 @@ class InversePhysicalDesign(StrictModel):
         return month_edges_s(self.start, self.n_months)
 
     @property
+    def is_t2(self) -> bool:
+        return self.design_id.startswith("e02-t2-")
+
+    @property
+    def is_t4(self) -> bool:
+        return self.design_id.startswith("e02-t4-")
+
+    @property
     def n_geology(self) -> int:
-        return 12 if self.design_id == "e02-t2-v1" else 13
+        return 12 if self.is_t2 else 13
 
     @property
     def n_state_residual(self) -> int:
-        return 0 if self.design_id == "e02-t2-v1" else 1
+        return 0 if self.is_t2 else 1
 
     @property
     def schema_id(self) -> str:
-        return "e02-t2-symmetric-12" if self.design_id == "e02-t2-v1" else "e02-t4-17d"
+        return "e02-t2-symmetric-12" if self.is_t2 else "e02-t4-17d"
 
     @property
     def transform_version(self) -> str:
@@ -113,15 +121,15 @@ class InversePhysicalDesign(StrictModel):
 
     @property
     def layer_base_permeability_md(self) -> tuple[float, float]:
-        return (80.0, 80.0) if self.design_id == "e02-t2-v1" else (120.0, 40.0)
+        return (80.0, 80.0) if self.is_t2 else (120.0, 40.0)
 
     @property
     def kz_over_kx(self) -> float:
-        return 1.0e-4 if self.design_id == "e02-t2-v1" else 0.05
+        return 1.0e-4 if self.is_t2 else 0.05
 
     @property
     def well_columns(self) -> tuple[tuple[str, tuple[int, int], str], ...]:
-        producer_x = 13 if self.design_id == "e02-t2-v1" else 6
+        producer_x = 13 if self.is_t2 else 6
         return (
             ("I1", (2, 2), "injector"),
             ("I2", (2, 13), "injector"),
@@ -138,17 +146,18 @@ class InversePhysicalDesign(StrictModel):
             "transform_version": self.transform_version,
             "layer_base_permeability_md": list(self.layer_base_permeability_md),
             "kz_over_kx": self.kz_over_kx,
+            "control_protocol": (
+                "fixed-bhp-feasible-1"
+                if self.design_id == "e02-t2-v2"
+                else "rate-with-bhp-limits-1"
+            ),
             "well_columns": [
                 {"well_id": name, "column": list(column), "role": role}
                 for name, column, role in self.well_columns
             ],
-            "remote_zone": {"x_index_min": 12, "y_index_min": 8}
-            if self.design_id == "e02-t4-v1"
-            else None,
+            "remote_zone": {"x_index_min": 12, "y_index_min": 8} if self.is_t4 else None,
             "initial_state_meaning": (
-                "synthetic_nonvirgin_initial_state"
-                if self.design_id == "e02-t4-v1"
-                else "synthetic_initial"
+                "synthetic_nonvirgin_initial_state" if self.is_t4 else "synthetic_initial"
             ),
         }
 
@@ -232,7 +241,7 @@ def render_inverse_coefficients(
             / (1 + mode_x + mode_y)
             for coefficient, (mode_x, mode_y) in zip(layer_coefficients, MODES, strict=True)
         )
-        if design.design_id == "e02-t4-v1":
+        if design.is_t4:
             field = field + values[12] * mask * np.cos(np.pi * yy)
         fields.append(field.ravel(order="F"))
         k_layers.append(
@@ -254,7 +263,7 @@ def render_inverse_coefficients(
 
     centers = _cell_centers(design)
     sw = np.full(design.n_cells, INITIAL_SW, dtype=np.float64)
-    if design.design_id == "e02-t4-v1":
+    if design.is_t4:
         sw = sw + 0.25 * float(ndtr(state_coordinate)) * remote_mask(design)
     if not ((sw >= 0.2) & (sw <= 0.45)).all():
         raise ValueError("T4 initial Sw lies outside its declared [0.2,0.45] support")
@@ -293,11 +302,25 @@ def inverse_well_specs(design: InversePhysicalDesign) -> tuple[WellSpec, ...]:
 
 
 def inverse_control_segments(design: InversePhysicalDesign) -> tuple[ControlSegment, ...]:
+    if design.design_id == "e02-t2-v2":
+        return tuple(
+            ControlSegment(
+                start_s=design.report_edges_s[0],
+                end_s=design.report_edges_s[-1],
+                well_id=well_id,
+                role=role,
+                target="bhp",
+                value=INJECTOR_MAX_BHP_PA if role == "injector" else PRODUCER_MIN_BHP_PA,
+                bhp_limit_pa=None,
+                connection_open=(True, True),
+            )
+            for well_id, _column, role in design.well_columns
+        )
     segments: list[ControlSegment] = []
     for well_id, _column, role in design.well_columns:
         for first, last, factor in RATE_MODULATION:
             cuts = [first, last]
-            if design.design_id == "e02-t4-v1" and well_id == COMPLETION_EVENT_WELL:
+            if design.is_t4 and well_id == COMPLETION_EVENT_WELL:
                 cuts += [
                     edge
                     for edge in (COMPLETION_SHUT_EDGE, COMPLETION_REOPEN_EDGE)
@@ -306,7 +329,7 @@ def inverse_control_segments(design: InversePhysicalDesign) -> tuple[ControlSegm
             bounds = sorted(set(cuts))
             for start, end in zip(bounds, bounds[1:], strict=False):
                 lower_shut = (
-                    design.design_id == "e02-t4-v1"
+                    design.is_t4
                     and well_id == COMPLETION_EVENT_WELL
                     and COMPLETION_SHUT_EDGE <= start < COMPLETION_REOPEN_EDGE
                 )
@@ -332,7 +355,7 @@ def inverse_supports(design: InversePhysicalDesign) -> tuple[InverseSupport, ...
     supports: list[InverseSupport] = []
     for well_id, (i, j), _role in design.well_columns:
         cells = tuple(i + nx * (j + ny * layer) for layer in range(nz))
-        if design.design_id == "e02-t2-v1":
+        if design.is_t2:
             supports.append(InverseSupport(f"{well_id}-layer-average-log_permeability_m2", cells))
         else:
             supports.extend(

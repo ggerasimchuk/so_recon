@@ -67,7 +67,7 @@ def prior_context_payload(context: PriorContext) -> dict[str, Any]:
 
 def report_zone_matrix(design_id: str) -> tuple[tuple[str, ...], np.ndarray]:
     """Return the immutable 16x16x2 report zones used by every matrix comparison."""
-    if design_id not in {"e02-t1-v1", "e02-t2-v1", "e02-t4-v1"}:
+    if design_id not in {"e02-t1-v1", "e02-t2-v1", "e02-t2-v2", "e02-t4-v1"}:
         raise ValueError(f"unsupported physical E02 design {design_id!r}")
     nx = ny = 16
     nz = 2
@@ -90,7 +90,7 @@ def report_zone_matrix(design_id: str) -> tuple[tuple[str, ...], np.ndarray]:
             for y_label, y in (("south", range(0, 8)), ("north", range(8, 16))):
                 names.append(f"{x_label}-{y_label}-layer-{layer}")
                 masks.append(mask_for(layers=(layer,), x=x, y=y))
-    if design_id == "e02-t4-v1":
+    if design_id.startswith("e02-t4-"):
         remote_x = range(12, 16)
         remote_y = range(8, 16)
         names.append("remote-east")
@@ -270,7 +270,7 @@ def _load_truth_case(
     if not path.is_file() or sha256_file(path) != truth_ref.sha256:
         raise ValueError(f"truth generator artifact {truth_ref.path} failed identity check")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if design_id in {"e02-t2-v1", "e02-t4-v1"}:
+    if design_id.startswith(("e02-t2-", "e02-t4-")):
         return (
             CaseBundle.model_validate(payload["case"]),
             ThetaRecord.model_validate(payload["theta"]),
@@ -377,7 +377,7 @@ def _pair_evidence(
         parent_run_ids=parent_run_ids,
         state_times_s=state_times_s,
     )
-    if design_id == "e02-t2-v1":
+    if design_id.startswith("e02-t2-"):
         first, second = theta, swap_t2_layers(theta, context)
         names, matrix = report_zone_matrix(design_id)
         support = matrix[:2]

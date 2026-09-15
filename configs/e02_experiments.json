@@ -29,11 +29,11 @@
       "purpose": "independent-main-parent"
     },
     {
-      "experiment_id": "e02-t2-v1-s143",
-      "design_id": "e02-t2-v1",
+      "experiment_id": "e02-t2-v2-s143",
+      "design_id": "e02-t2-v2",
       "truth_seed": 143,
       "schema_id": "e02-t2-symmetric-12",
-      "purpose": "layer-exchange-ambiguity"
+      "purpose": "layer-exchange-ambiguity-bhp-feasible"
     },
     {
       "experiment_id": "e02-t4-v1-s144",
@@ -41,6 +41,15 @@
       "truth_seed": 144,
       "schema_id": "e02-t4-17d",
       "purpose": "remote-zone-uncertainty"
+    }
+  ],
+  "superseded_experiments": [
+    {
+      "experiment_id": "e02-t2-v1-s143",
+      "design_id": "e02-t2-v1",
+      "truth_seed": 143,
+      "status": "CONTROL_INFEASIBLE",
+      "authority": "artifacts/runs/20260915T165158Z-e02-physical-setup-71160d9a/run.json"
     }
   ]
 }

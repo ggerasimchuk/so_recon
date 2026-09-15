@@ -12,6 +12,7 @@ from so_recon.geology.renderer import render_theta, swap_t2_layers, with_t4_remo
 from so_recon.inference.contracts import ModelObservations, ThetaRecord
 from so_recon.paths import ProjectPaths
 from so_recon.registry.run import RunContext
+from so_recon.synthetic.inverse_designs import inverse_control_segments, inverse_design
 from so_recon.synthetic.inverse_worlds import (
     generate_dynamic_history,
     inference_payload,
@@ -77,7 +78,7 @@ def test_t1_generator_conditions_on_numeric_g_and_keeps_truth_out_of_bundle(
 @pytest.mark.parametrize(
     ("design_id", "seed", "schema_id", "n_geology", "n_state_residual"),
     [
-        ("e02-t2-v1", 143, "e02-t2-symmetric-12", 12, 0),
+        ("e02-t2-v2", 143, "e02-t2-symmetric-12", 12, 0),
         ("e02-t4-v1", 144, "e02-t4-17d", 13, 1),
     ],
 )
@@ -136,7 +137,7 @@ def test_t2_pair_swaps_physical_layers_not_whitened_coordinate_labels(tmp_path: 
     paths = ProjectPaths.default(root)
     paths.ensure_dirs()
     ctx = RunContext.start(command="unit-inverse-world", argv=[], cfg=None, paths=paths)
-    context, _observations, truth = make_inverse_world("e02-t2-v1", 143, paths, ctx)
+    context, _observations, truth = make_inverse_world("e02-t2-v2", 143, paths, ctx)
     manifest = json.loads(paths.resolve(truth.path).read_text(encoding="utf-8"))
     theta = ThetaRecord.model_validate(manifest["theta"])
 
@@ -157,6 +158,16 @@ def test_t2_pair_swaps_physical_layers_not_whitened_coordinate_labels(tmp_path: 
         rtol=0.0,
     )
     assert swapped_theta.v[8:] == theta.v[8:]
+
+
+def test_t2_v2_uses_symmetric_fixed_bhp_without_limit_switching() -> None:
+    controls = inverse_control_segments(inverse_design("e02-t2-v2"))
+    assert len(controls) == 4
+    assert all(control.target == "bhp" for control in controls)
+    assert all(control.bhp_limit_pa is None for control in controls)
+    assert {control.value for control in controls if control.role == "injector"} == {30.0e6}
+    assert {control.value for control in controls if control.role == "producer"} == {5.0e6}
+    assert all(control.connection_open == (True, True) for control in controls)
 
 
 def test_t4_pair_changes_only_remote_initial_state(tmp_path: Path) -> None:
@@ -225,7 +236,7 @@ def test_experiment_manifest_freezes_four_parent_seeds_and_named_streams() -> No
     assert [(item["experiment_id"], item["truth_seed"]) for item in payload["experiments"]] == [
         ("e02-t1-v1-s141", 141),
         ("e02-t1-v1-s142", 142),
-        ("e02-t2-v1-s143", 143),
+        ("e02-t2-v2-s143", 143),
         ("e02-t4-v1-s144", 144),
     ]
     assert payload["stream_names"] == ["truth_latent", "static_G", "history_noise", "schedule"]
