@@ -11,14 +11,14 @@
       "context_ref": "artifacts/worlds/p1-base-s0041-9cdc376bedcd/view/full36-v1/context.json",
       "cost": {
         "accepted_steps": 239,
-        "cpu_s": 12.313662272000002,
+        "cpu_s": 12.48078387199999,
         "cut_steps": 0,
         "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
         "nonlinear_iterations": 693,
-        "output_bytes": 12580445,
-        "peak_rss_bytes": 1806008320,
+        "output_bytes": 12580436,
+        "peak_rss_bytes": 1797881856,
         "retry_count": 0,
-        "wall_s": 5.200867541949265
+        "wall_s": 5.0994658340350725
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
@@ -41,58 +41,58 @@
         "evidence_identity": {
           "forward": {
             "case_sha256": "1291f3d11dc09cbc9a69370c2782ba4391c51f6e3bd43b98c0fcb6ceca03eb82",
-            "job_id": "job-20260915T131149Z-forward-cc00b38c-01-a1",
+            "job_id": "job-20260915T133723Z-forward-3548a61c-a1",
             "model_hash": "dfdea6e342c131c18724ebe6596ffecf56e8177455bf209fa291bd0a6b9c4096",
             "outputs": {
-              "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/balances.parquet": "7e1a77a4ce372d044284189319918384bc513eb47d7bc23f854ee6893a09002b",
-              "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/connections.parquet": "50ced9dafdd095a8a277240c464445eb3503524bd172787ee2b1ede7ea581674",
-              "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/monthly.parquet": "8fad0c849fcb91d857b6329a2b8350791f1dd7340e9074d1610086b9cea02552",
-              "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/states.h5": "db173968b8f208f9821824384c608707c013ce56d430fb26113afe7b87e5a106"
+              "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/balances.parquet": "7e1a77a4ce372d044284189319918384bc513eb47d7bc23f854ee6893a09002b",
+              "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/connections.parquet": "50ced9dafdd095a8a277240c464445eb3503524bd172787ee2b1ede7ea581674",
+              "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/monthly.parquet": "8fad0c849fcb91d857b6329a2b8350791f1dd7340e9074d1610086b9cea02552",
+              "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/states.h5": "db173968b8f208f9821824384c608707c013ce56d430fb26113afe7b87e5a106"
             },
-            "outputs_sha256": "2850c5d0888ed39de4e3bb969d95a2075330d7358bc2d73267597aab6f6067f3",
-            "result_sha256": "a9605139622125055a64137ce7f5986cea492e9bef366fec994470f456aa188a"
+            "outputs_sha256": "c22372b25e71398af74d8343317439494e1cb2785a3923bdc0ed55ad2be454dc",
+            "result_sha256": "0862f1a92b9dbe3bb9d356bb0074e038a83fba3aec3bcf42b374bd5a553e7534"
           },
           "parent_world_id": "p1-base-s0041-9cdc376bedcd",
           "preflight": {
             "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
-            "job_id": "job-20260915T131125Z-forward-cc00b38c-a1",
+            "job_id": "job-20260915T133700Z-forward-3548a61c-a1",
             "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
             "outputs": {
-              "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/balances.parquet": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
-              "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-              "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-              "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2"
+              "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/balances.parquet": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
+              "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2"
             },
-            "outputs_sha256": "d1053b1ca399ebe74c214db110a348eaf2878563a5bb55ab8bd81a229808bfef",
-            "result_sha256": "2e2f1a47efda5b0f45d46d5fc91477bfdeec79dcaa3714dd83f6c1dd035ec970"
+            "outputs_sha256": "d9e8a3af87becc230e060678e0bf232e83fc8437da18c02fc231c2b8e96c6c1f",
+            "result_sha256": "69f9cc548fae0d93de862fdcc63d9b7bc10dca08cb20d9c33986f7e6a00e3947"
           },
           "preflight_result": {
-            "balances_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/balances.parquet",
+            "balances_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/balances.parquet",
             "black_oil": null,
             "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
             "completed_time_s": 2678400.0,
-            "connections_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/connections.parquet",
+            "connections_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/connections.parquet",
             "cost": {
               "accepted_steps": 8,
-              "cpu_s": 24.544736064000002,
+              "cpu_s": 23.278951808,
               "cut_steps": 0,
               "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
               "nonlinear_iterations": 16,
               "output_bytes": 205708,
-              "peak_rss_bytes": 1983299584,
+              "peak_rss_bytes": 2006630400,
               "retry_count": 0,
-              "wall_s": 23.698501291975845
+              "wall_s": 22.38989870797377
             },
-            "job_id": "job-20260915T131125Z-forward-cc00b38c-a1",
+            "job_id": "job-20260915T133700Z-forward-3548a61c-a1",
             "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
-            "monthly_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/monthly.parquet",
+            "monthly_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/monthly.parquet",
             "parent_attempt_ids": [],
             "physics_class": "OW",
             "reason": null,
             "restart": null,
             "schema_version": "forward-1",
             "solver_metadata": {
-              "accepted_steps.parquet.path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/accepted_steps.parquet",
               "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
               "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
               "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.600907628348802e-16}",
@@ -108,7 +108,7 @@
               "balance_within_spec_tolerance": "true",
               "balances.parquet.sha256": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
               "blas_threads": "1",
-              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1376190464, \"retained_bytes\": 95376640}]",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1387708416, \"retained_bytes\": 95369232}]",
               "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
               "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
               "extract_schema_version": "forward-extract-2",
@@ -116,18 +116,18 @@
               "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
               "protocol_version": "worker-2",
               "resource_profile": "P1_LOOP",
-              "result_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/result.json",
-              "result_sha256": "eff427ced60b629467372d79619a5bc0907f74692b9277da081641e2d6e1fbb4",
-              "solver_config_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/solver_config.json",
+              "result_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/result.json",
+              "result_sha256": "ea250a1660ccb9bb805f8c28bc474bd139bf0dc0c972f09335a3644d0a774dbb",
+              "solver_config_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/solver_config.json",
               "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-              "states_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+              "states_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
               "states_sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
               "version.HDF5": "0.17.3",
               "version.JSON": "1.8.0",
               "version.Jutul": "0.4.31",
               "version.JutulDarcy": "0.3.11",
               "version.julia": "1.12.7",
-              "worker_pid": "97330"
+              "worker_pid": "99347"
             },
             "states": {
               "bo": {
@@ -137,7 +137,7 @@
                 ],
                 "dataset": "bo",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "shape": [
                   2,
@@ -152,7 +152,7 @@
                 ],
                 "dataset": "bw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "shape": [
                   2,
@@ -167,7 +167,7 @@
                 ],
                 "dataset": "pore_volume_m3",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "shape": [
                   2,
@@ -182,7 +182,7 @@
                 ],
                 "dataset": "pressure_pa",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "shape": [
                   2,
@@ -197,7 +197,7 @@
                 ],
                 "dataset": "so",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "shape": [
                   2,
@@ -212,7 +212,7 @@
                 ],
                 "dataset": "sw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "shape": [
                   2,
@@ -230,7 +230,7 @@
         },
         "injector_bhp_max_pa": 21198340.53140718,
         "injector_bhp_min_pa": 15823292.967106912,
-        "measured_wall_s": 5.291681165981572,
+        "measured_wall_s": 5.1824209580081515,
         "p2_lower_completion": {
           "open": [
             0,
@@ -345,58 +345,58 @@
           "evidence_identity": {
             "forward": {
               "case_sha256": "1291f3d11dc09cbc9a69370c2782ba4391c51f6e3bd43b98c0fcb6ceca03eb82",
-              "job_id": "job-20260915T131149Z-forward-cc00b38c-01-a1",
+              "job_id": "job-20260915T133723Z-forward-3548a61c-a1",
               "model_hash": "dfdea6e342c131c18724ebe6596ffecf56e8177455bf209fa291bd0a6b9c4096",
               "outputs": {
-                "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/balances.parquet": "7e1a77a4ce372d044284189319918384bc513eb47d7bc23f854ee6893a09002b",
-                "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/connections.parquet": "50ced9dafdd095a8a277240c464445eb3503524bd172787ee2b1ede7ea581674",
-                "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/monthly.parquet": "8fad0c849fcb91d857b6329a2b8350791f1dd7340e9074d1610086b9cea02552",
-                "artifacts/runs/20260915T131149Z-forward-cc00b38c-01/job-20260915T131149Z-forward-cc00b38c-01-a1/states.h5": "db173968b8f208f9821824384c608707c013ce56d430fb26113afe7b87e5a106"
+                "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/balances.parquet": "7e1a77a4ce372d044284189319918384bc513eb47d7bc23f854ee6893a09002b",
+                "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/connections.parquet": "50ced9dafdd095a8a277240c464445eb3503524bd172787ee2b1ede7ea581674",
+                "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/monthly.parquet": "8fad0c849fcb91d857b6329a2b8350791f1dd7340e9074d1610086b9cea02552",
+                "artifacts/runs/20260915T133723Z-forward-3548a61c/job-20260915T133723Z-forward-3548a61c-a1/states.h5": "db173968b8f208f9821824384c608707c013ce56d430fb26113afe7b87e5a106"
               },
-              "outputs_sha256": "2850c5d0888ed39de4e3bb969d95a2075330d7358bc2d73267597aab6f6067f3",
-              "result_sha256": "a9605139622125055a64137ce7f5986cea492e9bef366fec994470f456aa188a"
+              "outputs_sha256": "c22372b25e71398af74d8343317439494e1cb2785a3923bdc0ed55ad2be454dc",
+              "result_sha256": "0862f1a92b9dbe3bb9d356bb0074e038a83fba3aec3bcf42b374bd5a553e7534"
             },
             "parent_world_id": "p1-base-s0041-9cdc376bedcd",
             "preflight": {
               "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
-              "job_id": "job-20260915T131125Z-forward-cc00b38c-a1",
+              "job_id": "job-20260915T133700Z-forward-3548a61c-a1",
               "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
               "outputs": {
-                "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/balances.parquet": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
-                "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-                "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-                "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2"
+                "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/balances.parquet": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
+                "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2"
               },
-              "outputs_sha256": "d1053b1ca399ebe74c214db110a348eaf2878563a5bb55ab8bd81a229808bfef",
-              "result_sha256": "2e2f1a47efda5b0f45d46d5fc91477bfdeec79dcaa3714dd83f6c1dd035ec970"
+              "outputs_sha256": "d9e8a3af87becc230e060678e0bf232e83fc8437da18c02fc231c2b8e96c6c1f",
+              "result_sha256": "69f9cc548fae0d93de862fdcc63d9b7bc10dca08cb20d9c33986f7e6a00e3947"
             },
             "preflight_result": {
-              "balances_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/balances.parquet",
+              "balances_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/balances.parquet",
               "black_oil": null,
               "case_sha256": "b4b9ee9b5f97ce9851b5d20d85afba36050985a1dd805004c84a1b46ddfbd10b",
               "completed_time_s": 2678400.0,
-              "connections_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/connections.parquet",
+              "connections_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/connections.parquet",
               "cost": {
                 "accepted_steps": 8,
-                "cpu_s": 24.544736064000002,
+                "cpu_s": 23.278951808,
                 "cut_steps": 0,
                 "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
                 "nonlinear_iterations": 16,
                 "output_bytes": 205708,
-                "peak_rss_bytes": 1983299584,
+                "peak_rss_bytes": 2006630400,
                 "retry_count": 0,
-                "wall_s": 23.698501291975845
+                "wall_s": 22.38989870797377
               },
-              "job_id": "job-20260915T131125Z-forward-cc00b38c-a1",
+              "job_id": "job-20260915T133700Z-forward-3548a61c-a1",
               "model_hash": "c1ed29594565119775e011e762d5a1b081235ca6299c8487b9b734ea2713253e",
-              "monthly_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/monthly.parquet",
+              "monthly_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/monthly.parquet",
               "parent_attempt_ids": [],
               "physics_class": "OW",
               "reason": null,
               "restart": null,
               "schema_version": "forward-1",
               "solver_metadata": {
-                "accepted_steps.parquet.path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/accepted_steps.parquet",
                 "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
                 "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
                 "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.600907628348802e-16}",
@@ -412,7 +412,7 @@
                 "balance_within_spec_tolerance": "true",
                 "balances.parquet.sha256": "1e4edc726e339698a7fe3dc5720d2a08f866bf31c520c0ca42d857bdea0ffe21",
                 "blas_threads": "1",
-                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1376190464, \"retained_bytes\": 95376640}]",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1387708416, \"retained_bytes\": 95369232}]",
                 "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
                 "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
                 "extract_schema_version": "forward-extract-2",
@@ -420,18 +420,18 @@
                 "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
                 "protocol_version": "worker-2",
                 "resource_profile": "P1_LOOP",
-                "result_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/result.json",
-                "result_sha256": "eff427ced60b629467372d79619a5bc0907f74692b9277da081641e2d6e1fbb4",
-                "solver_config_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/solver_config.json",
+                "result_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/result.json",
+                "result_sha256": "ea250a1660ccb9bb805f8c28bc474bd139bf0dc0c972f09335a3644d0a774dbb",
+                "solver_config_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/solver_config.json",
                 "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-                "states_path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                "states_path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                 "states_sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                 "version.HDF5": "0.17.3",
                 "version.JSON": "1.8.0",
                 "version.Jutul": "0.4.31",
                 "version.JutulDarcy": "0.3.11",
                 "version.julia": "1.12.7",
-                "worker_pid": "97330"
+                "worker_pid": "99347"
               },
               "states": {
                 "bo": {
@@ -441,7 +441,7 @@
                   ],
                   "dataset": "bo",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                   "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                   "shape": [
                     2,
@@ -456,7 +456,7 @@
                   ],
                   "dataset": "bw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                   "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                   "shape": [
                     2,
@@ -471,7 +471,7 @@
                   ],
                   "dataset": "pore_volume_m3",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                   "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                   "shape": [
                     2,
@@ -486,7 +486,7 @@
                   ],
                   "dataset": "pressure_pa",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                   "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                   "shape": [
                     2,
@@ -501,7 +501,7 @@
                   ],
                   "dataset": "so",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                   "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                   "shape": [
                     2,
@@ -516,7 +516,7 @@
                   ],
                   "dataset": "sw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131125Z-forward-cc00b38c/job-20260915T131125Z-forward-cc00b38c-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133700Z-forward-3548a61c/job-20260915T133700Z-forward-3548a61c-a1/states.h5",
                   "sha256": "638e4ad90adf54baf76299bd2945caa74b0d69632d5381e5e32d57e0fb675ae2",
                   "shape": [
                     2,
@@ -534,7 +534,7 @@
           },
           "injector_bhp_max_pa": 21198340.53140718,
           "injector_bhp_min_pa": 15823292.967106912,
-          "measured_wall_s": 5.291681165981572,
+          "measured_wall_s": 5.1824209580081515,
           "p2_lower_completion": {
             "open": [
               0,
@@ -652,14 +652,14 @@
       "context_ref": "artifacts/worlds/p1-base-s0042-ee65c01c07fd/view/full36-v1/context.json",
       "cost": {
         "accepted_steps": 239,
-        "cpu_s": 11.012982015999995,
+        "cpu_s": 11.144709120000002,
         "cut_steps": 0,
         "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
         "nonlinear_iterations": 652,
         "output_bytes": 12578553,
-        "peak_rss_bytes": 1820082176,
+        "peak_rss_bytes": 1843150848,
         "retry_count": 0,
-        "wall_s": 3.950650917016901
+        "wall_s": 3.9600697080022655
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
@@ -682,58 +682,58 @@
         "evidence_identity": {
           "forward": {
             "case_sha256": "2ccf074cd6b546b87a0118e39425bf5e86ea98bc24c5363b6bbb9a84defd2a7d",
-            "job_id": "job-20260915T131155Z-forward-cc00b38c-01-a1",
+            "job_id": "job-20260915T133728Z-forward-3548a61c-04-a1",
             "model_hash": "f7baebfc2eda99412b74a9bb6026779a99ce04ddbaad0c7688278acb50891720",
             "outputs": {
-              "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/balances.parquet": "e1f395f3f3ee9addd208ec5bde7e01fb92b34b07f7cc38dab6758c9e16a727cd",
-              "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/connections.parquet": "139faae220e29828a7621b2747f48fb16d2ac9349b32fdc7fba672ea92beb192",
-              "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/monthly.parquet": "c8e777c675e725c5ebc86124f28c29b628b40d257092a0adb88965fd85c37fc4",
-              "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/states.h5": "68c4e71c502ec629658dc5f21adafece68a873fb19434bf2513f160031bb7c4e"
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/balances.parquet": "e1f395f3f3ee9addd208ec5bde7e01fb92b34b07f7cc38dab6758c9e16a727cd",
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/connections.parquet": "139faae220e29828a7621b2747f48fb16d2ac9349b32fdc7fba672ea92beb192",
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/monthly.parquet": "c8e777c675e725c5ebc86124f28c29b628b40d257092a0adb88965fd85c37fc4",
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/states.h5": "68c4e71c502ec629658dc5f21adafece68a873fb19434bf2513f160031bb7c4e"
             },
-            "outputs_sha256": "c2d4a00b00c09ddef5961771bb8c978fe4d00544efad712b9fcfd236b432ff76",
-            "result_sha256": "d4a2504e42f1d2075dbfb197f851e02dc52aa03daf3945e3e13fb01b7a84db04"
+            "outputs_sha256": "3fcf1c1456116a91a80beb0c6cc5f8ee952fa9d0690709c7b83e95445bc5eb8d",
+            "result_sha256": "ccd49ee2ccac58530493a955820b82f0cf1d7ea0c2b93e0e0048fbf36bb92b63"
           },
           "parent_world_id": "p1-base-s0042-ee65c01c07fd",
           "preflight": {
             "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
-            "job_id": "job-20260915T131154Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133728Z-forward-3548a61c-02-a1",
             "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
             "outputs": {
-              "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/balances.parquet": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
-              "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-              "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-              "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e"
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/balances.parquet": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e"
             },
-            "outputs_sha256": "83c52c5f83c01ecf9c0bdd4d5a91af00418651a93dc6fbfafa5b70f757cf0171",
-            "result_sha256": "31f214ed57fa570f5ee1db0ad4d487c1d7b93228cdacdce8595478adb863c7a4"
+            "outputs_sha256": "b201a5e6b61e2a3a3fedc5c07e9daa3e73a345a7341a38c06db44fc6b7dd3c44",
+            "result_sha256": "94db88a8aed701477f405d871e28961d41853ddeba05ec0febacd07fe9f3aafb"
           },
           "preflight_result": {
-            "balances_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/balances.parquet",
+            "balances_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/balances.parquet",
             "black_oil": null,
             "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
             "completed_time_s": 2678400.0,
-            "connections_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/connections.parquet",
+            "connections_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/connections.parquet",
             "cost": {
               "accepted_steps": 8,
-              "cpu_s": 0.31051302400000225,
+              "cpu_s": 0.30971488000000846,
               "cut_steps": 0,
               "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
               "nonlinear_iterations": 16,
               "output_bytes": 205461,
-              "peak_rss_bytes": 1807450112,
+              "peak_rss_bytes": 1799192576,
               "retry_count": 0,
-              "wall_s": 0.10784737498033792
+              "wall_s": 0.10589212505146861
             },
-            "job_id": "job-20260915T131154Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133728Z-forward-3548a61c-02-a1",
             "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
-            "monthly_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/monthly.parquet",
+            "monthly_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/monthly.parquet",
             "parent_attempt_ids": [],
             "physics_class": "OW",
             "reason": null,
             "restart": null,
             "schema_version": "forward-1",
             "solver_metadata": {
-              "accepted_steps.parquet.path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/accepted_steps.parquet",
               "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
               "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
               "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.67229630909024e-16}",
@@ -749,7 +749,7 @@
               "balance_within_spec_tolerance": "true",
               "balances.parquet.sha256": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
               "blas_threads": "1",
-              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1445396480, \"retained_bytes\": 97541984}]",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1446985728, \"retained_bytes\": 97533808}]",
               "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
               "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
               "extract_schema_version": "forward-extract-2",
@@ -757,18 +757,18 @@
               "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
               "protocol_version": "worker-2",
               "resource_profile": "P1_LOOP",
-              "result_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/result.json",
-              "result_sha256": "4b89e3a085ae56f81f7556114a7275f9f07dd10563f289e1422ea385c7f5bcc1",
-              "solver_config_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/solver_config.json",
+              "result_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/result.json",
+              "result_sha256": "5ca501737156decc458f7586a126149ebeaba6e83a3a85532ac7f7800190cc32",
+              "solver_config_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/solver_config.json",
               "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-              "states_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+              "states_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
               "states_sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
               "version.HDF5": "0.17.3",
               "version.JSON": "1.8.0",
               "version.Jutul": "0.4.31",
               "version.JutulDarcy": "0.3.11",
               "version.julia": "1.12.7",
-              "worker_pid": "97330"
+              "worker_pid": "99347"
             },
             "states": {
               "bo": {
@@ -778,7 +778,7 @@
                 ],
                 "dataset": "bo",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "shape": [
                   2,
@@ -793,7 +793,7 @@
                 ],
                 "dataset": "bw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "shape": [
                   2,
@@ -808,7 +808,7 @@
                 ],
                 "dataset": "pore_volume_m3",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "shape": [
                   2,
@@ -823,7 +823,7 @@
                 ],
                 "dataset": "pressure_pa",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "shape": [
                   2,
@@ -838,7 +838,7 @@
                 ],
                 "dataset": "so",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "shape": [
                   2,
@@ -853,7 +853,7 @@
                 ],
                 "dataset": "sw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "shape": [
                   2,
@@ -871,7 +871,7 @@
         },
         "injector_bhp_max_pa": 19420868.445039596,
         "injector_bhp_min_pa": 15417783.469495986,
-        "measured_wall_s": 4.036548500007484,
+        "measured_wall_s": 4.042046707996633,
         "p2_lower_completion": {
           "open": [
             0,
@@ -986,58 +986,58 @@
           "evidence_identity": {
             "forward": {
               "case_sha256": "2ccf074cd6b546b87a0118e39425bf5e86ea98bc24c5363b6bbb9a84defd2a7d",
-              "job_id": "job-20260915T131155Z-forward-cc00b38c-01-a1",
+              "job_id": "job-20260915T133728Z-forward-3548a61c-04-a1",
               "model_hash": "f7baebfc2eda99412b74a9bb6026779a99ce04ddbaad0c7688278acb50891720",
               "outputs": {
-                "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/balances.parquet": "e1f395f3f3ee9addd208ec5bde7e01fb92b34b07f7cc38dab6758c9e16a727cd",
-                "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/connections.parquet": "139faae220e29828a7621b2747f48fb16d2ac9349b32fdc7fba672ea92beb192",
-                "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/monthly.parquet": "c8e777c675e725c5ebc86124f28c29b628b40d257092a0adb88965fd85c37fc4",
-                "artifacts/runs/20260915T131155Z-forward-cc00b38c-01/job-20260915T131155Z-forward-cc00b38c-01-a1/states.h5": "68c4e71c502ec629658dc5f21adafece68a873fb19434bf2513f160031bb7c4e"
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/balances.parquet": "e1f395f3f3ee9addd208ec5bde7e01fb92b34b07f7cc38dab6758c9e16a727cd",
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/connections.parquet": "139faae220e29828a7621b2747f48fb16d2ac9349b32fdc7fba672ea92beb192",
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/monthly.parquet": "c8e777c675e725c5ebc86124f28c29b628b40d257092a0adb88965fd85c37fc4",
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-04/job-20260915T133728Z-forward-3548a61c-04-a1/states.h5": "68c4e71c502ec629658dc5f21adafece68a873fb19434bf2513f160031bb7c4e"
               },
-              "outputs_sha256": "c2d4a00b00c09ddef5961771bb8c978fe4d00544efad712b9fcfd236b432ff76",
-              "result_sha256": "d4a2504e42f1d2075dbfb197f851e02dc52aa03daf3945e3e13fb01b7a84db04"
+              "outputs_sha256": "3fcf1c1456116a91a80beb0c6cc5f8ee952fa9d0690709c7b83e95445bc5eb8d",
+              "result_sha256": "ccd49ee2ccac58530493a955820b82f0cf1d7ea0c2b93e0e0048fbf36bb92b63"
             },
             "parent_world_id": "p1-base-s0042-ee65c01c07fd",
             "preflight": {
               "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
-              "job_id": "job-20260915T131154Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133728Z-forward-3548a61c-02-a1",
               "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
               "outputs": {
-                "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/balances.parquet": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
-                "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-                "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-                "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e"
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/balances.parquet": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e"
               },
-              "outputs_sha256": "83c52c5f83c01ecf9c0bdd4d5a91af00418651a93dc6fbfafa5b70f757cf0171",
-              "result_sha256": "31f214ed57fa570f5ee1db0ad4d487c1d7b93228cdacdce8595478adb863c7a4"
+              "outputs_sha256": "b201a5e6b61e2a3a3fedc5c07e9daa3e73a345a7341a38c06db44fc6b7dd3c44",
+              "result_sha256": "94db88a8aed701477f405d871e28961d41853ddeba05ec0febacd07fe9f3aafb"
             },
             "preflight_result": {
-              "balances_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/balances.parquet",
+              "balances_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/balances.parquet",
               "black_oil": null,
               "case_sha256": "52377f4f8d44ab26b2dc9c5aefbb696962e54338b3c0e61f35f890ebb48dbb5d",
               "completed_time_s": 2678400.0,
-              "connections_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/connections.parquet",
+              "connections_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/connections.parquet",
               "cost": {
                 "accepted_steps": 8,
-                "cpu_s": 0.31051302400000225,
+                "cpu_s": 0.30971488000000846,
                 "cut_steps": 0,
                 "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
                 "nonlinear_iterations": 16,
                 "output_bytes": 205461,
-                "peak_rss_bytes": 1807450112,
+                "peak_rss_bytes": 1799192576,
                 "retry_count": 0,
-                "wall_s": 0.10784737498033792
+                "wall_s": 0.10589212505146861
               },
-              "job_id": "job-20260915T131154Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133728Z-forward-3548a61c-02-a1",
               "model_hash": "14d7490a0bcdcb3a0d96797b97f59fcabd3f3b4d8b4aa0266a63b07725ceaabe",
-              "monthly_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/monthly.parquet",
+              "monthly_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/monthly.parquet",
               "parent_attempt_ids": [],
               "physics_class": "OW",
               "reason": null,
               "restart": null,
               "schema_version": "forward-1",
               "solver_metadata": {
-                "accepted_steps.parquet.path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/accepted_steps.parquet",
                 "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
                 "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.8189894035458565e-11}",
                 "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 5.67229630909024e-16}",
@@ -1053,7 +1053,7 @@
                 "balance_within_spec_tolerance": "true",
                 "balances.parquet.sha256": "efd6dde59e092e955ab4a9a265d6b74e3236ae09a4c8177684b0bed674dd7a41",
                 "blas_threads": "1",
-                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1445396480, \"retained_bytes\": 97541984}]",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1446985728, \"retained_bytes\": 97533808}]",
                 "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
                 "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
                 "extract_schema_version": "forward-extract-2",
@@ -1061,18 +1061,18 @@
                 "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
                 "protocol_version": "worker-2",
                 "resource_profile": "P1_LOOP",
-                "result_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/result.json",
-                "result_sha256": "4b89e3a085ae56f81f7556114a7275f9f07dd10563f289e1422ea385c7f5bcc1",
-                "solver_config_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/solver_config.json",
+                "result_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/result.json",
+                "result_sha256": "5ca501737156decc458f7586a126149ebeaba6e83a3a85532ac7f7800190cc32",
+                "solver_config_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/solver_config.json",
                 "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-                "states_path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                "states_path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                 "states_sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                 "version.HDF5": "0.17.3",
                 "version.JSON": "1.8.0",
                 "version.Jutul": "0.4.31",
                 "version.JutulDarcy": "0.3.11",
                 "version.julia": "1.12.7",
-                "worker_pid": "97330"
+                "worker_pid": "99347"
               },
               "states": {
                 "bo": {
@@ -1082,7 +1082,7 @@
                   ],
                   "dataset": "bo",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                   "shape": [
                     2,
@@ -1097,7 +1097,7 @@
                   ],
                   "dataset": "bw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                   "shape": [
                     2,
@@ -1112,7 +1112,7 @@
                   ],
                   "dataset": "pore_volume_m3",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                   "shape": [
                     2,
@@ -1127,7 +1127,7 @@
                   ],
                   "dataset": "pressure_pa",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                   "shape": [
                     2,
@@ -1142,7 +1142,7 @@
                   ],
                   "dataset": "so",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                   "shape": [
                     2,
@@ -1157,7 +1157,7 @@
                   ],
                   "dataset": "sw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131154Z-forward-cc00b38c-02/job-20260915T131154Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133728Z-forward-3548a61c-02/job-20260915T133728Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "b7aa143d7440574e708d5cd1f8279825f7cb0ac3ad58a7c76ea60f39f51d356e",
                   "shape": [
                     2,
@@ -1175,7 +1175,7 @@
           },
           "injector_bhp_max_pa": 19420868.445039596,
           "injector_bhp_min_pa": 15417783.469495986,
-          "measured_wall_s": 4.036548500007484,
+          "measured_wall_s": 4.042046707996633,
           "p2_lower_completion": {
             "open": [
               0,
@@ -1293,14 +1293,14 @@
       "context_ref": "artifacts/worlds/p1-base-s0043-49154f5de7f5/view/full36-v1/context.json",
       "cost": {
         "accepted_steps": 239,
-        "cpu_s": 11.414988800000003,
+        "cpu_s": 11.368109055999994,
         "cut_steps": 0,
         "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
         "nonlinear_iterations": 674,
         "output_bytes": 12579143,
-        "peak_rss_bytes": 1807253504,
+        "peak_rss_bytes": 1814200320,
         "retry_count": 0,
-        "wall_s": 4.052715166006237
+        "wall_s": 3.9771712090005167
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
@@ -1323,58 +1323,58 @@
         "evidence_identity": {
           "forward": {
             "case_sha256": "71e0fc0ea9dad1b4346f9c6d2db80dcc2bd085ee1c552f6b02b15c367d562d10",
-            "job_id": "job-20260915T131159Z-forward-cc00b38c-04-a1",
+            "job_id": "job-20260915T133732Z-forward-3548a61c-04-a1",
             "model_hash": "7f197a160591e780ac52e61578f294211242039418700bb986916d257f901217",
             "outputs": {
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/balances.parquet": "74fc7b6af61b4f1838497f7bd61d2a85e7ec30dbc018cab8682fd3d4c1bf335e",
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/connections.parquet": "9a6ad5875f4b2b57daf005c387b62a96805bc9e2d29c939932557d036f76b678",
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/monthly.parquet": "754ac0ba5dc789ec7d035afe0cad200f23819eba15efb90360e5c5146a1c5903",
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/states.h5": "92e36fa174d7eda6c3063a10f7a3442385a38d9340437de7b1409f24a3d34d95"
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/balances.parquet": "74fc7b6af61b4f1838497f7bd61d2a85e7ec30dbc018cab8682fd3d4c1bf335e",
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/connections.parquet": "9a6ad5875f4b2b57daf005c387b62a96805bc9e2d29c939932557d036f76b678",
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/monthly.parquet": "754ac0ba5dc789ec7d035afe0cad200f23819eba15efb90360e5c5146a1c5903",
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/states.h5": "92e36fa174d7eda6c3063a10f7a3442385a38d9340437de7b1409f24a3d34d95"
             },
-            "outputs_sha256": "09a557b4c2d11b074afe6acf915b51ad60a87ffde843fbbe9d2597e7a5d3e356",
-            "result_sha256": "bc72aa7677db9ad9b88bf722fafd82769a14ded8db5237169a0dd9e955f23141"
+            "outputs_sha256": "f5ce748b95b85c4d3efb1c0b7ab81f7df764ec927a391988683af5bf2a3c4966",
+            "result_sha256": "955508e1d577db0aed15792257716c9ea83b167175bdc6990411c36e44d7d146"
           },
           "parent_world_id": "p1-base-s0043-49154f5de7f5",
           "preflight": {
             "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
-            "job_id": "job-20260915T131159Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133732Z-forward-3548a61c-02-a1",
             "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
             "outputs": {
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/balances.parquet": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-              "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043"
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/balances.parquet": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043"
             },
-            "outputs_sha256": "687b2538c075a11aaff2dd5ea0f84ce98bb884616daec6c29583a0953fc2f940",
-            "result_sha256": "4fc17bbf4a0adec6456fa53cf22982ef9d6fe0af404f0e1668b812a8b595b655"
+            "outputs_sha256": "d3337c57f4e440a2c6a89ce79b1d562719a375b5237fbe2ca0cec0e56d2b05d3",
+            "result_sha256": "8a7a8324157377599c0ce9cc70df26a330b7e5347e779322abf60f81bc80f356"
           },
           "preflight_result": {
-            "balances_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/balances.parquet",
+            "balances_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/balances.parquet",
             "black_oil": null,
             "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
             "completed_time_s": 2678400.0,
-            "connections_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/connections.parquet",
+            "connections_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/connections.parquet",
             "cost": {
               "accepted_steps": 8,
-              "cpu_s": 0.3033647359999918,
+              "cpu_s": 0.3171541759999883,
               "cut_steps": 0,
               "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
               "nonlinear_iterations": 16,
               "output_bytes": 205515,
-              "peak_rss_bytes": 1764409344,
+              "peak_rss_bytes": 1785610240,
               "retry_count": 0,
-              "wall_s": 0.10866816597990692
+              "wall_s": 0.11191620799945667
             },
-            "job_id": "job-20260915T131159Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133732Z-forward-3548a61c-02-a1",
             "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
-            "monthly_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/monthly.parquet",
+            "monthly_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/monthly.parquet",
             "parent_attempt_ids": [],
             "physics_class": "OW",
             "reason": null,
             "restart": null,
             "schema_version": "forward-1",
             "solver_metadata": {
-              "accepted_steps.parquet.path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/accepted_steps.parquet",
               "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
               "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
               "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.1657921610911876e-16}",
@@ -1390,7 +1390,7 @@
               "balance_within_spec_tolerance": "true",
               "balances.parquet.sha256": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
               "blas_threads": "1",
-              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1475805184, \"retained_bytes\": 97541792}]",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1490993152, \"retained_bytes\": 97534096}]",
               "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
               "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
               "extract_schema_version": "forward-extract-2",
@@ -1398,18 +1398,18 @@
               "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
               "protocol_version": "worker-2",
               "resource_profile": "P1_LOOP",
-              "result_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/result.json",
-              "result_sha256": "8ddda568bb2333fcfaf1927e6b9e03b254d76c14b8449770409d9c65f1be1b4e",
-              "solver_config_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/solver_config.json",
+              "result_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/result.json",
+              "result_sha256": "1849cc96073439c86271d08a8a827536db07ec4c98fe93e4d787e30b42ba5f4c",
+              "solver_config_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/solver_config.json",
               "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-              "states_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+              "states_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
               "states_sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
               "version.HDF5": "0.17.3",
               "version.JSON": "1.8.0",
               "version.Jutul": "0.4.31",
               "version.JutulDarcy": "0.3.11",
               "version.julia": "1.12.7",
-              "worker_pid": "97330"
+              "worker_pid": "99347"
             },
             "states": {
               "bo": {
@@ -1419,7 +1419,7 @@
                 ],
                 "dataset": "bo",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "shape": [
                   2,
@@ -1434,7 +1434,7 @@
                 ],
                 "dataset": "bw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "shape": [
                   2,
@@ -1449,7 +1449,7 @@
                 ],
                 "dataset": "pore_volume_m3",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "shape": [
                   2,
@@ -1464,7 +1464,7 @@
                 ],
                 "dataset": "pressure_pa",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "shape": [
                   2,
@@ -1479,7 +1479,7 @@
                 ],
                 "dataset": "so",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "shape": [
                   2,
@@ -1494,7 +1494,7 @@
                 ],
                 "dataset": "sw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "shape": [
                   2,
@@ -1512,7 +1512,7 @@
         },
         "injector_bhp_max_pa": 20803151.831974417,
         "injector_bhp_min_pa": 15851302.78753296,
-        "measured_wall_s": 4.1378100830479525,
+        "measured_wall_s": 4.062383958953433,
         "p2_lower_completion": {
           "open": [
             0,
@@ -1627,58 +1627,58 @@
           "evidence_identity": {
             "forward": {
               "case_sha256": "71e0fc0ea9dad1b4346f9c6d2db80dcc2bd085ee1c552f6b02b15c367d562d10",
-              "job_id": "job-20260915T131159Z-forward-cc00b38c-04-a1",
+              "job_id": "job-20260915T133732Z-forward-3548a61c-04-a1",
               "model_hash": "7f197a160591e780ac52e61578f294211242039418700bb986916d257f901217",
               "outputs": {
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/balances.parquet": "74fc7b6af61b4f1838497f7bd61d2a85e7ec30dbc018cab8682fd3d4c1bf335e",
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/connections.parquet": "9a6ad5875f4b2b57daf005c387b62a96805bc9e2d29c939932557d036f76b678",
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/monthly.parquet": "754ac0ba5dc789ec7d035afe0cad200f23819eba15efb90360e5c5146a1c5903",
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-04/job-20260915T131159Z-forward-cc00b38c-04-a1/states.h5": "92e36fa174d7eda6c3063a10f7a3442385a38d9340437de7b1409f24a3d34d95"
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/balances.parquet": "74fc7b6af61b4f1838497f7bd61d2a85e7ec30dbc018cab8682fd3d4c1bf335e",
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/connections.parquet": "9a6ad5875f4b2b57daf005c387b62a96805bc9e2d29c939932557d036f76b678",
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/monthly.parquet": "754ac0ba5dc789ec7d035afe0cad200f23819eba15efb90360e5c5146a1c5903",
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-04/job-20260915T133732Z-forward-3548a61c-04-a1/states.h5": "92e36fa174d7eda6c3063a10f7a3442385a38d9340437de7b1409f24a3d34d95"
               },
-              "outputs_sha256": "09a557b4c2d11b074afe6acf915b51ad60a87ffde843fbbe9d2597e7a5d3e356",
-              "result_sha256": "bc72aa7677db9ad9b88bf722fafd82769a14ded8db5237169a0dd9e955f23141"
+              "outputs_sha256": "f5ce748b95b85c4d3efb1c0b7ab81f7df764ec927a391988683af5bf2a3c4966",
+              "result_sha256": "955508e1d577db0aed15792257716c9ea83b167175bdc6990411c36e44d7d146"
             },
             "parent_world_id": "p1-base-s0043-49154f5de7f5",
             "preflight": {
               "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
-              "job_id": "job-20260915T131159Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133732Z-forward-3548a61c-02-a1",
               "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
               "outputs": {
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/balances.parquet": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-                "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043"
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/balances.parquet": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043"
               },
-              "outputs_sha256": "687b2538c075a11aaff2dd5ea0f84ce98bb884616daec6c29583a0953fc2f940",
-              "result_sha256": "4fc17bbf4a0adec6456fa53cf22982ef9d6fe0af404f0e1668b812a8b595b655"
+              "outputs_sha256": "d3337c57f4e440a2c6a89ce79b1d562719a375b5237fbe2ca0cec0e56d2b05d3",
+              "result_sha256": "8a7a8324157377599c0ce9cc70df26a330b7e5347e779322abf60f81bc80f356"
             },
             "preflight_result": {
-              "balances_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/balances.parquet",
+              "balances_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/balances.parquet",
               "black_oil": null,
               "case_sha256": "2cdfa4b3081a44a9af1a6c7679ab8c0151c53111aa2ce026ed649693293c8810",
               "completed_time_s": 2678400.0,
-              "connections_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/connections.parquet",
+              "connections_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/connections.parquet",
               "cost": {
                 "accepted_steps": 8,
-                "cpu_s": 0.3033647359999918,
+                "cpu_s": 0.3171541759999883,
                 "cut_steps": 0,
                 "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
                 "nonlinear_iterations": 16,
                 "output_bytes": 205515,
-                "peak_rss_bytes": 1764409344,
+                "peak_rss_bytes": 1785610240,
                 "retry_count": 0,
-                "wall_s": 0.10866816597990692
+                "wall_s": 0.11191620799945667
               },
-              "job_id": "job-20260915T131159Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133732Z-forward-3548a61c-02-a1",
               "model_hash": "dacb08ad3bc4ed68ece0904b6453af16c41f973eb1d75edfff7ce1ef12a958c6",
-              "monthly_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/monthly.parquet",
+              "monthly_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/monthly.parquet",
               "parent_attempt_ids": [],
               "physics_class": "OW",
               "reason": null,
               "restart": null,
               "schema_version": "forward-1",
               "solver_metadata": {
-                "accepted_steps.parquet.path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/accepted_steps.parquet",
                 "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
                 "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
                 "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.1657921610911876e-16}",
@@ -1694,7 +1694,7 @@
                 "balance_within_spec_tolerance": "true",
                 "balances.parquet.sha256": "6716660a47bfbaeef71327b600004c67bb891a6fad1a67cc6469ba18b469c2f8",
                 "blas_threads": "1",
-                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1475805184, \"retained_bytes\": 97541792}]",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1490993152, \"retained_bytes\": 97534096}]",
                 "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
                 "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
                 "extract_schema_version": "forward-extract-2",
@@ -1702,18 +1702,18 @@
                 "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
                 "protocol_version": "worker-2",
                 "resource_profile": "P1_LOOP",
-                "result_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/result.json",
-                "result_sha256": "8ddda568bb2333fcfaf1927e6b9e03b254d76c14b8449770409d9c65f1be1b4e",
-                "solver_config_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/solver_config.json",
+                "result_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/result.json",
+                "result_sha256": "1849cc96073439c86271d08a8a827536db07ec4c98fe93e4d787e30b42ba5f4c",
+                "solver_config_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/solver_config.json",
                 "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-                "states_path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                "states_path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                 "states_sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                 "version.HDF5": "0.17.3",
                 "version.JSON": "1.8.0",
                 "version.Jutul": "0.4.31",
                 "version.JutulDarcy": "0.3.11",
                 "version.julia": "1.12.7",
-                "worker_pid": "97330"
+                "worker_pid": "99347"
               },
               "states": {
                 "bo": {
@@ -1723,7 +1723,7 @@
                   ],
                   "dataset": "bo",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                   "shape": [
                     2,
@@ -1738,7 +1738,7 @@
                   ],
                   "dataset": "bw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                   "shape": [
                     2,
@@ -1753,7 +1753,7 @@
                   ],
                   "dataset": "pore_volume_m3",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                   "shape": [
                     2,
@@ -1768,7 +1768,7 @@
                   ],
                   "dataset": "pressure_pa",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                   "shape": [
                     2,
@@ -1783,7 +1783,7 @@
                   ],
                   "dataset": "so",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                   "shape": [
                     2,
@@ -1798,7 +1798,7 @@
                   ],
                   "dataset": "sw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131159Z-forward-cc00b38c-02/job-20260915T131159Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133732Z-forward-3548a61c-02/job-20260915T133732Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "d7e7dbef246101693f8917a6f729cfc9b6e2899cc3da0f7020d7daa002d5c043",
                   "shape": [
                     2,
@@ -1816,7 +1816,7 @@
           },
           "injector_bhp_max_pa": 20803151.831974417,
           "injector_bhp_min_pa": 15851302.78753296,
-          "measured_wall_s": 4.1378100830479525,
+          "measured_wall_s": 4.062383958953433,
           "p2_lower_completion": {
             "open": [
               0,
@@ -1934,14 +1934,14 @@
       "context_ref": "artifacts/worlds/p1-low_vertical-s0044-6df18cc959fc/view/full36-v1/context.json",
       "cost": {
         "accepted_steps": 239,
-        "cpu_s": 11.347179391999987,
+        "cpu_s": 11.516020479999995,
         "cut_steps": 0,
         "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
         "nonlinear_iterations": 706,
         "output_bytes": 12573829,
-        "peak_rss_bytes": 1807761408,
+        "peak_rss_bytes": 1815085056,
         "retry_count": 0,
-        "wall_s": 4.048553417029325
+        "wall_s": 4.057880833977833
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
@@ -1964,58 +1964,58 @@
         "evidence_identity": {
           "forward": {
             "case_sha256": "5727bc8ddee3e371a7c5ccc7a774ff4c85d170c4555fa7c2e209cd08e876aec0",
-            "job_id": "job-20260915T131203Z-forward-cc00b38c-04-a1",
+            "job_id": "job-20260915T133737Z-forward-3548a61c-02-a1",
             "model_hash": "155932024faae49f5e6c5da3b7d1fb3a7106c840976d2ea9f32c3d642f71219b",
             "outputs": {
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/balances.parquet": "4c46898fb9c5a2da69706d4e745747d607cba6533414aada9099dd2c35be4fbb",
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/connections.parquet": "67a236f277b5def04e5667d430ffeb9a2c8debb3ad3c5b11c96ccf5f2a34f51b",
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/monthly.parquet": "6377694696f086c09c0db2ade335814b4c9af1bf330c365c391484c0a8c0ca07",
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/states.h5": "9d24e00c037626083df1be6b4e8dda58f3cf033d08fccfb73dcef9e9e26441ae"
+              "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/balances.parquet": "4c46898fb9c5a2da69706d4e745747d607cba6533414aada9099dd2c35be4fbb",
+              "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/connections.parquet": "67a236f277b5def04e5667d430ffeb9a2c8debb3ad3c5b11c96ccf5f2a34f51b",
+              "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/monthly.parquet": "6377694696f086c09c0db2ade335814b4c9af1bf330c365c391484c0a8c0ca07",
+              "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/states.h5": "9d24e00c037626083df1be6b4e8dda58f3cf033d08fccfb73dcef9e9e26441ae"
             },
-            "outputs_sha256": "d484c7a454c00daf8e2afc522cebe4d9ae8a6ceb9a322d8c324eae8f78be6927",
-            "result_sha256": "9abf6af020238104079fd21ee4d02304f73e5f44fa18a9e6cb6f298eb8e73ead"
+            "outputs_sha256": "cc21b634c2030e8220fce11de12bb0fdc6f983c9476a08bcd7538ad6ca444f2e",
+            "result_sha256": "fa6002656adef9eb687e13be592af86e7aefcb516db72d8cb18a73c254b20d4e"
           },
           "parent_world_id": "p1-low_vertical-s0044-6df18cc959fc",
           "preflight": {
             "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
-            "job_id": "job-20260915T131203Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133737Z-forward-3548a61c-a1",
             "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
             "outputs": {
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/balances.parquet": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-              "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983"
+              "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/balances.parquet": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
+              "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983"
             },
-            "outputs_sha256": "bc49a4b9ffc8377c66371d7fba0b8cc1756a6f7c1f334a16868e6d6eb363e198",
-            "result_sha256": "2c8be37f2494be731c0622b8d0d548b1eb2d4525718c20009c841b0902f7c372"
+            "outputs_sha256": "bf566b12f6fe8269241d552a7a4215f38bddbadbee16b0bdec74f5318ef79c7c",
+            "result_sha256": "c368e1ecee6bab17722e13deaf1c0de64aa2bd0e03a1299d648d59d110ff07b9"
           },
           "preflight_result": {
-            "balances_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/balances.parquet",
+            "balances_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/balances.parquet",
             "black_oil": null,
             "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
             "completed_time_s": 2678400.0,
-            "connections_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/connections.parquet",
+            "connections_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/connections.parquet",
             "cost": {
               "accepted_steps": 8,
-              "cpu_s": 0.31093273599998383,
+              "cpu_s": 0.3108865280000117,
               "cut_steps": 0,
               "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
               "nonlinear_iterations": 16,
-              "output_bytes": 190307,
-              "peak_rss_bytes": 1807400960,
+              "output_bytes": 190304,
+              "peak_rss_bytes": 1814429696,
               "retry_count": 0,
-              "wall_s": 0.10724687500623986
+              "wall_s": 0.11039541597710922
             },
-            "job_id": "job-20260915T131203Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133737Z-forward-3548a61c-a1",
             "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
-            "monthly_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/monthly.parquet",
+            "monthly_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/monthly.parquet",
             "parent_attempt_ids": [],
             "physics_class": "OW",
             "reason": null,
             "restart": null,
             "schema_version": "forward-1",
             "solver_metadata": {
-              "accepted_steps.parquet.path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/accepted_steps.parquet",
               "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
               "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 0.0}",
               "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 0.0}",
@@ -2031,7 +2031,7 @@
               "balance_within_spec_tolerance": "true",
               "balances.parquet.sha256": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
               "blas_threads": "1",
-              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1518632960, \"retained_bytes\": 97542832}]",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1517092864, \"retained_bytes\": 97535440}]",
               "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
               "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
               "extract_schema_version": "forward-extract-2",
@@ -2039,18 +2039,18 @@
               "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
               "protocol_version": "worker-2",
               "resource_profile": "P1_LOOP",
-              "result_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/result.json",
-              "result_sha256": "a0eba872e7a4f2efa8793da27f791b4e7044c189f7814df59979d0fadfdf9d9d",
-              "solver_config_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/solver_config.json",
+              "result_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/result.json",
+              "result_sha256": "e9f74db5550db477acafb25bd7b8327383a3e67ab918cd77e32274c8b54bbcbb",
+              "solver_config_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/solver_config.json",
               "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-              "states_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+              "states_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
               "states_sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
               "version.HDF5": "0.17.3",
               "version.JSON": "1.8.0",
               "version.Jutul": "0.4.31",
               "version.JutulDarcy": "0.3.11",
               "version.julia": "1.12.7",
-              "worker_pid": "97330"
+              "worker_pid": "99347"
             },
             "states": {
               "bo": {
@@ -2060,7 +2060,7 @@
                 ],
                 "dataset": "bo",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "shape": [
                   2,
@@ -2075,7 +2075,7 @@
                 ],
                 "dataset": "bw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "shape": [
                   2,
@@ -2090,7 +2090,7 @@
                 ],
                 "dataset": "pore_volume_m3",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "shape": [
                   2,
@@ -2105,7 +2105,7 @@
                 ],
                 "dataset": "pressure_pa",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "shape": [
                   2,
@@ -2120,7 +2120,7 @@
                 ],
                 "dataset": "so",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "shape": [
                   2,
@@ -2135,7 +2135,7 @@
                 ],
                 "dataset": "sw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "shape": [
                   2,
@@ -2153,7 +2153,7 @@
         },
         "injector_bhp_max_pa": 20358679.77444236,
         "injector_bhp_min_pa": 15316348.226450391,
-        "measured_wall_s": 4.133681916981004,
+        "measured_wall_s": 4.140287333051674,
         "p2_lower_completion": {
           "open": [
             0,
@@ -2268,58 +2268,58 @@
           "evidence_identity": {
             "forward": {
               "case_sha256": "5727bc8ddee3e371a7c5ccc7a774ff4c85d170c4555fa7c2e209cd08e876aec0",
-              "job_id": "job-20260915T131203Z-forward-cc00b38c-04-a1",
+              "job_id": "job-20260915T133737Z-forward-3548a61c-02-a1",
               "model_hash": "155932024faae49f5e6c5da3b7d1fb3a7106c840976d2ea9f32c3d642f71219b",
               "outputs": {
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/balances.parquet": "4c46898fb9c5a2da69706d4e745747d607cba6533414aada9099dd2c35be4fbb",
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/connections.parquet": "67a236f277b5def04e5667d430ffeb9a2c8debb3ad3c5b11c96ccf5f2a34f51b",
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/monthly.parquet": "6377694696f086c09c0db2ade335814b4c9af1bf330c365c391484c0a8c0ca07",
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-04/job-20260915T131203Z-forward-cc00b38c-04-a1/states.h5": "9d24e00c037626083df1be6b4e8dda58f3cf033d08fccfb73dcef9e9e26441ae"
+                "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/balances.parquet": "4c46898fb9c5a2da69706d4e745747d607cba6533414aada9099dd2c35be4fbb",
+                "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/connections.parquet": "67a236f277b5def04e5667d430ffeb9a2c8debb3ad3c5b11c96ccf5f2a34f51b",
+                "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/monthly.parquet": "6377694696f086c09c0db2ade335814b4c9af1bf330c365c391484c0a8c0ca07",
+                "artifacts/runs/20260915T133737Z-forward-3548a61c-02/job-20260915T133737Z-forward-3548a61c-02-a1/states.h5": "9d24e00c037626083df1be6b4e8dda58f3cf033d08fccfb73dcef9e9e26441ae"
               },
-              "outputs_sha256": "d484c7a454c00daf8e2afc522cebe4d9ae8a6ceb9a322d8c324eae8f78be6927",
-              "result_sha256": "9abf6af020238104079fd21ee4d02304f73e5f44fa18a9e6cb6f298eb8e73ead"
+              "outputs_sha256": "cc21b634c2030e8220fce11de12bb0fdc6f983c9476a08bcd7538ad6ca444f2e",
+              "result_sha256": "fa6002656adef9eb687e13be592af86e7aefcb516db72d8cb18a73c254b20d4e"
             },
             "parent_world_id": "p1-low_vertical-s0044-6df18cc959fc",
             "preflight": {
               "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
-              "job_id": "job-20260915T131203Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133737Z-forward-3548a61c-a1",
               "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
               "outputs": {
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/balances.parquet": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-                "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983"
+                "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/balances.parquet": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
+                "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983"
               },
-              "outputs_sha256": "bc49a4b9ffc8377c66371d7fba0b8cc1756a6f7c1f334a16868e6d6eb363e198",
-              "result_sha256": "2c8be37f2494be731c0622b8d0d548b1eb2d4525718c20009c841b0902f7c372"
+              "outputs_sha256": "bf566b12f6fe8269241d552a7a4215f38bddbadbee16b0bdec74f5318ef79c7c",
+              "result_sha256": "c368e1ecee6bab17722e13deaf1c0de64aa2bd0e03a1299d648d59d110ff07b9"
             },
             "preflight_result": {
-              "balances_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/balances.parquet",
+              "balances_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/balances.parquet",
               "black_oil": null,
               "case_sha256": "bb52d0d1444a59ca388556167a4485d465be92489f5d85aff445759b45d6716a",
               "completed_time_s": 2678400.0,
-              "connections_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/connections.parquet",
+              "connections_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/connections.parquet",
               "cost": {
                 "accepted_steps": 8,
-                "cpu_s": 0.31093273599998383,
+                "cpu_s": 0.3108865280000117,
                 "cut_steps": 0,
                 "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
                 "nonlinear_iterations": 16,
-                "output_bytes": 190307,
-                "peak_rss_bytes": 1807400960,
+                "output_bytes": 190304,
+                "peak_rss_bytes": 1814429696,
                 "retry_count": 0,
-                "wall_s": 0.10724687500623986
+                "wall_s": 0.11039541597710922
               },
-              "job_id": "job-20260915T131203Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133737Z-forward-3548a61c-a1",
               "model_hash": "609e7b42626308a4723e55762169107cb63ab1bcc6994c14d0939ac560729b04",
-              "monthly_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/monthly.parquet",
+              "monthly_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/monthly.parquet",
               "parent_attempt_ids": [],
               "physics_class": "OW",
               "reason": null,
               "restart": null,
               "schema_version": "forward-1",
               "solver_metadata": {
-                "accepted_steps.parquet.path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/accepted_steps.parquet",
                 "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
                 "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 0.0}",
                 "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 0.0}",
@@ -2335,7 +2335,7 @@
                 "balance_within_spec_tolerance": "true",
                 "balances.parquet.sha256": "e25f81bad18100246a0d0b8d9173bcc767ad07194316b011698cddc9bd899ee5",
                 "blas_threads": "1",
-                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1518632960, \"retained_bytes\": 97542832}]",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1517092864, \"retained_bytes\": 97535440}]",
                 "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
                 "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
                 "extract_schema_version": "forward-extract-2",
@@ -2343,18 +2343,18 @@
                 "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
                 "protocol_version": "worker-2",
                 "resource_profile": "P1_LOOP",
-                "result_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/result.json",
-                "result_sha256": "a0eba872e7a4f2efa8793da27f791b4e7044c189f7814df59979d0fadfdf9d9d",
-                "solver_config_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/solver_config.json",
+                "result_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/result.json",
+                "result_sha256": "e9f74db5550db477acafb25bd7b8327383a3e67ab918cd77e32274c8b54bbcbb",
+                "solver_config_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/solver_config.json",
                 "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-                "states_path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                "states_path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                 "states_sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                 "version.HDF5": "0.17.3",
                 "version.JSON": "1.8.0",
                 "version.Jutul": "0.4.31",
                 "version.JutulDarcy": "0.3.11",
                 "version.julia": "1.12.7",
-                "worker_pid": "97330"
+                "worker_pid": "99347"
               },
               "states": {
                 "bo": {
@@ -2364,7 +2364,7 @@
                   ],
                   "dataset": "bo",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                   "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                   "shape": [
                     2,
@@ -2379,7 +2379,7 @@
                   ],
                   "dataset": "bw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                   "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                   "shape": [
                     2,
@@ -2394,7 +2394,7 @@
                   ],
                   "dataset": "pore_volume_m3",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                   "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                   "shape": [
                     2,
@@ -2409,7 +2409,7 @@
                   ],
                   "dataset": "pressure_pa",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                   "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                   "shape": [
                     2,
@@ -2424,7 +2424,7 @@
                   ],
                   "dataset": "so",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                   "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                   "shape": [
                     2,
@@ -2439,7 +2439,7 @@
                   ],
                   "dataset": "sw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131203Z-forward-cc00b38c-02/job-20260915T131203Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133737Z-forward-3548a61c/job-20260915T133737Z-forward-3548a61c-a1/states.h5",
                   "sha256": "87e81f6ad25eba72b6ce75b8fe3808e4d3bdb8dd0b46e27f950ed63f0e3ff983",
                   "shape": [
                     2,
@@ -2457,7 +2457,7 @@
           },
           "injector_bhp_max_pa": 20358679.77444236,
           "injector_bhp_min_pa": 15316348.226450391,
-          "measured_wall_s": 4.133681916981004,
+          "measured_wall_s": 4.140287333051674,
           "p2_lower_completion": {
             "open": [
               0,
@@ -2575,14 +2575,14 @@
       "context_ref": "artifacts/worlds/p1-high_contrast-s0045-26e1b8109b42/view/full36-v1/context.json",
       "cost": {
         "accepted_steps": 239,
-        "cpu_s": 11.195230463999991,
+        "cpu_s": 11.582292991999992,
         "cut_steps": 0,
         "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
         "nonlinear_iterations": 691,
         "output_bytes": 12576726,
-        "peak_rss_bytes": 1807990784,
+        "peak_rss_bytes": 1815101440,
         "retry_count": 0,
-        "wall_s": 3.988738583982922
+        "wall_s": 4.086015374981798
       },
       "derived_view_id": "full36-v1",
       "design_id": "p1-two-layer-v2",
@@ -2605,58 +2605,58 @@
         "evidence_identity": {
           "forward": {
             "case_sha256": "7315457859cec64b83442776df3f2b7e2e4247874f675ec20c99bb4324b911aa",
-            "job_id": "job-20260915T131208Z-forward-cc00b38c-04-a1",
+            "job_id": "job-20260915T133741Z-forward-3548a61c-04-a1",
             "model_hash": "a592f6ec42b00f31dc67b1495a45ec182c26bc899ecc6dc6fa596a426c0b112f",
             "outputs": {
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/balances.parquet": "cbe12024bb4a31b705b99cda82f07f250da96d13854dc02820a11ac5bb27ee92",
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/connections.parquet": "ad53955ff689895a9cdf54746503cd5b4c9626342e90c0ab5270e13d398f20f2",
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/monthly.parquet": "a031f445376d225ba6c0785c85e9175829a6e7e7e2df1ec96a4b506357175597",
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/states.h5": "3da202d64a0785d0a178942a5a56f40b370d9bf21a6dc974d18231a6cfd3f05a"
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/balances.parquet": "cbe12024bb4a31b705b99cda82f07f250da96d13854dc02820a11ac5bb27ee92",
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/connections.parquet": "ad53955ff689895a9cdf54746503cd5b4c9626342e90c0ab5270e13d398f20f2",
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/monthly.parquet": "a031f445376d225ba6c0785c85e9175829a6e7e7e2df1ec96a4b506357175597",
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/states.h5": "3da202d64a0785d0a178942a5a56f40b370d9bf21a6dc974d18231a6cfd3f05a"
             },
-            "outputs_sha256": "2fd3c6444d97017b9f2e613a1dae9fc3750c37829b11676bf5fc13265621aa03",
-            "result_sha256": "8bf4d49e88fcd59fc0e7c58f007dfa646933667e3cc1a99959fe8354da27b3a1"
+            "outputs_sha256": "f5a0dd9a946e3dc17c5817593db05f324dc15218e62ad0f7b6701468251b97f7",
+            "result_sha256": "8f35f410639bfb35c412ef67c2f3e8b6a1e79c91a9b43d4509b3b9020e318674"
           },
           "parent_world_id": "p1-high_contrast-s0045-26e1b8109b42",
           "preflight": {
             "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
-            "job_id": "job-20260915T131208Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133741Z-forward-3548a61c-02-a1",
             "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
             "outputs": {
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/balances.parquet": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-              "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3"
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/balances.parquet": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+              "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3"
             },
-            "outputs_sha256": "b72677edbe76395db7c5f75f292344a600b0e72864a5a2ab1ec169cb756b5a48",
-            "result_sha256": "0be72e0933bf6736ba8c88d2a1b95822e90d3a918e37e34ff974bf6acb771c02"
+            "outputs_sha256": "46b928b63dd4db1b2b5c2deab0c9fe1ac7950ae1ec34d8aee5124941eb7eef0d",
+            "result_sha256": "82e074e30569f87a02e4af7c18f9d5b7c7f66f215cdf7b0436128eae7a9a86cc"
           },
           "preflight_result": {
-            "balances_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/balances.parquet",
+            "balances_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/balances.parquet",
             "black_oil": null,
             "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
             "completed_time_s": 2678400.0,
-            "connections_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/connections.parquet",
+            "connections_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/connections.parquet",
             "cost": {
               "accepted_steps": 8,
-              "cpu_s": 0.30968819199998165,
+              "cpu_s": 0.31245657600000243,
               "cut_steps": 0,
               "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
               "nonlinear_iterations": 16,
               "output_bytes": 205387,
-              "peak_rss_bytes": 1807745024,
+              "peak_rss_bytes": 1814888448,
               "retry_count": 0,
-              "wall_s": 0.10874212498310953
+              "wall_s": 0.1107967920252122
             },
-            "job_id": "job-20260915T131208Z-forward-cc00b38c-02-a1",
+            "job_id": "job-20260915T133741Z-forward-3548a61c-02-a1",
             "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
-            "monthly_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/monthly.parquet",
+            "monthly_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/monthly.parquet",
             "parent_attempt_ids": [],
             "physics_class": "OW",
             "reason": null,
             "restart": null,
             "schema_version": "forward-1",
             "solver_metadata": {
-              "accepted_steps.parquet.path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+              "accepted_steps.parquet.path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/accepted_steps.parquet",
               "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
               "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
               "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.501332016352526e-16}",
@@ -2672,7 +2672,7 @@
               "balance_within_spec_tolerance": "true",
               "balances.parquet.sha256": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
               "blas_threads": "1",
-              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1518895104, \"retained_bytes\": 97542832}]",
+              "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1517469696, \"retained_bytes\": 97535552}]",
               "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
               "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
               "extract_schema_version": "forward-extract-2",
@@ -2680,18 +2680,18 @@
               "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
               "protocol_version": "worker-2",
               "resource_profile": "P1_LOOP",
-              "result_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/result.json",
-              "result_sha256": "31c1f06ca9bc0503586b960b0d02da89573d242c7961ecfd8229ce0bb68287e8",
-              "solver_config_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/solver_config.json",
+              "result_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/result.json",
+              "result_sha256": "69aa76d6e7f618091d370de8962977a0785566a791270b5c9b2475faf19c5415",
+              "solver_config_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/solver_config.json",
               "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-              "states_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+              "states_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
               "states_sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
               "version.HDF5": "0.17.3",
               "version.JSON": "1.8.0",
               "version.Jutul": "0.4.31",
               "version.JutulDarcy": "0.3.11",
               "version.julia": "1.12.7",
-              "worker_pid": "97330"
+              "worker_pid": "99347"
             },
             "states": {
               "bo": {
@@ -2701,7 +2701,7 @@
                 ],
                 "dataset": "bo",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "shape": [
                   2,
@@ -2716,7 +2716,7 @@
                 ],
                 "dataset": "bw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "shape": [
                   2,
@@ -2731,7 +2731,7 @@
                 ],
                 "dataset": "pore_volume_m3",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "shape": [
                   2,
@@ -2746,7 +2746,7 @@
                 ],
                 "dataset": "pressure_pa",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "shape": [
                   2,
@@ -2761,7 +2761,7 @@
                 ],
                 "dataset": "so",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "shape": [
                   2,
@@ -2776,7 +2776,7 @@
                 ],
                 "dataset": "sw",
                 "dtype": "float64",
-                "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "shape": [
                   2,
@@ -2794,7 +2794,7 @@
         },
         "injector_bhp_max_pa": 20708958.77015683,
         "injector_bhp_min_pa": 15591550.807815714,
-        "measured_wall_s": 4.0745787500054576,
+        "measured_wall_s": 4.168398083013017,
         "p2_lower_completion": {
           "open": [
             0,
@@ -2909,58 +2909,58 @@
           "evidence_identity": {
             "forward": {
               "case_sha256": "7315457859cec64b83442776df3f2b7e2e4247874f675ec20c99bb4324b911aa",
-              "job_id": "job-20260915T131208Z-forward-cc00b38c-04-a1",
+              "job_id": "job-20260915T133741Z-forward-3548a61c-04-a1",
               "model_hash": "a592f6ec42b00f31dc67b1495a45ec182c26bc899ecc6dc6fa596a426c0b112f",
               "outputs": {
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/balances.parquet": "cbe12024bb4a31b705b99cda82f07f250da96d13854dc02820a11ac5bb27ee92",
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/connections.parquet": "ad53955ff689895a9cdf54746503cd5b4c9626342e90c0ab5270e13d398f20f2",
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/monthly.parquet": "a031f445376d225ba6c0785c85e9175829a6e7e7e2df1ec96a4b506357175597",
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-04/job-20260915T131208Z-forward-cc00b38c-04-a1/states.h5": "3da202d64a0785d0a178942a5a56f40b370d9bf21a6dc974d18231a6cfd3f05a"
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/balances.parquet": "cbe12024bb4a31b705b99cda82f07f250da96d13854dc02820a11ac5bb27ee92",
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/connections.parquet": "ad53955ff689895a9cdf54746503cd5b4c9626342e90c0ab5270e13d398f20f2",
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/monthly.parquet": "a031f445376d225ba6c0785c85e9175829a6e7e7e2df1ec96a4b506357175597",
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-04/job-20260915T133741Z-forward-3548a61c-04-a1/states.h5": "3da202d64a0785d0a178942a5a56f40b370d9bf21a6dc974d18231a6cfd3f05a"
               },
-              "outputs_sha256": "2fd3c6444d97017b9f2e613a1dae9fc3750c37829b11676bf5fc13265621aa03",
-              "result_sha256": "8bf4d49e88fcd59fc0e7c58f007dfa646933667e3cc1a99959fe8354da27b3a1"
+              "outputs_sha256": "f5a0dd9a946e3dc17c5817593db05f324dc15218e62ad0f7b6701468251b97f7",
+              "result_sha256": "8f35f410639bfb35c412ef67c2f3e8b6a1e79c91a9b43d4509b3b9020e318674"
             },
             "parent_world_id": "p1-high_contrast-s0045-26e1b8109b42",
             "preflight": {
               "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
-              "job_id": "job-20260915T131208Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133741Z-forward-3548a61c-02-a1",
               "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
               "outputs": {
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/balances.parquet": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
-                "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3"
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/balances.parquet": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/connections.parquet": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/monthly.parquet": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
+                "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3"
               },
-              "outputs_sha256": "b72677edbe76395db7c5f75f292344a600b0e72864a5a2ab1ec169cb756b5a48",
-              "result_sha256": "0be72e0933bf6736ba8c88d2a1b95822e90d3a918e37e34ff974bf6acb771c02"
+              "outputs_sha256": "46b928b63dd4db1b2b5c2deab0c9fe1ac7950ae1ec34d8aee5124941eb7eef0d",
+              "result_sha256": "82e074e30569f87a02e4af7c18f9d5b7c7f66f215cdf7b0436128eae7a9a86cc"
             },
             "preflight_result": {
-              "balances_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/balances.parquet",
+              "balances_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/balances.parquet",
               "black_oil": null,
               "case_sha256": "62d1d345d83ff6a5a85b7387beb3fc602de46b9b2f9b78c5824a1ad4a30387f8",
               "completed_time_s": 2678400.0,
-              "connections_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/connections.parquet",
+              "connections_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/connections.parquet",
               "cost": {
                 "accepted_steps": 8,
-                "cpu_s": 0.30968819199998165,
+                "cpu_s": 0.31245657600000243,
                 "cut_steps": 0,
                 "measurement_method": "wall_s from the monotonic clock carried in the resource snapshots; cpu_s from the process-tree CPU time difference; peak_rss_bytes is the maximum process-tree RSS sampled; output_bytes is this job's whole result directory, measured AFTER the publisher wrote its outputs into it; solver counters from the native simulation report",
                 "nonlinear_iterations": 16,
                 "output_bytes": 205387,
-                "peak_rss_bytes": 1807745024,
+                "peak_rss_bytes": 1814888448,
                 "retry_count": 0,
-                "wall_s": 0.10874212498310953
+                "wall_s": 0.1107967920252122
               },
-              "job_id": "job-20260915T131208Z-forward-cc00b38c-02-a1",
+              "job_id": "job-20260915T133741Z-forward-3548a61c-02-a1",
               "model_hash": "ff3c1cb5d63342b1638c3de23e4a1f7dc6fee2ae032cca521775df72d5c48f5d",
-              "monthly_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/monthly.parquet",
+              "monthly_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/monthly.parquet",
               "parent_attempt_ids": [],
               "physics_class": "OW",
               "reason": null,
               "restart": null,
               "schema_version": "forward-1",
               "solver_metadata": {
-                "accepted_steps.parquet.path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/accepted_steps.parquet",
+                "accepted_steps.parquet.path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/accepted_steps.parquet",
                 "accepted_steps.parquet.sha256": "5ad88f56b1267b458547ab31c11d297fc8d522f7142557913a3bdc6a03c7d892",
                 "balance.reservoir_connections_absolute_residual_m3_sc": "{\"water\": 0.0, \"oil\": 1.4551915228366852e-11}",
                 "balance.reservoir_connections_cumulative_relative": "{\"water\": 0.0, \"oil\": 4.501332016352526e-16}",
@@ -2976,7 +2976,7 @@
                 "balance_within_spec_tolerance": "true",
                 "balances.parquet.sha256": "d5a0a4d4453a63c4ac45ee9c604562966d20cf86e76fde7fb8d9d20679c0237c",
                 "blas_threads": "1",
-                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1518895104, \"retained_bytes\": 97542832}]",
+                "chunk_diagnostics": "[{\"accepted_steps\": 8, \"first_report_step\": 0, \"last_report_step\": 0, \"maxrss_bytes\": 1517469696, \"retained_bytes\": 97535552}]",
                 "connections.parquet.sha256": "2748bca2ddb692edef2ee6e268c04f5ec513d43cf4ea5fdd7b1da6dcbe9fc5d6",
                 "environment_lock_hash": "149cd8e5edee34a4e9a1522528ef3cc4479ab1e87a6d6ba6fa0816735ace05da",
                 "extract_schema_version": "forward-extract-2",
@@ -2984,18 +2984,18 @@
                 "monthly.parquet.sha256": "dac9afffc930a028734bca1d60b76b869571ad829c5ddba1eee3941b3787b012",
                 "protocol_version": "worker-2",
                 "resource_profile": "P1_LOOP",
-                "result_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/result.json",
-                "result_sha256": "31c1f06ca9bc0503586b960b0d02da89573d242c7961ecfd8229ce0bb68287e8",
-                "solver_config_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/solver_config.json",
+                "result_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/result.json",
+                "result_sha256": "69aa76d6e7f618091d370de8962977a0785566a791270b5c9b2475faf19c5415",
+                "solver_config_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/solver_config.json",
                 "solver_config_sha256": "bfb63435bf22baae0453a1d7f3689e75baf7686b3b82db8dd358601252325bfd",
-                "states_path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                "states_path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                 "states_sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                 "version.HDF5": "0.17.3",
                 "version.JSON": "1.8.0",
                 "version.Jutul": "0.4.31",
                 "version.JutulDarcy": "0.3.11",
                 "version.julia": "1.12.7",
-                "worker_pid": "97330"
+                "worker_pid": "99347"
               },
               "states": {
                 "bo": {
@@ -3005,7 +3005,7 @@
                   ],
                   "dataset": "bo",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                   "shape": [
                     2,
@@ -3020,7 +3020,7 @@
                   ],
                   "dataset": "bw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                   "shape": [
                     2,
@@ -3035,7 +3035,7 @@
                   ],
                   "dataset": "pore_volume_m3",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                   "shape": [
                     2,
@@ -3050,7 +3050,7 @@
                   ],
                   "dataset": "pressure_pa",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                   "shape": [
                     2,
@@ -3065,7 +3065,7 @@
                   ],
                   "dataset": "so",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                   "shape": [
                     2,
@@ -3080,7 +3080,7 @@
                   ],
                   "dataset": "sw",
                   "dtype": "float64",
-                  "path": "artifacts/runs/20260915T131208Z-forward-cc00b38c-02/job-20260915T131208Z-forward-cc00b38c-02-a1/states.h5",
+                  "path": "artifacts/runs/20260915T133741Z-forward-3548a61c-02/job-20260915T133741Z-forward-3548a61c-02-a1/states.h5",
                   "sha256": "10e4015cdce93931554d0b3f7a0c417e7ef256e2202438b7d8013fb9d1d371c3",
                   "shape": [
                     2,
@@ -3098,7 +3098,7 @@
           },
           "injector_bhp_max_pa": 20708958.77015683,
           "injector_bhp_min_pa": 15591550.807815714,
-          "measured_wall_s": 4.0745787500054576,
+          "measured_wall_s": 4.168398083013017,
           "p2_lower_completion": {
             "open": [
               0,
