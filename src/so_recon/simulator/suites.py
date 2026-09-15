@@ -33,11 +33,12 @@ which of the two kinds of number it is.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -580,6 +581,48 @@ def _gate(
     )
 
 
+@contextlib.contextmanager
+def verdict_owed(
+    run: SuiteRun,
+    name: str,
+    thresholds: Mapping[str, float],
+    gates: Sequence[tuple[str, str]],
+) -> Iterator[None]:
+    """Guarantee that a group leaves the named check behind, even when it dies scoring it.
+
+    A group records its job ROWS as the jobs finish and its CHECK once it has the numbers to
+    score, and the work between the two can raise: `Session.after_job` raises on a memory
+    drift stop, and the metrics are read back off parquet and HDF5. An exception in that
+    window used to leave every row recorded and no check at all, and a check nobody appended
+    renders as nothing — the round trip disappeared from the published page rather than
+    failing on it.
+
+    The EXIT CODE of that session is settled elsewhere and by the plan: the jobs scored by
+    this check name make `evaluate_suite` expect it, so a session that never produced it is
+    incomplete whatever this guard does. What this adds is the page's half — a NOT_RUN
+    carrying the exception, so the report names the verdict that did not happen instead of
+    omitting it in silence. The exception is re-raised untouched; `run_suite_jobs` turns it
+    into the session's `stopped_reason` as before.
+    """
+    before = len(run.checks)
+    try:
+        yield
+    except Exception as exc:
+        if not any(check.name == name for check in run.checks[before:]):
+            unfinished = _gate(name, {}, thresholds, gates)
+            run.checks.append(
+                unfinished.model_copy(
+                    update={
+                        "reason": (
+                            f"{name}: the group stopped before it could score this check — "
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                    }
+                )
+            )
+        raise
+
+
 # --------------------------------------------------------------------------------------
 # 12.6 what a previous session already finished
 # --------------------------------------------------------------------------------------
@@ -667,7 +710,13 @@ def load_resume_state(
         ):
             continue
         names = plan.group_checks(group)
-        scored = [verdicts.get(name) for name in names if name in verdicts]
+        # EVERY check the group is scored by, present or not. Filtering the missing ones out
+        # first — `[verdicts.get(n) for n in names if n in verdicts]` — made the `is None`
+        # guard below unreachable and turned a verdict the parent never published into no
+        # verdict to object to: a group the parent left half-scored read as finished, and the
+        # resume carried the half it had. A name with no check is exactly the case this has
+        # to refuse.
+        scored = [verdicts.get(name) for name in names]
         if not scored or any(check is None or check.status != "PASS" for check in scored):
             continue
         completed.add(group)
@@ -2143,17 +2192,22 @@ def _run_black_oil_restart(
             restart_write_s=restart_write_s,
         )
     )
-    run.session.after_job()
-    metrics = _blackoil_restart_metrics(run, continuous, suffix)
-    metrics["blackoil_restart_completed_report_step"] = float(
-        0 if suffix.restart is None else suffix.restart.completed_report_step
-    )
-    evidence = [run.paths.relative(run.paths.resolve(str(continuous.monthly_path)).parent)]
-    if suffix.monthly_path is not None:
-        evidence.append(run.paths.relative(run.paths.resolve(str(suffix.monthly_path)).parent))
-    run.checks.append(
-        _gate("black_oil_restart", metrics, thresholds, _BO_RESTART_GATES, evidence=evidence)
-    )
+    # Every row of the restart is now recorded and the verdict that scores them is not.
+    # `after_job` raises on a memory drift stop and the metrics below read the published
+    # parquet and HDF5 back off disk, so this window can end the group; without the guard it
+    # ended it with four job rows and no `black_oil_restart` check to be missing.
+    with verdict_owed(run, "black_oil_restart", thresholds, _BO_RESTART_GATES):
+        run.session.after_job()
+        metrics = _blackoil_restart_metrics(run, continuous, suffix)
+        metrics["blackoil_restart_completed_report_step"] = float(
+            0 if suffix.restart is None else suffix.restart.completed_report_step
+        )
+        evidence = [run.paths.relative(run.paths.resolve(str(continuous.monthly_path)).parent)]
+        if suffix.monthly_path is not None:
+            evidence.append(run.paths.relative(run.paths.resolve(str(suffix.monthly_path)).parent))
+        run.checks.append(
+            _gate("black_oil_restart", metrics, thresholds, _BO_RESTART_GATES, evidence=evidence)
+        )
 
 
 GROUPS: dict[str, Callable[[SuiteRun], None]] = {

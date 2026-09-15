@@ -933,7 +933,7 @@
           "cache_bypass": false,
           "accounting": "ledger",
           "native_source": null,
-          "scored_as": "black_oil",
+          "scored_as": "black_oil_restart",
           "declared_by_plan": true,
           "parent_job_id": null,
           "note": null,
@@ -951,7 +951,7 @@
           "accounting": "ledger",
           "native_source": null,
           "parent_job_id": "bo_restart_prefix",
-          "scored_as": "black_oil",
+          "scored_as": "black_oil_restart",
           "declared_by_plan": true,
           "note": null,
           "deferred_to": null

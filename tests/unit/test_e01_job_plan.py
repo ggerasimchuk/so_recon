@@ -212,3 +212,76 @@ def test_a_p1_session_that_only_misses_the_forbidden_jobs_is_not_scored_as_surpr
     code, limitations = evaluate_suite(SuiteOutcome(jobs=jobs, checks=checks), plan)
     assert code == 0, (code, limitations)
     assert any("benchmark_threads" in item for item in limitations), limitations
+
+
+# --------------------------------------------------------------------------------------
+# C1 — the black-oil restart verdict a session must not be able to leave out
+# --------------------------------------------------------------------------------------
+
+
+def _bo_outcome(job_id: str, group: str, status: str, expected: str) -> JobOutcome:
+    return JobOutcome.model_validate(
+        {
+            "job_id": job_id,
+            "group": group,
+            "kind": "forward",
+            "profile": "P0_VERIFY",
+            "accounting": "ledger",
+            "expected_outcome": expected,
+            "status": status,
+            "wall_s": 1.0,
+            "cpu_s": 1.0,
+            "peak_rss_bytes": 1,
+            "output_bytes": 1,
+            "native_chunk_calls": 1,
+            "accepted_steps": 1,
+            "cut_steps": 0,
+            "nonlinear_iterations": 1,
+            "retry_count": 0,
+        }
+    )
+
+
+def test_the_restart_jobs_are_scored_by_the_restart_check_they_produce() -> None:
+    """`scored_as` is what makes a check EXPECTED — of the session and of a resume.
+
+    `evaluate_suite` builds the set of checks a session owes from `scored_as`, and
+    `SuitePlan.group_checks` builds a resumed group's carried verdicts from the same field.
+    With all four black-oil jobs scored as `black_oil`, `black_oil_restart` is owed by
+    nobody: a session that never appended it is complete, and a resume carries the group
+    forward without it.
+    """
+    jobs = {job["job_id"]: job for job in _plan()["suites"]["bo"]["jobs"]}
+    assert jobs["bo_restart_prefix"]["scored_as"] == "black_oil_restart"
+    assert jobs["bo_restart_suffix_new_worker"]["scored_as"] == "black_oil_restart"
+    assert jobs["bo_closed"]["scored_as"] == "black_oil"
+    assert jobs["bo_depletion"]["scored_as"] == "black_oil"
+
+
+def test_a_black_oil_session_that_lost_its_restart_verdict_does_not_exit_zero() -> None:
+    """The reachable route: every job row recorded, and the restart check never appended.
+
+    `_run_black_oil_restart` records the continuation's row and only then computes the
+    metrics that score it — `Session.after_job`, which raises on a memory-drift stop, sits
+    inside that window. An exception there leaves four COMPLETE job rows, nothing remaining,
+    and a single `black_oil` PASS. That session must not be able to exit 0.
+    """
+    paths = ProjectPaths.default(REPO)
+    plan = load_job_plan(paths.resolve("configs/e01_jobs.json"), paths).suites["bo"]
+    jobs = tuple(
+        _bo_outcome(job.job_id, job.group, job.expected_outcome, job.expected_outcome)
+        for job in plan.jobs
+    )
+    only_the_capability = (
+        PhysicsCheck(
+            name="black_oil",
+            status="PASS",
+            metrics={"x": 0.0},
+            thresholds={"x_max": 1.0},
+            input_hashes={},
+            evidence_paths=(),
+            reason=None,
+        ),
+    )
+    code, _ = evaluate_suite(SuiteOutcome(jobs=jobs, checks=only_the_capability), plan)
+    assert code == 2, "a black-oil session with no restart verdict is an incomplete session"

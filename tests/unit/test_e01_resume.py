@@ -37,6 +37,7 @@ from so_recon.simulator.suite_record import (
     PlannedJob,
     SuitePlan,
     SuiteReport,
+    load_job_plan,
 )
 from so_recon.simulator.suites import Session, SuiteRun, load_resume_state, run_suite_jobs
 from so_recon.validation.physics import PhysicsCheck
@@ -397,3 +398,157 @@ def test_the_session_counts_bytes_across_every_job(tmp_path: Path) -> None:
     session.record_output(None)
     session.record_output(5)
     assert session.output_bytes == 12
+
+
+# --------------------------------------------------------------------------------------
+# C1 — a resumed group may not be "complete" on a verdict the parent never published
+# --------------------------------------------------------------------------------------
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+def _two_check_plan() -> SuitePlan:
+    """One group whose two jobs are scored by two different checks."""
+    return SuitePlan(
+        profile="P0_VERIFY",
+        wall_budget_s=600,
+        declared_count_without_retry=2,
+        groups=("analytic",),
+        jobs=(
+            _planned("closed_cell", "analytic", scored_as="analytic_check"),
+            _planned("closed_box", "analytic", scored_as="second_check"),
+        ),
+    )
+
+
+def test_a_group_is_not_complete_when_a_check_it_is_scored_by_was_never_published(
+    tmp_path: Path,
+) -> None:
+    """The dead guard: `scored` was built with `if name in verdicts`, so the check the
+    parent never published was dropped instead of blocking the group's completion.
+
+    The parent below published `analytic_check` PASS and nothing for `second_check`. Its
+    `analytic` group is therefore NOT finished, and a resume that skips it would carry a
+    group forward on a verdict that does not exist.
+    """
+    paths = _paths(tmp_path)
+    ledger_path = _publish_parent(paths)
+    state = load_resume_state(ledger_path, suite="p0", plan=_two_check_plan(), paths=paths)
+    assert state is not None
+    assert state.completed_groups == frozenset()
+
+
+def _publish_black_oil_parent(paths: ProjectPaths, plan: SuitePlan) -> Path:
+    """A black-oil session that recorded every job row and only the `black_oil` verdict."""
+    run_dir = paths.runs / "20260915T024238Z-verify-physics-parent"
+    (run_dir / "ledgers").mkdir(parents=True, exist_ok=True)
+    report = SuiteReport(
+        suite="bo",
+        profile="P0_VERIFY",
+        exit_code=0,
+        run_id=run_dir.name,
+        command="verify-physics",
+        started_at="2026-09-15T02:42:38+00:00",
+        finished_at="2026-09-15T02:48:00+00:00",
+        git_commit="4455aea",
+        git_dirty=False,
+        environment_lock_hash="1" * 64,
+        tolerances_path="configs/e01_tolerances.yml",
+        tolerances_sha256="2" * 64,
+        job_plan_path="configs/e01_jobs.json",
+        job_plan_sha256="3" * 64,
+        planned_job_ids=tuple(job.job_id for job in plan.jobs),
+        deferred_job_ids=(),
+        declared_count_without_retry=plan.declared_count_without_retry,
+        jobs=tuple(_outcome(job.job_id, job.group, job.expected_outcome) for job in plan.jobs),
+        checks=(_check("black_oil"),),
+        mandatory_checks=("black_oil",),
+        exploratory_checks=(),
+        remaining_job_ids=(),
+        stopped_reason=None,
+        limitations=(),
+        benchmark={},
+        artifacts={},
+        launcher_forwards=2,
+        ledger_forwards=2,
+    )
+    (run_dir / SUITE_REPORT_FILENAME).write_text(
+        json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True), encoding="utf-8"
+    )
+    ledger_path = run_dir / "ledgers" / "bo_restart_prefix.json"
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "ledger-1",
+                "session_id": f"{run_dir.name}-bo_restart_prefix",
+                "profile": resource_profile("P0_VERIFY").model_dump(mode="json"),
+                "started_at": "2026-09-15T02:42:38+00:00",
+                "entries": [],
+                "inherited_entries": [],
+                "parent_session_id": None,
+                "parent_ledger_sha256": None,
+                "stop_reason": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return ledger_path
+
+
+def test_a_resumed_black_oil_group_is_not_carried_without_its_restart_verdict(
+    tmp_path: Path,
+) -> None:
+    """The reviewer's route 1, against the REAL `bo` plan and the REAL resume loader.
+
+    `so-recon verify-physics --suite bo --resume-ledger <parent>/ledgers/bo_restart_prefix.json`
+    read a parent whose only verdict was `black_oil`, marked the one black-oil group complete
+    and carried exactly that verdict forward. The restart round trip left the session, the
+    exit code and the published page at once.
+    """
+    paths = _paths(tmp_path)
+    repo_paths = ProjectPaths.default(REPO)
+    plan = load_job_plan(repo_paths.resolve("configs/e01_jobs.json"), repo_paths).suites["bo"]
+    ledger_path = _publish_black_oil_parent(paths, plan)
+
+    state = load_resume_state(ledger_path, suite="bo", plan=plan, paths=paths)
+    assert state is not None
+    assert state.completed_groups == frozenset(), (
+        "a group whose restart verdict the parent never published is not a finished group"
+    )
+
+    run = _suite_run(paths, tmp_path, plan=plan, resume=state)
+    assert not run.skips("black_oil")
+
+
+def test_a_group_that_dies_mid_scoring_still_leaves_the_verdict_it_owes(
+    tmp_path: Path,
+) -> None:
+    """The second half of C1's route 2: the page has to say WHICH round trip is missing.
+
+    `scored_as` alone makes the lost verdict an exit-2 `missing`, which is the gate. It does
+    not put a row on the published page: `_blackoil_section` renders the checks a session
+    appended, and a check nobody appended renders as nothing at all. The guard leaves a
+    NOT_RUN carrying the exception, so an INCOMPLETE black-oil session names what it lost.
+    """
+    paths = _paths(tmp_path)
+    run = _suite_run(paths, tmp_path)
+    thresholds = {"blackoil_restart_pressure_relative_max": 1e-6}
+    gates = (("blackoil_restart_pressure_relative", "blackoil_restart_pressure_relative_max"),)
+
+    with (
+        pytest.raises(RuntimeError, match="memory drift"),
+        suites.verdict_owed(run, "black_oil_restart", thresholds, gates),
+    ):
+        raise RuntimeError("the worker stopped on memory drift")
+
+    assert [c.name for c in run.checks] == ["black_oil_restart"]
+    assert run.checks[0].status == "NOT_RUN"
+    assert "memory drift" in str(run.checks[0].reason)
+
+
+def test_the_guard_never_doubles_a_verdict_the_group_already_recorded(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    run = _suite_run(paths, tmp_path)
+    with suites.verdict_owed(run, "black_oil_restart", {}, ()):
+        run.checks.append(_check("black_oil_restart"))
+    assert [(c.name, c.status) for c in run.checks] == [("black_oil_restart", "PASS")]
