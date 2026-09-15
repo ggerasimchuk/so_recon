@@ -21,6 +21,10 @@ using JSON
 using SHA
 
 include("model.jl")
+# The black-oil capability after the oil-water model: Task 13's constructor shares
+# `model.jl`'s geometry helpers, its `invalid` and its exception, and `build_physical` — the
+# one dispatcher both of them are reached through — is defined there beside `build_ow`.
+include("blackoil.jl")
 # Forces after the model: `controls.jl` refuses a case through `invalid`, which `model.jl`
 # defines together with the exception the worker maps to INVALID_INPUT.
 include("controls.jl")
@@ -31,7 +35,10 @@ include("outputs.jl")
 # is the only file that owns a checkpoint on disk.
 include("restart.jl")
 
-export build_ow, load_arrays, run_job, InvalidCaseInput
+export build_ow, build_blackoil, build_physical, load_arrays, run_job, InvalidCaseInput
+export blackoil_pvt, blackoil_pvt_export, blackoil_relperm_export
+export assert_physical_blackoil_fluid, saturated_rs, BO_PHASE_COUNT, BO_PVT_SOURCE
+export water_injection_mixture, WATER_INJECTION_MIXTURE
 export failure_status, assert_physical_pvt
 export build_forces, native_control, control_limits, perforation_mask
 export control_evidence, infeasible_controls

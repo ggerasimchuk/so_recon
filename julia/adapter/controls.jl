@@ -34,14 +34,29 @@
 #: 1 day = 86400 s (plan 3.1). The exchange carries day rates; Jutul wants rates per second.
 const SECONDS_PER_DAY = 86400.0
 
-#: The injected stream of the educational oil-water case: pure water, by mass, in the
-#: water-first phase order `OW_PHASES` fixes. The whole stream is water because SPEC 9.1
-#: gives an injector a standard WATER rate; there is no case in E01 that injects oil.
+#: The injected stream of an E01 case: pure water, by mass, in the water-first phase order
+#: both systems are built with. The whole stream is water because SPEC 9.1 gives an injector
+#: a standard WATER rate; there is no case in E01 that injects oil, and none that injects gas.
 #:
-#: This is the one line black oil will change. When a third component arrives, this becomes
-#: `vcat(1.0, zeros(n_phases - 1))` and `native_control` takes the phase count as a third
-#: argument; nothing else in this file depends on the length of the mixture.
+#: Task 13 is the third component arriving. The mixture is now built from the phase count —
+#: `water_injection_mixture(n)` below, which is `vcat(1.0, zeros(n - 1))` — and `native_control`
+#: takes that count as a third argument defaulting to 2. Nothing else in this file depends on
+#: the length of the mixture. `WATER_INJECTION_MIXTURE` is kept as the two-phase value the
+#: oil-water results were produced with, so the regression that proves they did not move has
+#: a written-down number to compare against rather than a re-derived one.
 const WATER_INJECTION_MIXTURE = [1.0, 0.0]
+
+"""
+    water_injection_mixture(n_phases) -> Vector{Float64}
+
+Pure water by mass over `n_phases` phases, water first. Two phases give `[1.0, 0.0]` — the
+oil-water value, unchanged — and three give `[1.0, 0.0, 0.0]`.
+"""
+function water_injection_mixture(n_phases::Int)
+    n_phases >= 1 ||
+        invalid("water_injection_mixture: a system has at least one phase, got $(n_phases)")
+    return vcat(1.0, zeros(n_phases - 1))
+end
 
 #: What the case's `target` is called once it is a native operating target. These are
 #: JutulDarcy's own short names (`translate_target_to_symbol`), which is what
@@ -55,19 +70,22 @@ const NATIVE_TARGET_SYMBOL = Dict(
 )
 
 """
-    native_control(c, rho_water_sc) -> WellControlForce
+    native_control(c, rho_water_sc, n_phases = 2) -> WellControlForce
 
 The JutulDarcy control one `ControlSegment` asks for.
 
 `c` is the segment as it crosses the exchange: `role`, `target`, `value`, and (for a rate
 control) `bhp_limit_pa`. `rho_water_sc` is the system's own surface water density, which is
-what an injector's surface stream is measured against.
+what an injector's surface stream is measured against. `n_phases` is the phase count of the
+system the control is built for; it decides the LENGTH of the injected mixture and nothing
+else, so at the default of two every oil-water control is the control it always was.
 
 Refuses, as `InvalidCaseInput`, anything the E01 control contract does not express: a shut
 well with a target, a rate that is not positive, a non-positive pressure, and above all a
 producer asked for a per-phase rate (SPEC 9.1).
 """
-function native_control(c::AbstractDict, rho_water_sc::Float64)
+function native_control(c::AbstractDict, rho_water_sc::Float64, n_phases::Int = 2)
+    water_mix = water_injection_mixture(n_phases)
     role = String(c["role"])
     target = String(c["target"])
     value = Float64(c["value"])
@@ -96,7 +114,7 @@ function native_control(c::AbstractDict, rho_water_sc::Float64)
         )
         bhp = BottomHolePressureTarget(value)
         return role == "producer" ? ProducerControl(bhp) :
-               InjectorControl(bhp, WATER_INJECTION_MIXTURE; density = rho_water_sc)
+               InjectorControl(bhp, water_mix; density = rho_water_sc)
     end
     # A rate of exactly zero is not a rate control: it is a shut well. Jutul would refuse a
     # producer target of -0.0 anyway ("Producer target rate must be negative"), and saying
@@ -120,7 +138,7 @@ function native_control(c::AbstractDict, rho_water_sc::Float64)
     )
     return InjectorControl(
         SurfaceWaterRateTarget(value / SECONDS_PER_DAY),
-        WATER_INJECTION_MIXTURE;
+        water_mix;
         density = rho_water_sc,
     )
 end
@@ -196,7 +214,12 @@ that disagrees with the fluid the model was built from.
 """
 function build_forces(model, controls, boundary)
     bc = boundary_conditions(model, boundary)
-    rho_water_sc = Float64(JutulDarcy.reference_densities(model.models[:Reservoir].system)[1])
+    reference = JutulDarcy.reference_densities(model.models[:Reservoir].system)
+    rho_water_sc = Float64(reference[1])
+    # The phase count comes from the MODEL, exactly as the surface density above does: an
+    # injected mixture whose length was assumed rather than read would be a two-phase stream
+    # silently handed to a three-phase system.
+    n_phases = length(reference)
     names = well_names(model)
 
     by_well = Dict{Symbol,Any}()
@@ -221,7 +244,7 @@ function build_forces(model, controls, boundary)
     control = Dict{Symbol,Any}()
     limits = Dict{Symbol,Any}()
     for (name, c) in by_well
-        control[name] = native_control(c, rho_water_sc)
+        control[name] = native_control(c, rho_water_sc, n_phases)
         limits[name] = control_limits(c)
     end
     # set_default_limits = false: only the limits the case recorded, never JutulDarcy's

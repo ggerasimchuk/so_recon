@@ -24,6 +24,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+from pydantic import TypeAdapter
 
 from so_recon.paths import ProjectPaths
 from so_recon.registry.hashing import sha256_file, sha256_json
@@ -34,11 +35,15 @@ from so_recon.simulator.case_io import (
     write_array,
 )
 from so_recon.simulator.contracts import (
+    CASE_SCHEMA_VERSION,
+    CASE_SCHEMA_VERSION_BO,
     CELL_AXES,
     CELL_DIM_AXES,
     DIM_CELL_AXES,
     FACE_AXES,
+    AnyFluidSpec,
     ArrayRef,
+    BlackOilFluidSpec,
     BoundarySpec,
     CaseBundle,
     ControlSegment,
@@ -63,6 +68,12 @@ from so_recon.simulator.results import (
 #: The seed every verification fixture is published under. These cases are deterministic and
 #: carry no random field at all; the seed is recorded because a case records one.
 FIXTURE_SEED = 20260914
+
+#: The production parser of a case's fluid block. It is the DISCRIMINATED union and not one
+#: member of it: Task 13's black-oil fixtures publish through this same function, and a
+#: hard-coded `FluidSpec` here would have decoded a black-oil case as an oil-water one field
+#: by field until something failed for an unrelated reason.
+_FLUIDS: TypeAdapter[FluidSpec | BlackOilFluidSpec] = TypeAdapter(AnyFluidSpec)
 
 
 def expected_cell_centers(
@@ -134,7 +145,11 @@ def build_case(
             paths=paths,
         )
 
+    fluids = _FLUIDS.validate_python(case_json["fluids"])
     case = CaseBundle(
+        # A black-oil case is `case-2` and an oil-water one stays `case-1`; the schema and the
+        # physics class are checked against each other by `CaseBundle` itself.
+        schema_version=CASE_SCHEMA_VERSION_BO if fluids.kind == "BO" else CASE_SCHEMA_VERSION,
         case_id=str(case_json["case_id"]),
         world_id=f"world-{world}-{label}",
         start_date=str(case_json["start_date"]),
@@ -148,7 +163,7 @@ def build_case(
             neighbors=written["neighbors"],
         ),
         rock=RockSpec(porosity=written["porosity"], permeability_m2=written["permeability_m2"]),
-        fluids=FluidSpec.model_validate(case_json["fluids"]),
+        fluids=fluids,
         wells=tuple(WellSpec.model_validate(w) for w in case_json["wells"]),
         controls=tuple(ControlSegment.model_validate(c) for c in case_json["controls"]),
         initial=InitialStateSpec(
