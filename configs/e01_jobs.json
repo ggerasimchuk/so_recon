@@ -885,8 +885,8 @@
       "groups": [
         "black_oil"
       ],
-      "status": "NOT_RUN",
-      "not_run_reason": "The black-oil capability is Task 13 of this plan and is not built yet. E01's BO status is NOT_RUN; PASS_WITH_LIMITATIONS is the stage status an accepted oil-water scope carries while it is.",
+      "status": "RUN",
+      "not_run_reason": null,
       "jobs": [
         {
           "job_id": "bo_closed",

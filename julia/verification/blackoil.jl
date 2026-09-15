@@ -163,18 +163,41 @@ const BO_CLOSED_EDGES_DAYS = [0.0, 1.0, 2.0, 3.0]
 #: and a restart is taken at one of these boundaries.
 const BO_DEPLETION_EDGES_DAYS = [0.0, 31.0, 60.0, 91.0, 121.0, 152.0, 182.0]
 
-#: The producer's bottom-hole pressure, one value per report interval, in Pa. It starts far
-#: above the 53.67 bar bubble point of `BO_INITIAL_RS` and ends well below it, so the phase
-#: transition happens inside the fixture rather than at its edge.
-const BO_DEPLETION_BHP_PA = [150.0e5, 120.0e5, 95.0e5, 75.0e5, 60.0e5, 40.0e5]
+#: The producer's bottom-hole pressure, one value per report interval, in Pa. It starts at
+#: twice the 53.67 bar bubble point of `BO_INITIAL_RS` and ends well below it, so the phase
+#: transition happens inside the fixture rather than at its edge. Calibrated with the tank
+#: constant below: the measured free gas saturation is 0 through the first three intervals,
+#: 0.015 at the end of the fourth, and 0.092 at the end of the sixth.
+const BO_DEPLETION_BHP_PA = [110.0e5, 80.0e5, 60.0e5, 45.0e5, 36.0e5, 30.0e5]
 
-#: Which report step the restart pair is split after. Step 4 (one-based) ends at 121 days,
-#: with the bottom-hole pressure already at 60 bar and about to cross the bubble point, so
-#: the continuation is the part of the run in which gas comes out of solution.
+#: Which report step the restart pair is split after — the step gas APPEARS in, so that the
+#: checkpoint carries a state that already holds free gas.
+#:
+#: That is the point of the split and not an arbitrary place to cut it. A black-oil primary
+#: unknown is a `BlackOilX`: a value together with the PHASE STATE it belongs to (`OilOnly`
+#: or `OilAndGas`). A continuation that restored saturations alone would resume an
+#: undersaturated cell as undersaturated whatever its pressure said, so splitting after the
+#: transition is what makes the native checkpoint's phase state a thing the comparison can
+#: fail on.
 const BO_RESTART_AFTER_STEP = 4
 
 const BO_POROSITY = 0.2
 const BO_PERMEABILITY_M2 = 100.0 * MILLIDARCY_M2
+
+#: The depletion fixture's own geometry and permeability, CALIBRATED rather than inherited.
+#:
+#: A closed tank produced at a fixed bottom-hole pressure approaches that pressure with a time
+#: constant of roughly `PV * c_t / (WI * lambda)`. On the closed fixture's 10 m cubes at 100 mD
+#: that constant is a couple of DAYS: the box equalised with the well inside the first report
+#: interval, the rate fell to 8e-4 m3/day, and JutulDarcy (which shuts a well it cannot flow)
+#: reported the operating control as `disabled` — a `CONTROL_INFEASIBLE` result and not a
+#: depletion at all. Measured, not guessed: see the calibration table in the task report.
+#:
+#: These values put that constant at a few weeks, so the reservoir TRACKS the falling
+#: bottom-hole pressure with a lag, the producer keeps flowing on the control it was given for
+#: every interval, and the last two intervals take the cells below the bubble point.
+const BO_DEPLETION_CELL_EDGE_M = 60.0
+const BO_DEPLETION_PERMEABILITY_M2 = 8.0 * MILLIDARCY_M2
 
 """
     blackoil_case(name) -> (case, arrays)
@@ -223,13 +246,24 @@ function blackoil_closed_case()
     return (case, arrays)
 end
 
-"""A (4,1,1) box and one producer whose bottom-hole pressure steps across the bubble point."""
-function blackoil_depletion_case()
+"""A (4,1,1) box and one producer whose bottom-hole pressure steps across the bubble point.
+
+The keywords exist so the fixture's own tank constant can be MEASURED rather than guessed:
+the pore volume and the permeability together decide how fast the box equalises with the
+well, and a box that equalises inside one report interval is a box whose producer stops
+flowing and is then shut by the engine — a `CONTROL_INFEASIBLE` result rather than a
+depletion. The defaults are the calibrated ones and the diagnostic never passes anything else.
+"""
+function blackoil_depletion_case(;
+    cell_edge_m::Float64 = BO_DEPLETION_CELL_EDGE_M,
+    permeability_m2::Float64 = BO_DEPLETION_PERMEABILITY_M2,
+    bhp_pa::Vector{Float64} = collect(BO_DEPLETION_BHP_PA),
+)
     dims = (4, 1, 1)
     n_cells = prod(dims)
-    extent = (CELL_EDGE_M * dims[1], CELL_EDGE_M, CELL_EDGE_M)
+    extent = (cell_edge_m * dims[1], cell_edge_m, cell_edge_m)
     edges = copy(BO_DEPLETION_EDGES_DAYS)
-    length(BO_DEPLETION_BHP_PA) == length(edges) - 1 || error(
+    length(bhp_pa) == length(edges) - 1 || error(
         "blackoil_depletion_case: one bottom-hole pressure per report interval is required",
     )
     controls = Any[
@@ -239,10 +273,10 @@ function blackoil_depletion_case()
             well_id = "PBO",
             role = "producer",
             target = "bhp",
-            value = BO_DEPLETION_BHP_PA[i],
+            value = bhp_pa[i],
             bhp_limit_pa = nothing,
             connection_open = [true],
-        ) for i in 1:length(BO_DEPLETION_BHP_PA)
+        ) for i in 1:length(bhp_pa)
     ]
     case = analytic_skeleton(
         case_id = "blackoil-depletion-4-cell",
@@ -259,7 +293,7 @@ function blackoil_depletion_case()
     arrays = Dict{String,Any}(
         "cell_centers_m" => uniform_cell_centers(dims, extent),
         "porosity" => fill(BO_POROSITY, n_cells),
-        "permeability_m2" => fill(BO_PERMEABILITY_M2, 3, n_cells),
+        "permeability_m2" => fill(permeability_m2, 3, n_cells),
         "pressure_pa" => fill(BO_INITIAL_PRESSURE_PA, n_cells),
         "sw" => fill(BO_INITIAL_SW, n_cells),
     )
@@ -524,6 +558,12 @@ function selftest_blackoil(native_root::AbstractString)
         @test n == length(BO_DEPLETION_EDGES_DAYS)
         @test maximum(states["sg"][1]) <= 1.0e-10
         @test maximum(states["sg"][n]) > 1.0e-3
+        # The split of 13.4's restart pair is taken after the step gas appears in, so the
+        # checkpoint has to be a state that already holds free gas. Asserted here rather
+        # than assumed: a fixture recalibrated into a different schedule would otherwise
+        # move the transition past the split without anything noticing.
+        @test maximum(states["sg"][BO_RESTART_AFTER_STEP + 1]) > 1.0e-3
+        @test maximum(states["sg"][BO_RESTART_AFTER_STEP]) <= 1.0e-10
         @test minimum(states["rs"][n]) < BO_INITIAL_RS
         @test minimum(states["pressure_pa"][n]) < bubble_point_pressure(pvt, BO_INITIAL_RS)
         for k in 1:n
@@ -542,6 +582,12 @@ function selftest_blackoil(native_root::AbstractString)
         )
         measured["bo_depletion"] = Dict{String,Any}(
             "saturation_sum_drift" => saturation_drift,
+            "max_sg_per_state" => [maximum(states["sg"][k]) for k in 1:n],
+            "min_pressure_pa_per_state" => [minimum(states["pressure_pa"][k]) for k in 1:n],
+            "max_sg_at_restart_boundary" => maximum(states["sg"][BO_RESTART_AFTER_STEP + 1]),
+            "cell_edge_m" => BO_DEPLETION_CELL_EDGE_M,
+            "permeability_m2" => BO_DEPLETION_PERMEABILITY_M2,
+            "bhp_schedule_pa" => collect(BO_DEPLETION_BHP_PA),
             "bubble_point_pa" => bubble_point_pressure(pvt, BO_INITIAL_RS),
             "initial_free_gas_m3_sc" => first_gas.free,
             "initial_dissolved_gas_m3_sc" => first_gas.dissolved,

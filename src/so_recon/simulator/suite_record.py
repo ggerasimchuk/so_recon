@@ -78,6 +78,22 @@ MANDATORY_CHECKS: frozenset[str] = frozenset(
 )
 
 
+#: Task 13: the checks the BLACK-OIL suite is gated on, inside its own session.
+#:
+#: They are deliberately NOT in `MANDATORY_CHECKS`. That set is the oil-water stage matrix,
+#: and `validation/e01_report.py` fails the stage for anything in it that is missing — so a
+#: black-oil name there would make a stage with no black-oil session a FAILED stage, which is
+#: exactly the coupling plan 13.5 forbids. `evaluate_suite` scores these as mandatory for the
+#: session that produces them, which is how a failing capability exits non-zero and reaches
+#: the stage report as `BO status: FAIL` instead of being green by omission.
+BO_CHECKS: frozenset[str] = frozenset({"black_oil", "black_oil_restart"})
+
+#: What `evaluate_suite` treats as a gate: the oil-water stage matrix, plus the black-oil
+#: capability's own checks when a session produced them. A p0 or p1 session never produces a
+#: `black_oil` check and is unaffected.
+GATED_CHECKS: frozenset[str] = MANDATORY_CHECKS | BO_CHECKS
+
+
 class CommandError(RuntimeError):
     """A command was asked for something it must refuse. Recorded as FAIL by `execute_run`."""
 
@@ -363,18 +379,18 @@ def evaluate_suite(outcome: SuiteOutcome, plan: SuitePlan) -> tuple[int, tuple[s
     code, because an exploratory benchmark is not a gate.
     """
     limitations: list[str] = []
-    failed = [c.name for c in outcome.checks if c.status == "FAIL" and c.name in MANDATORY_CHECKS]
-    unrun = [c.name for c in outcome.checks if c.status == "NOT_RUN" and c.name in MANDATORY_CHECKS]
+    failed = [c.name for c in outcome.checks if c.status == "FAIL" and c.name in GATED_CHECKS]
+    unrun = [c.name for c in outcome.checks if c.status == "NOT_RUN" and c.name in GATED_CHECKS]
     present = {c.name for c in outcome.checks}
     expected_here = {
         job.scored_as
         for job in plan.jobs
-        if job.deferred_to is None and job.scored_as in MANDATORY_CHECKS
+        if job.deferred_to is None and job.scored_as in GATED_CHECKS
     }
     missing = sorted(expected_here - present)
     surprised = [job.job_id for job in outcome.jobs if not job.as_expected]
     for check in outcome.checks:
-        if check.status == "NOT_RUN" and check.name not in MANDATORY_CHECKS:
+        if check.status == "NOT_RUN" and check.name not in GATED_CHECKS:
             limitations.append(f"{check.name}: NOT_RUN — {check.reason}")
     for job in plan.jobs:
         if job.deferred_to is not None:
@@ -436,6 +452,8 @@ def read_suite_report(run_dir: Path) -> SuiteReport | None:
 
 __all__ = [
     "BENCHMARK_FILENAME",
+    "BO_CHECKS",
+    "GATED_CHECKS",
     "DEFAULT_JOB_PLAN_RELPATH",
     "JOB_PLAN_SCHEMA_VERSION",
     "MANDATORY_CHECKS",

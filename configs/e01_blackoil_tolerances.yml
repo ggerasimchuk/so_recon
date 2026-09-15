@@ -1,0 +1,68 @@
+# E01 black-oil capability tolerances (plan Task 13).
+#
+# A SEPARATE block from `configs/e01_tolerances.yml`, and separate on purpose. Plan 13.5 puts
+# the black-oil capability behind its own gate: a BO failure or NOT_RUN is recorded apart from
+# the oil-water verdict and never deletes or fails an oil-water deliverable. A gate that is
+# separate has to have thresholds that are separate too — adding black-oil keys to the
+# oil-water block would have changed that file's digest, and every P0 and P1 suite report
+# already published carries that digest as the agreement it was scored against. Those reports
+# would have become unreadable evidence for a capability that has nothing to do with them.
+#
+# The same rules as the oil-water block apply here. `load_blackoil_tolerances` demands EXACTLY
+# this key set: a missing key and an unknown key are both refusals, because a default silently
+# substituted for a missing threshold is a gate nobody agreed to. A change requires a new
+# digest, a written explanation and a rerun of the black-oil matrix — never the masking of a
+# single failure.
+#
+# Denominators, once: a relative error divides by `max(abs(reference), floor)` in the
+# reference's own SI or surface unit — 1 Pa for a pressure, 1e-6 m3_sc for a volume or an
+# inventory. Gas volumes are compared against gas volumes and never against liquid ones: a
+# standard cubic metre of gas is not a standard cubic metre of oil, and no threshold here is
+# borrowed from the oil-water block's liquid numbers.
+schema_version: e01-blackoil-tolerances-1
+
+# --- the capability itself -------------------------------------------------------------
+#
+# Sw + So + Sg = 1 + MINIMUM_COMPOSITIONAL_SATURATION in the pinned engine. JutulDarcy 0.3.11
+# reconstructs the black-oil saturations as `rem = 1 - Sw + MINIMUM_COMPOSITIONAL_SATURATION`
+# (`src/blackoil/variables/varswitch.jl`) and that constant is exactly 1e-10
+# (`src/multicomponent/multicomponent.jl`). The measured drift is 1.0000000827e-10 on every
+# state of both fixtures. The limit is twice the engine's own epsilon: it admits that
+# constant and float64 round-off around it, and still fails anything an order of magnitude
+# above it. The saturations are NEVER renormalised to hide the difference.
+blackoil_saturation_sum_abs_max: 2.0e-10
+
+# The component gas balance, closed on the native `TotalMasses / rho_g_sc` inventory against
+# the surface and connection sources. SPEC 23.1's minimum balance gate, applied to the third
+# component.
+blackoil_gas_balance_relative_max: 1.0e-3
+
+# Free gas (`Sg*PV/Bg`) plus dissolved gas (`Rs*So*PV/Bo`), recomputed from the PUBLISHED
+# states, against the native component gas inventory of the same state. This is the assertion
+# that the dissolved term is really in the gas component and not an accounting convention.
+blackoil_gas_inventory_closure_relative_max: 1.0e-4
+
+# Gas must actually come out of solution. The metric is a SHORTFALL — how far the depletion
+# fixture fell short of the free gas saturation it has to reach and of the bubble-point
+# crossing it has to make — so a fixture in which nothing happened fails rather than passes
+# vacuously. Both are structural: the limit is a float64 zero with room for round-off.
+blackoil_free_gas_shortfall_max: 1.0e-12
+blackoil_bubble_point_shortfall_max: 1.0e-12
+
+# A closed black-oil cell with no source at all must not move, and its component gas
+# inventory — free plus dissolved — must be the number it started as.
+blackoil_closed_saturation_drift_max: 1.0e-8
+blackoil_closed_gas_inventory_relative_max: 1.0e-8
+
+# --- the restart round trip --------------------------------------------------------------
+#
+# A continuation is the same run. The four state fields and the two gas inventories are
+# compared at the shared end of the horizon, and the surface volumes of all three components
+# over the whole schedule. The numbers mirror the oil-water restart limits because the claim
+# is the same claim; they are stated here rather than read out of the other file so that the
+# black-oil gate is legible on its own.
+blackoil_restart_saturation_abs_max: 1.0e-6
+blackoil_restart_pressure_relative_max: 1.0e-6
+blackoil_restart_rs_relative_max: 1.0e-6
+blackoil_restart_inventory_relative_max: 1.0e-5
+blackoil_restart_surface_volume_relative_max: 1.0e-5

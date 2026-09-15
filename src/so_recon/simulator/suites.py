@@ -44,16 +44,24 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyarrow.parquet as pq
 
 from so_recon.config.resources import ResourceProfile
 from so_recon.config.schema import ProjectConfig
 from so_recon.environment.resources import ResourceSnapshot
 from so_recon.environment.resources import probe_resources as probe_machine
 from so_recon.paths import ProjectPaths
+from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import RUN_RECORD_SCHEMA_VERSION, RunContext, RunStatus
 from so_recon.runner import execute_run
 from so_recon.simulator.budget import BudgetLedger, BudgetStop, disk_stop, load_ledger
-from so_recon.simulator.case_io import case_manifest_sha256, load_case, read_array
+from so_recon.simulator.case_io import (
+    case_manifest_sha256,
+    compute_model_hash,
+    compute_static_hash,
+    load_case,
+    read_array,
+)
 from so_recon.simulator.contracts import CaseBundle, ForwardResult, OutputRequest
 from so_recon.simulator.forward import (
     DriftDecision,
@@ -68,6 +76,7 @@ from so_recon.simulator.julia_bridge import JuliaRunError, SubprocessJuliaLaunch
 from so_recon.simulator.results import (
     BALANCES_FILENAME,
     CONNECTIONS_FILENAME,
+    HEADLINE_BALANCE,
     MONTHLY_FILENAME,
     RESULT_FILENAME,
     STATES_FILENAME,
@@ -103,6 +112,7 @@ from so_recon.synthetic.world_io import (
 )
 from so_recon.validation.fixtures import publish_fixture
 from so_recon.validation.physics import (
+    DEFAULT_BLACKOIL_TOLERANCES_RELPATH,
     CommonSupport,
     PhysicsCheck,
     bl_cell_average,
@@ -110,6 +120,7 @@ from so_recon.validation.physics import (
     common_metrics,
     compare_refinement,
     evaluate_physics,
+    load_blackoil_tolerances,
 )
 
 log = logging.getLogger(__name__)
@@ -847,7 +858,9 @@ class LaunchMeasurement:
     peak_rss_bytes: int | None
 
 
-def _launch(run: SuiteRun, script: str, flag: str, label: str) -> LaunchMeasurement:
+def _launch(
+    run: SuiteRun, script: str, flag: str, label: str, *, extra: Sequence[str] = ()
+) -> LaunchMeasurement:
     out_path = run.ctx.run_dir / "verification" / f"{label}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     launcher = SubprocessJuliaLauncher(
@@ -855,7 +868,7 @@ def _launch(run: SuiteRun, script: str, flag: str, label: str) -> LaunchMeasurem
     )
     started = time.monotonic()
     with _TreePeakRss(run.session.session_dir, interval_s=run.profile.poll_interval_s) as sampler:
-        launcher.launch(run.paths.root / script, [flag], out_path)
+        launcher.launch(run.paths.root / script, [flag, *extra], out_path)
     elapsed = time.monotonic() - started
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     if payload.get("status") not in (None, "ok"):
@@ -1693,20 +1706,406 @@ def _thread_comparison(run: SuiteRun) -> None:
     )
 
 
-def _run_black_oil(run: SuiteRun) -> None:
-    reason = run.plan.not_run_reason or "the black-oil capability is not built in this stage"
-    for job in run.plan.jobs:
-        run.jobs.append(not_run_outcome(job, reason))
-    run.checks.append(
-        PhysicsCheck(
-            name="black_oil",
-            status="NOT_RUN",
-            metrics={},
-            thresholds={},
-            input_hashes={},
-            evidence_paths=(),
-            reason=reason,
+#: 13.4: which report step the black-oil restart pair is split after. It is the boundary
+#: `julia/verification/blackoil.jl` names — the end of the fourth interval, with the
+#: producer's bottom-hole pressure about to cross the bubble point — so the continuation is
+#: the part of the run in which gas comes out of solution rather than a quiet tail.
+BO_RESTART_AFTER_STEP = 4
+
+#: What the depletion fixture must reach for the capability to have shown anything: a free
+#: gas saturation somewhere in the model, and a pressure below the bubble point of the
+#: declared initial dissolved ratio. They are STRUCTURAL — a fixture in which nothing
+#: happened has to fail rather than pass vacuously — so they are stated here rather than in
+#: the tolerance block, and what the gate scores is the SHORTFALL against them.
+BO_MIN_FREE_GAS_SATURATION = 1e-3
+
+_BO_GATES: tuple[tuple[str, str], ...] = (
+    ("blackoil_saturation_sum_drift", "blackoil_saturation_sum_abs_max"),
+    ("blackoil_gas_balance_cumulative_relative", "blackoil_gas_balance_relative_max"),
+    ("blackoil_gas_inventory_closure_relative", "blackoil_gas_inventory_closure_relative_max"),
+    ("blackoil_free_gas_shortfall", "blackoil_free_gas_shortfall_max"),
+    ("blackoil_bubble_point_shortfall", "blackoil_bubble_point_shortfall_max"),
+    ("blackoil_closed_saturation_drift", "blackoil_closed_saturation_drift_max"),
+    ("blackoil_closed_gas_inventory_relative", "blackoil_closed_gas_inventory_relative_max"),
+)
+
+_BO_RESTART_GATES: tuple[tuple[str, str], ...] = (
+    ("blackoil_restart_saturation_abs", "blackoil_restart_saturation_abs_max"),
+    ("blackoil_restart_pressure_relative", "blackoil_restart_pressure_relative_max"),
+    ("blackoil_restart_rs_relative", "blackoil_restart_rs_relative_max"),
+    ("blackoil_restart_free_gas_relative", "blackoil_restart_inventory_relative_max"),
+    ("blackoil_restart_dissolved_gas_relative", "blackoil_restart_inventory_relative_max"),
+    ("blackoil_restart_surface_volume_relative", "blackoil_restart_surface_volume_relative_max"),
+)
+
+
+def _relative(measured: float, reference: float, floor: float) -> float:
+    return abs(measured - reference) / max(abs(reference), floor)
+
+
+def _gas_split(states: Mapping[str, Any], index: int) -> tuple[float, float]:
+    """Free and dissolved gas of one published state, m3_sc: `Sg*PV/Bg` and `Rs*So*PV/Bo`."""
+    pv = states["pore_volume_m3"][index]
+    free = float(np.sum(states["sg"][index] * pv / states["bg"][index]))
+    dissolved = float(np.sum(states["rs"][index] * states["so"][index] * pv / states["bo"][index]))
+    return free, dissolved
+
+
+def _surface_volumes(result: ForwardResult, paths: ProjectPaths) -> dict[str, float]:
+    """Cumulative surface volumes of all three components over a published result, m3_sc.
+
+    Oil and water come from `monthly.parquet` and gas from the black-oil result's OWN gas
+    table. The gas is never read out of a liquid column and never added into one: a standard
+    cubic metre of gas is a different physical quantity, and 13.4 is explicit that gas units
+    and source scales are not borrowed from the oil-water case.
+    """
+    monthly = pq.read_table(paths.resolve(str(result.monthly_path)))
+    out = {
+        "oil": float(sum(monthly.column("oil_prod_m3_sc").to_pylist())),
+        "water": float(sum(monthly.column("water_prod_m3_sc").to_pylist())),
+        "gas": 0.0,
+    }
+    if result.black_oil is not None:
+        out["gas"] = float(result.black_oil.surface_gas_m3_sc)
+    return out
+
+
+def _blackoil_capability_metrics(
+    run: SuiteRun, report: Mapping[str, Any], results: Mapping[str, ForwardResult]
+) -> dict[str, float]:
+    """13.1/13.4 measured on the PUBLISHED results, not on the diagnostic's own dictionary."""
+    metrics: dict[str, float] = {}
+    closed = results.get("bo_closed")
+    depletion = results.get("bo_depletion")
+    if closed is None or depletion is None:
+        return metrics
+
+    drift = 0.0
+    for result in (closed, depletion):
+        states = _states(result, run.paths)
+        total = states["sw"] + states["so"] + states["sg"]
+        drift = max(drift, float(np.abs(total - 1.0).max()))
+    metrics["blackoil_saturation_sum_drift"] = drift
+
+    # The closed cell: nothing moves, and the component gas inventory is what it started as.
+    closed_states = _states(closed, run.paths)
+    last = len(closed.times_s) - 1
+    metrics["blackoil_closed_saturation_drift"] = max(
+        float(np.abs(closed_states[name][last] - closed_states[name][0]).max())
+        for name in ("sw", "so", "sg")
+    )
+    assert closed.black_oil is not None
+    started = closed.black_oil.free_gas_m3_sc[0] + closed.black_oil.dissolved_gas_m3_sc[0]
+    ended = closed.black_oil.free_gas_m3_sc[-1] + closed.black_oil.dissolved_gas_m3_sc[-1]
+    metrics["blackoil_closed_gas_inventory_relative"] = _relative(ended, started, 1e-6)
+
+    # The depletion: gas really comes out of solution, below a bubble point this build
+    # computed from the exported saturation table rather than from a remembered number.
+    states = _states(depletion, run.paths)
+    final = len(depletion.times_s) - 1
+    metrics["blackoil_final_max_sg"] = float(states["sg"][final].max())
+    metrics["blackoil_free_gas_shortfall"] = max(
+        0.0, BO_MIN_FREE_GAS_SATURATION - metrics["blackoil_final_max_sg"]
+    )
+    bubble = float(report["bubble_point_pa"])
+    metrics["blackoil_bubble_point_pa"] = bubble
+    metrics["blackoil_final_min_pressure_pa"] = float(states["pressure_pa"][final].min())
+    metrics["blackoil_bubble_point_shortfall"] = max(
+        0.0, (metrics["blackoil_final_min_pressure_pa"] - bubble) / bubble
+    )
+
+    # The dissolved term is a CLAIM, not a definition: the native component gas inventory is
+    # `TotalMasses / rho_g_sc` and knows nothing of the split, so free + dissolved recomputed
+    # from the published states agreeing with it is evidence that the dissolved gas is really
+    # inside the gas component.
+    assert depletion.black_oil is not None
+    balances = pq.read_table(run.paths.resolve(str(depletion.balances_path))).to_pylist()
+    gas_rows = [
+        row for row in balances if row["component"] == "gas" and row["balance"] == HEADLINE_BALANCE
+    ]
+    if gas_rows:
+        metrics["blackoil_gas_balance_cumulative_relative"] = float(
+            gas_rows[0]["cumulative_relative"]
         )
+        native_initial = float(gas_rows[0]["initial_inventory_m3_sc"])
+        split = depletion.black_oil.free_gas_m3_sc[0] + depletion.black_oil.dissolved_gas_m3_sc[0]
+        metrics["blackoil_gas_inventory_closure_relative"] = _relative(split, native_initial, 1e-6)
+        metrics["blackoil_initial_gas_inventory_m3_sc"] = native_initial
+    metrics["blackoil_initial_free_gas_m3_sc"] = depletion.black_oil.free_gas_m3_sc[0]
+    metrics["blackoil_initial_dissolved_gas_m3_sc"] = depletion.black_oil.dissolved_gas_m3_sc[0]
+    metrics["blackoil_final_free_gas_m3_sc"] = depletion.black_oil.free_gas_m3_sc[-1]
+    metrics["blackoil_final_dissolved_gas_m3_sc"] = depletion.black_oil.dissolved_gas_m3_sc[-1]
+    metrics["blackoil_surface_gas_m3_sc"] = depletion.black_oil.surface_gas_m3_sc
+    return metrics
+
+
+def _blackoil_restart_metrics(
+    run: SuiteRun, continuous: ForwardResult | None, suffix: ForwardResult | None
+) -> dict[str, float]:
+    """13.4: continuous against restart, on So/Sw/Sg/p, both gas inventories and surface V."""
+    if continuous is None or suffix is None:
+        return {}
+    if continuous.status != "COMPLETE" or suffix.status != "COMPLETE":
+        return {}
+    left = _states(continuous, run.paths)
+    right = _states(suffix, run.paths)
+    metrics = {
+        "blackoil_restart_saturation_abs": max(
+            float(np.abs(left[name][-1] - right[name][-1]).max()) for name in ("sw", "so", "sg")
+        ),
+        "blackoil_restart_pressure_relative": float(
+            (
+                np.abs(left["pressure_pa"][-1] - right["pressure_pa"][-1])
+                / np.maximum(np.abs(left["pressure_pa"][-1]), 1.0)
+            ).max()
+        ),
+        "blackoil_restart_rs_relative": float(
+            (
+                np.abs(left["rs"][-1] - right["rs"][-1]) / np.maximum(np.abs(left["rs"][-1]), 1e-6)
+            ).max()
+        ),
+    }
+    if continuous.black_oil is not None and suffix.black_oil is not None:
+        metrics["blackoil_restart_free_gas_relative"] = _relative(
+            suffix.black_oil.free_gas_m3_sc[-1], continuous.black_oil.free_gas_m3_sc[-1], 1e-6
+        )
+        metrics["blackoil_restart_dissolved_gas_relative"] = _relative(
+            suffix.black_oil.dissolved_gas_m3_sc[-1],
+            continuous.black_oil.dissolved_gas_m3_sc[-1],
+            1e-6,
+        )
+    reference = _surface_volumes(continuous, run.paths)
+    measured = _surface_volumes(suffix, run.paths)
+    metrics["blackoil_restart_surface_volume_relative"] = max(
+        _relative(measured[name], reference[name], 1e-6) for name in ("oil", "water", "gas")
+    )
+    for name in ("oil", "water", "gas"):
+        metrics[f"blackoil_continuous_surface_{name}_m3_sc"] = reference[name]
+        metrics[f"blackoil_restart_surface_{name}_m3_sc"] = measured[name]
+    return metrics
+
+
+def _run_black_oil(run: SuiteRun) -> None:
+    """13.4: the four registered black-oil jobs, in one session of their own.
+
+    `bo_closed` and `bo_depletion` run inside the Julia capability diagnostic and are
+    published through the same production publisher every verification fixture uses;
+    `bo_restart_prefix` and `bo_restart_suffix_new_worker` run through the production worker,
+    on the case the diagnostic published, with the continuation taken in a NEW process.
+
+    The continuous trajectory the restart is measured against is `bo_depletion` itself, which
+    is why the diagnostic drives it through `run_forward_native` with `chunk_months = 1` and
+    the worker's own solver settings: the two are the same discretisation of the same case,
+    so a difference between them is a restart defect and not a setting nobody matched.
+    """
+    thresholds = {
+        **run.tolerances,
+        **load_blackoil_tolerances(run.paths.resolve(DEFAULT_BLACKOIL_TOLERANCES_RELPATH)),
+    }
+    run.artifacts["blackoil.tolerances"] = DEFAULT_BLACKOIL_TOLERANCES_RELPATH
+    started_at = datetime.now(UTC).isoformat()
+    native_dir = run.ctx.run_dir / "blackoil-native"
+    launched = _launch(
+        run,
+        "julia/verification/blackoil.jl",
+        "--test-blackoil",
+        "blackoil",
+        extra=["--native-dir", str(native_dir)],
+    )
+    report = launched.payload
+
+    # The PVT and the relative permeability this capability was built from, published as a
+    # versioned fixture artifact of their own and hashed. A benchmark PVT named only by the
+    # function that returned it would be identified by a name (plan 13.3).
+    pvt_path = run.ctx.run_dir / "verification" / "blackoil_pvt_fixture.json"
+    pvt_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "e01-blackoil-fixture-1",
+                "pvt": report["pvt_export"],
+                "relperm": report["relperm_export"],
+                "academic_benchmark": True,
+                "note": (
+                    "The academic benchmark PVT that ships inside the pinned JutulDarcy, "
+                    "exported as the numbers the model was really built from. It is NOT a "
+                    "Romashka PVT and this capability does not choose the physics of the "
+                    "field case (plan 13.5)."
+                ),
+            },
+            sort_keys=True,
+            allow_nan=False,
+        ),
+        encoding="utf-8",
+    )
+    run.artifacts["blackoil.pvt_fixture"] = run.paths.relative(pvt_path)
+
+    fixture_jobs = [job for job in run.group_jobs("black_oil") if job.kind == "fixture"]
+    per_job = launched.wall_s / max(len(fixture_jobs), 1)
+    results: dict[str, ForwardResult] = {}
+    for job in fixture_jobs:
+        fixture = report["fixtures"][job.job_id]
+        label = f"{run.suite}-{job.job_id}"
+        result, result_dir = publish_fixture(
+            dict(fixture), run.paths, label, dict(report), world=run.suite
+        )
+        results[job.job_id] = result
+        run.artifacts[f"case.{job.job_id}"] = run.paths.relative(
+            run.paths.artifacts / f"case-{label}.json"
+        )
+        run.artifacts[f"result.{job.job_id}"] = run.paths.relative(result_dir)
+        run.jobs.append(
+            _launcher_outcome(
+                job,
+                status=str(fixture["status"]),
+                wall_s=per_job,
+                started_at=started_at,
+                fixture=fixture,
+                peak_rss_bytes=launched.peak_rss_bytes,
+            )
+        )
+        run.session.record_output(result.cost.output_bytes)
+
+    metrics = _blackoil_capability_metrics(run, report, results)
+    run.checks.append(
+        _gate(
+            "black_oil",
+            metrics,
+            thresholds,
+            _BO_GATES,
+            evidence=[run.artifacts["verification.blackoil"], run.artifacts["blackoil.pvt_fixture"]]
+            + [run.artifacts[f"result.{job.job_id}"] for job in fixture_jobs],
+            hashes={
+                "blackoil_tolerances": sha256_file(
+                    run.paths.resolve(DEFAULT_BLACKOIL_TOLERANCES_RELPATH)
+                ),
+                "blackoil_pvt_fixture": sha256_file(pvt_path),
+            },
+        )
+    )
+    _run_black_oil_restart(run, results.get("bo_depletion"), thresholds)
+
+
+def _run_black_oil_restart(
+    run: SuiteRun, continuous: ForwardResult | None, thresholds: Mapping[str, float]
+) -> None:
+    """The prefix and its continuation in a NEW worker, on the published depletion case."""
+    prefix_job = run.planned("bo_restart_prefix")
+    suffix_job = run.planned("bo_restart_suffix_new_worker")
+    relative = run.artifacts.get("case.bo_depletion")
+    if relative is None or continuous is None or continuous.status != "COMPLETE":
+        reason = (
+            "the depletion fixture published no complete result, so there is no case to "
+            "continue and nothing to continue it against"
+        )
+        run.jobs.append(not_run_outcome(prefix_job, reason))
+        run.jobs.append(not_run_outcome(suffix_job, reason))
+        run.checks.append(_gate("black_oil_restart", {}, thresholds, _BO_RESTART_GATES))
+        return
+
+    case = load_case(run.paths.resolve(relative), run.paths)
+    request = OutputRequest(
+        state_times_s=tuple(case.report_edges_s), keep_native_restart=True, chunk_months=1
+    )
+
+    # The prefix is the SAME depletion over its first `BO_RESTART_AFTER_STEP` report steps,
+    # and it RUNS TO THE END OF THAT SCHEDULE: a complete forward that publishes a native
+    # checkpoint, not a run somebody stopped. The distinction is the job's declared outcome.
+    # A stopped run's honest status is `INCOMPLETE_BUDGET` — which is exactly what the
+    # oil-water `restart_prefix` is declared as, because a stop leaves months nobody
+    # simulated — and the black-oil matrix declares `COMPLETE`, so the prefix here is built
+    # to be complete rather than the declaration bent to fit a stop.
+    #
+    # It is the same physical case by construction: only `report_edges_s` and `controls`
+    # are cut, and `compute_static_hash` — everything that determines F EXCEPT the schedule —
+    # is therefore identical, which is what the continuation's `verify_restart` compares. The
+    # schedule half is proved separately by the checkpoint's own prefix digest, and
+    # `schedule_prefix_hash` truncates both cases to the checkpoint, so the prefix case's
+    # digest at that time is the full case's digest at that time.
+    cut_s = float(case.report_edges_s[BO_RESTART_AFTER_STEP])
+    prefix_case = case.model_copy(
+        update={
+            "case_id": f"{case.case_id}-prefix",
+            "report_edges_s": tuple(case.report_edges_s[: BO_RESTART_AFTER_STEP + 1]),
+            "controls": tuple(c for c in case.controls if c.end_s <= cut_s + 1e-6),
+        }
+    )
+    prefix_case = prefix_case.model_copy(update={"model_hash": compute_model_hash(prefix_case)})
+    if compute_static_hash(prefix_case) != compute_static_hash(case):
+        raise CommandError(
+            "the black-oil restart prefix is not the same physical model as the case it is a "
+            "prefix of; only the schedule may be cut"
+        )
+    prefix_request = OutputRequest(
+        state_times_s=tuple(prefix_case.report_edges_s), keep_native_restart=True, chunk_months=1
+    )
+    prefix_started = time.monotonic()
+    prefix_outcome, prefix = _forward(run, prefix_job, prefix_case, prefix_request)
+    run.jobs.append(prefix_outcome)
+    restart_write_s = time.monotonic() - prefix_started
+
+    checkpoint = None if prefix is None else prefix.restart
+    if checkpoint is None:
+        run.jobs.append(
+            not_run_outcome(
+                suffix_job,
+                "the prefix published no native checkpoint; there is nothing to continue",
+            )
+        )
+        run.checks.append(_gate("black_oil_restart", {}, thresholds, _BO_RESTART_GATES))
+        return
+
+    # A NEW worker. The continuation must not depend on anything the first process held —
+    # and for black oil that includes the phase state, which is what the native checkpoint
+    # carries and a saturation alone would not.
+    run.session.recycle()
+    suffix_started_at = datetime.now(UTC).isoformat()
+    suffix_started = time.monotonic()
+    future = tuple(
+        segment
+        for segment in case.controls
+        if segment.start_s >= checkpoint.completed_time_s - 1e-6
+    )
+
+    def work(child_ctx: RunContext, _log: logging.Logger) -> ForwardResult:
+        return resume(
+            case,
+            checkpoint,
+            future,
+            worker=run.session.worker(),
+            ctx=child_ctx,
+            ledger=run.session.ledger(suffix_job.job_id),
+            solver_config=E01_SOLVER,
+            output_request=request,
+        )
+
+    _child, suffix = _child_run(run, "forward-resume", work)
+    suffix_wall = time.monotonic() - suffix_started
+    if suffix is None:
+        run.jobs.append(not_run_outcome(suffix_job, "the continuation produced no result"))
+        run.checks.append(_gate("black_oil_restart", {}, thresholds, _BO_RESTART_GATES))
+        return
+    suffix = persist_result(suffix, run.paths)
+    run.jobs.append(
+        _outcome_from_result(
+            suffix_job,
+            suffix,
+            wall_s=suffix_wall,
+            started_at=suffix_started_at,
+            snapshot=probe_machine(None, run.session.session_dir),
+            restart_read_s=suffix_wall,
+            restart_write_s=restart_write_s,
+        )
+    )
+    run.session.after_job()
+    metrics = _blackoil_restart_metrics(run, continuous, suffix)
+    metrics["blackoil_restart_completed_report_step"] = float(
+        0 if suffix.restart is None else suffix.restart.completed_report_step
+    )
+    evidence = [run.paths.relative(run.paths.resolve(str(continuous.monthly_path)).parent)]
+    if suffix.monthly_path is not None:
+        evidence.append(run.paths.relative(run.paths.resolve(str(suffix.monthly_path)).parent))
+    run.checks.append(
+        _gate("black_oil_restart", metrics, thresholds, _BO_RESTART_GATES, evidence=evidence)
     )
 
 
