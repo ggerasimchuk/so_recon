@@ -101,6 +101,16 @@ def test_a_train_parent_without_views_is_refused() -> None:
         _parent(views=())
 
 
+def test_view_identity_must_name_prefix_and_copy_as_exact_segments() -> None:
+    ViewRow(view_id="m36-copy0", prefix_months=36, noise_copy=0, observation_hash=C, weight=1.0)
+    with pytest.raises(ValidationError, match="must name its prefix"):
+        ViewRow(view_id="m36-copy0", prefix_months=3, noise_copy=0, observation_hash=C, weight=1.0)
+    with pytest.raises(ValidationError, match="must name its prefix"):
+        ViewRow(view_id="m36", prefix_months=36, noise_copy=1, observation_hash=C, weight=1.0)
+    with pytest.raises(ValidationError, match="must name its prefix"):
+        ViewRow(view_id="copy0", prefix_months=36, noise_copy=0, observation_hash=C, weight=1.0)
+
+
 def test_view_weights_must_sum_to_one() -> None:
     views = (
         ViewRow(view_id="m36-copy0", prefix_months=36, noise_copy=0, observation_hash=C, weight=0.9),

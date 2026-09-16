@@ -55,13 +55,13 @@ class ViewRow(StrictModel):
 
     @model_validator(mode="after")
     def _identity_matches_content(self) -> ViewRow:
-        if f"m{self.prefix_months}" not in self.view_id and f"copy{self.noise_copy}" not in (
-            self.view_id
-        ):
-            raise ValueError(
-                f"view_id {self.view_id!r} must name its prefix and noise copy so a row "
-                "cannot be re-labelled after the fact"
-            )
+        segments = self.view_id.split("-")
+        for token in (f"m{self.prefix_months}", f"copy{self.noise_copy}"):
+            if token not in segments:
+                raise ValueError(
+                    f"view_id {self.view_id!r} must name its prefix and noise copy so a row "
+                    "cannot be re-labelled after the fact"
+                )
         return self
 
 
