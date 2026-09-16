@@ -52,6 +52,7 @@ class E02Fixture:
         self.paths.ensure_dirs()
         self.lock_hash = environment_lock_hash(self.paths)
         self.run_dirs: list[Path] = []
+        self.experiment_path: dict[str, Path] = {}
 
     def add_status_run(self) -> Path:
         run_dir = self.root / "artifacts" / "runs" / f"status-{len(self.run_dirs):02d}"
@@ -71,8 +72,9 @@ class E02Fixture:
         self.run_dirs.append(run_dir)
         return run_dir
 
-    def add_noise_recovery(self, *, replicates: int = 200) -> Path:
-        run_dir = self.root / "artifacts" / "runs" / "noise"
+    def add_noise_recovery(self, *, replicates: int = 200, run_id: str = "noise") -> Path:
+        run_dir = self.root / "artifacts" / "runs" / run_id
+        bank = _write_json(run_dir / "prediction_bank.json", {"fixture": "bank"})
         _write_json(
             run_dir / "noise_recovery.json",
             {
@@ -80,6 +82,7 @@ class E02Fixture:
                 "status": "PASS",
                 "repetitions": replicates,
                 "quadrature": {"new_physical_forwards": 0},
+                "parents": [_ref_for(bank, self.paths)],
             },
         )
         _write_json(run_dir / "run.json", {"git_commit": COMMIT, "git_dirty": False})
@@ -110,8 +113,6 @@ class E02Fixture:
         self.run_dirs.append(run_dir)
         return experiment
 
-    experiment_path: dict[str, Path] = {}
-
     def add_smc_run(
         self,
         experiment_id: str,
@@ -121,12 +122,7 @@ class E02Fixture:
         status: str = "COMPLETE",
         beta: float = 1.0,
     ) -> Path:
-        run_dir = (
-            self.root
-            / "artifacts"
-            / "runs"
-            / f"smc-{experiment_id}-n{n_particles}-s{seed}"
-        )
+        run_dir = self.root / "artifacts" / "runs" / f"smc-{experiment_id}-n{n_particles}-s{seed}"
         checkpoint = _write_json(run_dir / "checkpoint" / "manifest.json", {"fixture": "state"})
         _write_json(
             run_dir / "physical_smc.json",
@@ -166,7 +162,7 @@ class E02Fixture:
         self.run_dirs.append(run_dir)
         return run_dir
 
-    def build_complete(self) -> "E02Fixture":
+    def build_complete(self) -> E02Fixture:
         self.add_status_run()
         self.add_noise_recovery()
         for experiment_id in gate.NATIVE_MATRIX_EXPERIMENTS:
@@ -230,10 +226,7 @@ def test_incomplete_matrix_is_refused(tmp_path: Path, stub_ow, stub_lineage) -> 
     fixture = E02Fixture(tmp_path).build_complete()
     # drop one cell: remove the N64/seed12 run of the first experiment
     dropped = (
-        fixture.root
-        / "artifacts"
-        / "runs"
-        / f"smc-{gate.NATIVE_MATRIX_EXPERIMENTS[0]}-n64-s12"
+        fixture.root / "artifacts" / "runs" / f"smc-{gate.NATIVE_MATRIX_EXPERIMENTS[0]}-n64-s12"
     )
     (dropped / "physical_smc.json").unlink()
     with pytest.raises(E01DependencyError, match="incomplete"):
@@ -242,17 +235,17 @@ def test_incomplete_matrix_is_refused(tmp_path: Path, stub_ow, stub_lineage) -> 
 
 def test_intermediate_beta_never_closes_the_gate(tmp_path: Path, stub_ow, stub_lineage) -> None:
     fixture = E02Fixture(tmp_path).build_complete()
-    first = gate.NATIVE_MATRIX_EXPERIMENTS[0]
-    fixture.add_smc_run(first, n_particles=64, seed=12, beta=0.5)
-    # rebuild without the COMPLETE variant of that cell by deleting the good one
-    (fixture.root / "artifacts" / "runs" / f"smc-{first}-n64-s12-good").mkdir(exist_ok=True)
-    with pytest.raises(E01DependencyError):
+    run_dir = (
+        fixture.root / "artifacts" / "runs" / f"smc-{gate.NATIVE_MATRIX_EXPERIMENTS[0]}-n64-s12"
+    )
+    payload = json.loads((run_dir / "physical_smc.json").read_text(encoding="utf-8"))
+    payload["beta"] = 0.5
+    _write_json(run_dir / "physical_smc.json", payload)
+    with pytest.raises(E01DependencyError, match="algorithm_status='COMPLETE' at beta=0.5"):
         _require(fixture)
 
 
-def test_swapped_experiment_file_is_refused_by_hash(
-    tmp_path: Path, stub_ow, stub_lineage
-) -> None:
+def test_swapped_experiment_file_is_refused_by_hash(tmp_path: Path, stub_ow, stub_lineage) -> None:
     fixture = E02Fixture(tmp_path).build_complete()
     experiment = fixture.experiment_path[gate.NATIVE_MATRIX_EXPERIMENTS[0]]
     payload = json.loads(experiment.read_text(encoding="utf-8"))
@@ -262,13 +255,40 @@ def test_swapped_experiment_file_is_refused_by_hash(
         _require(fixture)
 
 
-def test_noise_recovery_with_wrong_scope_is_refused(
-    tmp_path: Path, stub_ow, stub_lineage
-) -> None:
+def test_noise_recovery_with_wrong_scope_is_refused(tmp_path: Path, stub_ow, stub_lineage) -> None:
     fixture = E02Fixture(tmp_path).build_complete()
     (fixture.root / "artifacts" / "runs" / "noise" / "noise_recovery.json").unlink()
     fixture.add_noise_recovery(replicates=50)
     with pytest.raises(E01DependencyError, match="scope"):
+        _require(fixture)
+
+
+def test_substituted_noise_recovery_parent_is_refused(
+    tmp_path: Path, stub_ow, stub_lineage
+) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    bank = fixture.root / "artifacts" / "runs" / "noise" / "prediction_bank.json"
+    _write_json(bank, {"fixture": "swapped"})
+    with pytest.raises(E01DependencyError, match="changed since it was published"):
+        _require(fixture)
+
+
+def test_second_noise_recovery_artifact_is_refused(tmp_path: Path, stub_ow, stub_lineage) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    fixture.add_noise_recovery(run_id="noise-again")
+    with pytest.raises(E01DependencyError, match="noise_recovery.json artifacts were supplied"):
+        _require(fixture)
+
+
+def test_noise_recovery_with_non_object_quadrature_refuses_not_attributeerror(
+    tmp_path: Path, stub_ow, stub_lineage
+) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    report = fixture.root / "artifacts" / "runs" / "noise" / "noise_recovery.json"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["quadrature"] = None
+    _write_json(report, payload)
+    with pytest.raises(E01DependencyError, match="quadrature"):
         _require(fixture)
 
 
@@ -284,8 +304,13 @@ def test_failing_stage_check_is_refused(tmp_path: Path, stub_ow, stub_lineage) -
 
 def test_missing_comparison_is_refused(tmp_path: Path, stub_ow, stub_lineage) -> None:
     fixture = E02Fixture(tmp_path).build_complete()
-    (fixture.root / "artifacts" / "runs" / f"cmp-{gate.NATIVE_MATRIX_EXPERIMENTS[1]}"
-     / "physical_smc_comparison.json").unlink()
+    (
+        fixture.root
+        / "artifacts"
+        / "runs"
+        / f"cmp-{gate.NATIVE_MATRIX_EXPERIMENTS[1]}"
+        / "physical_smc_comparison.json"
+    ).unlink()
     with pytest.raises(E01DependencyError, match="comparison"):
         _require(fixture)
 
@@ -305,16 +330,31 @@ def test_changed_physics_lineage_is_refused(
         _require(fixture)
 
 
-def test_dirty_run_record_is_refused(tmp_path: Path, stub_ow, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dirty_run_record_is_refused(tmp_path: Path, stub_ow) -> None:
     fixture = E02Fixture(tmp_path).build_complete()
-    record = fixture.root / "artifacts" / "runs" / "status-00" / "run.json"
-    _write_json(record, {"git_commit": COMMIT, "git_dirty": True})
-    # _require_clean_lineage runs over physical run dirs only; dirty the smc record
     smc_record = (
-        fixture.root / "artifacts" / "runs" / f"smc-{gate.NATIVE_MATRIX_EXPERIMENTS[0]}-n32-s11"
+        fixture.root
+        / "artifacts"
+        / "runs"
+        / f"smc-{gate.NATIVE_MATRIX_EXPERIMENTS[0]}-n32-s11"
         / "run.json"
     )
     _write_json(smc_record, {"git_commit": COMMIT, "git_dirty": True})
+    with pytest.raises(E01DependencyError, match="dirty tree"):
+        _require(fixture)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "artifacts/runs/noise/run.json",
+        "artifacts/runs/cmp-e02-t1-v1-s141/run.json",
+        "artifacts/runs/exp-e02-t1-v1-s141/run.json",
+    ],
+)
+def test_dirty_record_of_any_cited_run_dir_is_refused(tmp_path: Path, stub_ow, record: str) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    _write_json(fixture.root / record, {"git_commit": COMMIT, "git_dirty": True})
     with pytest.raises(E01DependencyError, match="dirty tree"):
         _require(fixture)
 
@@ -332,6 +372,64 @@ def test_changed_lock_is_refused(tmp_path: Path, stub_ow, stub_lineage) -> None:
     payload["target_hashes"]["lock_hash"] = "f" * 64
     _write_json(smc, payload)
     with pytest.raises(E01DependencyError, match="environment lock changed"):
+        _require(fixture)
+
+
+def _first_smc_payload(fixture: E02Fixture) -> tuple[Path, dict[str, Any]]:
+    smc = (
+        fixture.root
+        / "artifacts"
+        / "runs"
+        / f"smc-{gate.NATIVE_MATRIX_EXPERIMENTS[0]}-n32-s11"
+        / "physical_smc.json"
+    )
+    return smc, json.loads(smc.read_text(encoding="utf-8"))
+
+
+def test_smc_run_with_malformed_cell_refuses_not_typeerror(
+    tmp_path: Path, stub_ow, stub_lineage
+) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    smc, payload = _first_smc_payload(fixture)
+    del payload["n_particles"]
+    _write_json(smc, payload)
+    with pytest.raises(E01DependencyError, match="malformed cell"):
+        _require(fixture)
+
+
+def test_smc_run_without_experiment_ref_refuses_not_keyerror(
+    tmp_path: Path, stub_ow, stub_lineage
+) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    smc, payload = _first_smc_payload(fixture)
+    del payload["experiment"]
+    _write_json(smc, payload)
+    with pytest.raises(E01DependencyError, match="carries no experiment ArtifactRef"):
+        _require(fixture)
+
+
+def test_smc_run_with_non_object_target_hashes_refuses(
+    tmp_path: Path, stub_ow, stub_lineage
+) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    smc, payload = _first_smc_payload(fixture)
+    payload["target_hashes"] = None
+    _write_json(smc, payload)
+    with pytest.raises(E01DependencyError, match="target_hashes is not an object"):
+        _require(fixture)
+
+
+def test_comparison_with_invalid_experiment_ref_refuses_not_validationerror(
+    tmp_path: Path, stub_ow, stub_lineage
+) -> None:
+    fixture = E02Fixture(tmp_path).build_complete()
+    comparison = (
+        fixture.root / "artifacts" / "runs" / "cmp-e02-t1-v1-s141" / "physical_smc_comparison.json"
+    )
+    payload = json.loads(comparison.read_text(encoding="utf-8"))
+    payload["experiment"] = {"path": "artifacts/runs/exp-e02-t1-v1-s141/physical_experiment.json"}
+    _write_json(comparison, payload)
+    with pytest.raises(E01DependencyError, match="does not carry a valid experiment"):
         _require(fixture)
 
 

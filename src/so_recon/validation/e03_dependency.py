@@ -12,12 +12,14 @@ What the gate must prove, in order (plan §2.2):
 1. the accepted E01 oil-water evidence, through `require_e01_ow` itself;
 2. the reduced reference and reduced-SMC diagnostics accepted by the E02 stage report
    machinery (`build_e02_report` over the supplied run dirs);
-3. a noise-recovery report of the correct scope — 200 replicates, zero new forwards;
+3. a noise-recovery report of the correct scope — 200 replicates, zero new forwards —
+   whose published parent ArtifactRefs still re-hash;
 4. the remaining native matrix: every registered (experiment, N, seed) cell COMPLETE at
    beta = 1 with a posterior bundle, plus a passing convergence comparison per
    experiment;
-5. the recorded source/lock lineage: clean commit, physics tree unchanged since the
-   evidence was taken, environment lock still current.
+5. the recorded source/lock lineage: a clean commit recorded by the run record of every
+   cited run directory, physics tree unchanged since the evidence was taken,
+   environment lock still current.
 
 Missing gitignored evidence is an explainable refusal, never a silent pass, and this
 module never writes placeholder metrics. Unit tests drive it with synthetic fixtures
@@ -38,7 +40,7 @@ from so_recon.config.schema import StrictModel
 from so_recon.inference.contracts import E01DependencyError
 from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import ArtifactRef
-from so_recon.registry.hashing import sha256_file, sha256_json
+from so_recon.registry.hashing import sha256_file
 from so_recon.registry.run import environment_lock_hash
 from so_recon.simulator.contracts import RelativePath, Sha256
 from so_recon.validation.e01_dependency import require_e01_ow
@@ -131,9 +133,11 @@ def _refuse(reason: str) -> E01DependencyError:
 
 def _read_json(path: Path, *, role: str) -> dict[str, Any]:
     if not path.is_file():
-        raise _refuse(f"E02 {role} not found at {path}: gitignored run evidence is not "
-                      "present on this checkout. Re-run the E02 commands that publish it "
-                      "and point the gate at their run directories")
+        raise _refuse(
+            f"E02 {role} not found at {path}: gitignored run evidence is not "
+            "present on this checkout. Re-run the E02 commands that publish it "
+            "and point the gate at their run directories"
+        )
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -146,9 +150,7 @@ def _read_json(path: Path, *, role: str) -> dict[str, Any]:
 def _require_schema(payload: Mapping[str, Any], expected: str, *, path: Path, role: str) -> None:
     declared = payload.get("schema_version")
     if declared != expected:
-        raise _refuse(
-            f"{path}: {role} declares schema_version {declared!r}, expected {expected!r}"
-        )
+        raise _refuse(f"{path}: {role} declares schema_version {declared!r}, expected {expected!r}")
 
 
 def _verify_ref(ref: Mapping[str, Any], paths: ProjectPaths, *, role: str) -> Path:
@@ -212,7 +214,9 @@ def _require_clean_lineage(run_dirs: Sequence[Path], paths: ProjectPaths) -> str
     commit = next(iter(commits))
     changed = _git(paths, "diff", "--name-only", commit, "--", *E02_PHYSICS_LINEAGE_PATHS)
     if changed.returncode != 0:
-        raise _refuse(f"the physics tree could not be compared with {commit}: {changed.stderr.strip()}")
+        raise _refuse(
+            f"the physics tree could not be compared with {commit}: {changed.stderr.strip()}"
+        )
     added = _git(
         paths, "ls-files", "--others", "--exclude-standard", "--", *E02_PHYSICS_LINEAGE_PATHS
     )
@@ -231,13 +235,15 @@ def _require_clean_lineage(run_dirs: Sequence[Path], paths: ProjectPaths) -> str
 def _require_current_lock(target_hashes: Mapping[str, Any], paths: ProjectPaths) -> str:
     recorded = target_hashes.get("lock_hash")
     if not isinstance(recorded, str) or len(recorded) != 64:
-        raise _refuse("physical run target_hashes carry no lock_hash: the environment "
-                      "lineage of the native runs cannot be verified")
+        raise _refuse(
+            "physical run target_hashes carry no lock_hash: the environment "
+            "lineage of the native runs cannot be verified"
+        )
     current = environment_lock_hash(paths)
     if recorded != current:
         raise _refuse(
             "the environment lock changed since the E02 runs: adding a dependency "
-            f"(uv.lock/julia Manifest) invalidates the recorded lineage. Re-run the "
+            "(uv.lock/julia Manifest) invalidates the recorded lineage. Re-run the "
             "native matrix under the current lock and republish"
         )
     return recorded
@@ -282,15 +288,21 @@ def require_e02_inverse(
     stage_checks = {str(k): bool(v) for k, v in report["checks"].items()}
 
     # --- noise recovery with the committed scope
-    noise_path: Path | None = None
+    noise_candidates: list[Path] = []
     for run_dir in dirs:
         candidate = run_dir / "noise_recovery.json"
         if not candidate.is_file():
             continue
         payload = _read_json(candidate, role="noise recovery")
         _require_schema(payload, NOISE_RECOVERY_SCHEMA, path=candidate, role="noise recovery")
+        quadrature = payload.get("quadrature")
+        if not isinstance(quadrature, Mapping):
+            raise _refuse(
+                f"{candidate}: noise recovery carries no quadrature object; the "
+                "zero-new-forwards scope cannot be read from the artifact"
+            )
         repetitions = payload.get("repetitions")
-        new_forwards = payload.get("quadrature", {}).get("new_physical_forwards")
+        new_forwards = quadrature.get("new_physical_forwards")
         if payload.get("status") != "PASS":
             raise _refuse(f"{candidate}: noise recovery status is {payload.get('status')!r}")
         if repetitions != NOISE_RECOVERY_REPLICATES or new_forwards != 0:
@@ -300,12 +312,32 @@ def require_e02_inverse(
                 "on the immutable bank. A different scope is a new experiment, not a "
                 "replacement dependency"
             )
-        noise_path = candidate
-    if noise_path is None:
+        parents = payload.get("parents")
+        if not isinstance(parents, list) or not parents:
+            raise _refuse(
+                f"{candidate}: noise recovery publishes no parents ArtifactRefs; the "
+                "reduced evidence it was calibrated against cannot be re-verified"
+            )
+        for index, ref in enumerate(parents):
+            if not isinstance(ref, Mapping):
+                raise _refuse(
+                    f"{candidate}: noise recovery parent #{index} is not a JSON object, "
+                    "not a citable ArtifactRef"
+                )
+            _verify_ref(ref, paths, role=f"noise recovery parent #{index}")
+        noise_candidates.append(candidate)
+    if not noise_candidates:
         raise _refuse(
             "no noise_recovery.json in the supplied E02 run dirs: the calibration "
             "dependency of plan §2.2 is machine-checked, not assumed from Markdown"
         )
+    if len(noise_candidates) > 1:
+        raise _refuse(
+            f"{len(noise_candidates)} valid noise_recovery.json artifacts were supplied "
+            f"({sorted(str(p) for p in noise_candidates)}): the calibration dependency "
+            "is one registered 200-replicate session, not a choice between candidates"
+        )
+    noise_path = noise_candidates[0]
 
     # --- the native matrix
     runs: list[dict[str, Any]] = []
@@ -330,15 +362,25 @@ def require_e02_inverse(
     lock_hashes: set[str] = set()
     for payload, path in zip(runs, run_files, strict=True):
         experiment_id = str(payload.get("experiment_id"))
-        n_particles = payload.get("n_particles")
-        seed = payload.get("seed")
-        key = (experiment_id, int(n_particles), int(seed))
+        n_particles: Any = payload.get("n_particles")
+        seed: Any = payload.get("seed")
+        try:
+            n_value = int(n_particles)
+            seed_value = int(seed)
+            key = (experiment_id, n_value, seed_value)
+            beta = float(payload.get("beta", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise _refuse(
+                f"{path}: physical SMC run carries a malformed cell "
+                f"(n_particles={n_particles!r}, seed={seed!r}, "
+                f"beta={payload.get('beta')!r}): {exc}"
+            ) from exc
         if key in cells:
             raise _refuse(
                 f"the native matrix cell {key} appears twice (e.g. {path}): a cell is one "
                 "registered run, not a best-of collection"
             )
-        if payload.get("algorithm_status") != "COMPLETE" or float(payload.get("beta", 0.0)) != 1.0:
+        if payload.get("algorithm_status") != "COMPLETE" or beta != 1.0:
             raise _refuse(
                 f"{path}: algorithm_status={payload.get('algorithm_status')!r} at beta="
                 f"{payload.get('beta')!r}; an incomplete tempering is not a posterior and "
@@ -350,14 +392,28 @@ def require_e02_inverse(
                 f"{path}: no posterior_bundle.json beside the run: the published bundle, "
                 "not the raw state, is the unit of E02 evidence"
             )
-        experiment_path = _verify_ref(payload["experiment"], paths, role=f"{experiment_id} experiment")
+        for ref_role in ("experiment", "checkpoint"):
+            if not isinstance(payload.get(ref_role), Mapping):
+                raise _refuse(
+                    f"{path}: physical SMC run carries no {ref_role} ArtifactRef; the "
+                    "parent evidence of a native run cannot be re-verified"
+                )
+        experiment_path = _verify_ref(
+            payload["experiment"], paths, role=f"{experiment_id} experiment"
+        )
         _verify_ref(payload["checkpoint"], paths, role=f"{experiment_id} checkpoint")
+        target_hashes = payload.get("target_hashes")
+        if not isinstance(target_hashes, Mapping):
+            raise _refuse(
+                f"{path}: physical SMC run target_hashes is not an object; the "
+                "environment lineage of the native runs cannot be verified"
+            )
         experiments.setdefault(experiment_id, experiment_path)
-        lock_hashes.add(_require_current_lock(payload.get("target_hashes", {}), paths))
+        lock_hashes.add(_require_current_lock(target_hashes, paths))
         cells[key] = NativeCell(
             experiment_id=experiment_id,
-            n_particles=int(n_particles),
-            seed=int(seed),
+            n_particles=n_value,
+            seed=seed_value,
             run_path=paths.relative(path),
             algorithm_status="COMPLETE",
             beta=1.0,
@@ -404,19 +460,31 @@ def require_e02_inverse(
         if not candidate.is_file():
             continue
         payload = _read_json(candidate, role="physical comparison")
-        parent = ArtifactRef.model_validate(payload["experiment"])
-        experiment_id = next(
+        experiment_ref = payload.get("experiment")
+        if not isinstance(experiment_ref, Mapping):
+            raise _refuse(
+                f"{candidate}: physical comparison carries no experiment ArtifactRef "
+                "to attribute its verdict to"
+            )
+        try:
+            parent = ArtifactRef.model_validate(experiment_ref)
+        except ValidationError as exc:
+            raise _refuse(
+                f"{candidate}: physical comparison does not carry a valid experiment "
+                f"ArtifactRef: {exc}"
+            ) from exc
+        matched = next(
             (eid for eid, path in experiments.items() if sha256_file(path) == parent.sha256),
             None,
         )
-        if experiment_id is None:
+        if matched is None:
             continue
         if payload.get("status") != "PASS":
             raise _refuse(
-                f"{candidate}: convergence screen for {experiment_id} is "
+                f"{candidate}: convergence screen for {matched} is "
                 f"{payload.get('status')!r}; POSTERIOR_NOT_CONVERGED closes no gate"
             )
-        comparisons[experiment_id] = candidate
+        comparisons[matched] = candidate
         verified_artifacts.add(paths.relative(candidate))
     lacking = sorted(set(experiments) - comparisons.keys())
     if lacking:
@@ -425,8 +493,14 @@ def require_e02_inverse(
             "screen of the E02 matrix is part of the dependency"
         )
 
-    # --- lineage
-    commit = _require_clean_lineage(tuple({p.parent for p in run_files}), paths)
+    # --- lineage: every cited run directory must record the same clean session
+    lineage_dirs = {
+        noise_path.parent,
+        *(p.parent for p in run_files),
+        *(p.parent for p in experiments.values()),
+        *(p.parent for p in comparisons.values()),
+    }
+    commit = _require_clean_lineage(tuple(sorted(lineage_dirs)), paths)
 
     try:
         evidence = E02InverseEvidence(
