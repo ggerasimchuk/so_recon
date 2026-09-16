@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 from so_recon import SpecVersion
 from so_recon.config.inference import InferenceConfig
+from so_recon.config.learning import LearningConfig
 from so_recon.config.resources import ResourceProfile
 from so_recon.paths import validate_relative_path
 
@@ -99,8 +100,12 @@ class ProjectConfig(StrictModel):
     # settings, so requiring a block here would invalidate configurations that have no
     # inverse problem to configure; E02's own commands ask for one explicitly.
     inference: InferenceConfig | None = None
+    # 4.0 only, absent by default. The E03 learned-proposal settings. Commands of
+    # earlier stages never read it; it is refused (not ignored) in a 3.0 config for the
+    # same reason as `resources` and `inference` above.
+    learning: LearningConfig | None = None
 
-    @field_validator("resources", "inference", mode="before")
+    @field_validator("resources", "inference", "learning", mode="before")
     @classmethod
     def _fields_added_in_4_0(cls, v: object, info: ValidationInfo) -> object:
         """A 3.0 config may not carry a block it cannot describe.

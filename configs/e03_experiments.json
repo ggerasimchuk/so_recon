@@ -1,0 +1,52 @@
+{
+  "schema_version": "e03-experiments-1",
+  "stream_names": ["truth_latent", "static_G", "history_noise", "schedule"],
+  "e02_dependency": {
+    "native_matrix_experiments": [
+      "e02-t1-v1-s141",
+      "e02-t1-v1-s142",
+      "e02-t2-v2-s143",
+      "e02-t4-v1-s144"
+    ],
+    "particle_counts": [32, 64],
+    "inference_seeds": [11, 12],
+    "expected_posterior_runs": 16,
+    "note": "Remaining E02 native matrix (plan E03 2.1), not an E03 benchmark."
+  },
+  "corpus": {
+    "scientific": {
+      "expected_parents": 168,
+      "splits": { "train": 128, "development": 32, "evaluation": 8 }
+    },
+    "thin_slice": {
+      "expected_parents": 11,
+      "namespace": "one-shot technical smoke; excluded from scientific gates"
+    }
+  },
+  "comparison": {
+    "protocol_id": "e03-comparison-1",
+    "methods": ["B0", "B1", "Q", "M", "A_summary", "A_set"],
+    "main_methods": ["B1", "M"],
+    "particle_counts": [32, 64],
+    "inference_seeds": [11, 12],
+    "main_matrix_smc_runs": 64,
+    "primary_support": "eight_quadrants",
+    "primary_month": 36,
+    "diagnostic_months": [12, 24]
+  },
+  "t5": {
+    "enabled": true,
+    "parents": "two registered T1 evaluation parents",
+    "inference_shape": [16, 16, 2],
+    "fine_shape": [48, 48, 2],
+    "months": 36,
+    "note": "Paired coarse/fine truth; fine is a bounded P4-type diagnostic, not a new world."
+  },
+  "training": {
+    "main_seed": 9101,
+    "stability_replica_seed": 9102,
+    "encoder_variants": ["graph", "temporal_set", "summary"],
+    "main_variant": "graph",
+    "checkpoint_selection": "development parent-averaged NLL"
+  }
+}

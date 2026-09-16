@@ -1,0 +1,45 @@
+# E03 test and acceptance tolerances, frozen BEFORE evaluation (plan E03 §9, §11).
+# These are thresholds, not experiment settings; they are never read from e03.yml.
+schema_version: "e03-tolerances-1"
+
+flow:
+  normalization_max_abs: 1.0e-6
+  roundtrip_max_abs: 1.0e-8
+  logdet_fd_max_abs: 1.0e-6
+  frozen_reload_atol: 1.0e-12
+
+context:
+  permutation_max_abs: 1.0e-8
+  prefix_invariance_atol: 0.0
+  padding_invariance_atol: 0.0
+
+sampling:
+  rng_replay_atol: 0.0
+  categorical_mass_rtol: 1.0e-9
+  residual_log_density_atol: 1.0e-12
+
+correction:
+  # MC-aware toy tolerances, fixed by the number of independent starts each test runs.
+  empty_data_mean_atol: 0.02
+  missed_mode_mass_atol: 0.03
+  residual_posterior_mean_atol: 0.02
+
+physics:
+  # E03 normative smooth-verification threshold (plan 0.2 item 10). The historical E02
+  # runner allowed 1e-4 for its own scope; E03 configs declare the SPEC number.
+  truth_balance_cumulative_max: 1.0e-3
+  truth_balance_step_median_max: 1.0e-5
+
+smc_screen:
+  zone_median_gap: 0.03
+  family_mass_gap: 0.15
+  zone_width_relative_gap: 0.25
+  zone_width_absolute_gap: 0.01
+  zone_width_baseline_min: 0.02
+  median_mc_se: 0.01
+  family_mc_se: 0.05
+
+gates:
+  rmse_relative_improvement_min: 0.10
+  t2_layer_mass_reference: 0.5
+  t2_layer_mass_tolerance: null

@@ -14,6 +14,11 @@ dependencies = [
   "psutil>=6.1,<8",
   "matplotlib>=3.9,<4",
   "scipy>=1.18.1",
+  # E03 learned proposal: CPU Float32 training, CPU Float64 operational density. The
+  # CPU-only index below keeps the lock free of CUDA wheels; Julia packages are unchanged.
+  "torch>=2.6,<3",
+  "nflows>=0.14,<0.15",
+  "safetensors>=0.4,<1",
 ]
 
 [project.scripts]
@@ -32,6 +37,16 @@ dev = [
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+# CPU-only PyTorch wheels: the ML proposal trains on CPU Float32 and scores on CPU
+# Float64 (COMPUTE §5), so CUDA libraries in the lock would only be dead weight.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/so_recon"]
