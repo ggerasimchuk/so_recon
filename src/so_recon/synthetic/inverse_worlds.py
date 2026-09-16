@@ -358,8 +358,13 @@ def generate_dynamic_history(
         np.random.default_rng(seed),
     )
     custom = context.design.get(INVERSE_DESIGN_KEY)
+    loop = context.design.get("loop_design")
     if custom is not None:
         cutoff_s = inverse_design(str(custom["design_id"])).report_edges_s[-1]
+    elif loop is not None:
+        from so_recon.synthetic.loop_designs import T3Design
+
+        cutoff_s = T3Design.model_validate(loop).report_edges_s[-1]
     else:
         cutoff_s = P1Design.model_validate(context.design[DESIGN_KEY]).report_edges_s[-1]
     observation_hash = sha256_json(

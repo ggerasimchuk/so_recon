@@ -199,10 +199,10 @@ def test_legacy_3_0_manifest_bytes_have_not_drifted(tmp_project: Path) -> None:
 def test_4_0_only_fields_are_absent_from_a_3_0_resolved_config(tmp_project: Path) -> None:
     """The same file under both specs differs exactly by the version and the 4.0 fields.
 
-    `resources` was the first such field and E02's `inference` is the second. The 3.0 dump
-    does not carry either key at all, which is what keeps every historical
-    `resolved_config_hash` resolving; the 4.0 dump carries both as null because this
-    fixture declares neither block. A 3.0 config that actually SET one is refused by the
+    `resources` was the first such field, E02 added `inference` and E03 `learning`. The
+    3.0 dump does not carry either key at all, which is what keeps every historical
+    `resolved_config_hash` resolving; the 4.0 dump carries all three as null because this
+    fixture declares none of them. A 3.0 config that actually SET one is refused by the
     schema, so the exclusion below can only ever be dropping a null.
     """
     path = tmp_project / "configs" / "project.yml"
@@ -210,9 +210,10 @@ def test_4_0_only_fields_are_absent_from_a_3_0_resolved_config(tmp_project: Path
     _retarget(path, "4.0")
     current = resolved_config_dict(load_project_config(path))
     assert (legacy["spec_version"], current["spec_version"]) == ("3.0", "4.0")
-    assert set(SPEC_4_0_ONLY_FIELDS) == {"resources", "inference"}
+    assert set(SPEC_4_0_ONLY_FIELDS) == {"resources", "inference", "learning"}
     assert not SPEC_4_0_ONLY_FIELDS & legacy.keys()
     assert current["resources"] is None
+    assert current["learning"] is None
     assert current["inference"] is None
     shared = {"spec_version", *SPEC_4_0_ONLY_FIELDS}
     assert {k: v for k, v in current.items() if k not in shared} == {

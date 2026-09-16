@@ -93,6 +93,16 @@ from so_recon.synthetic.p1 import (
     well_specs,
 )
 from so_recon.synthetic.p1 import RENDERER_VERSION as E01_RENDERER_VERSION
+from so_recon.synthetic.loop_designs import (
+    LOOP_DESIGN_KEY,
+    T3_DESIGN_ID,
+    T3_RENDERER_VERSION,
+    T3_TRANSFORM_VERSION,
+    T3Design,
+    render_t3_coefficients,
+    t3_control_segments,
+    t3_well_specs,
+)
 
 #: This map, versioned. The coordinate order, the assembly of the geology block and the
 #: family map are all part of it: changing any of them changes what a stored theta means.
@@ -143,7 +153,21 @@ def renderer_hash(context: PriorContext) -> str:
 def _check_context(context: PriorContext) -> None:
     schema = context.density_schema
     custom = INVERSE_DESIGN_KEY in context.design
-    if not custom and (
+    loop = LOOP_DESIGN_KEY in context.design
+    if custom and loop:
+        raise ValueError(
+            "a context carries exactly one design key: both 'inverse_design' (E02) and "
+            "'loop_design' (E03) are present"
+        )
+    if loop:
+        # The E03 T3 layout: the E01 twelve-coefficient map under its own version.
+        if context.n_geology != N_GEOLOGY or schema.transform_version != T3_TRANSFORM_VERSION:
+            raise ValueError(
+                f"the T3 renderer is the {N_GEOLOGY}-coefficient map of "
+                f"{T3_TRANSFORM_VERSION}; the context declares {context.n_geology} "
+                f"coefficients under {schema.transform_version!r}"
+            )
+    elif not custom and (
         context.n_geology != N_GEOLOGY or schema.transform_version != TRANSFORM_VERSION
     ):
         raise ValueError(
@@ -171,7 +195,17 @@ def _check_context(context: PriorContext) -> None:
         )
 
 
-def _design_for(context: PriorContext, family: int) -> P1Design | InversePhysicalDesign:
+def _design_for(
+    context: PriorContext, family: int
+) -> P1Design | InversePhysicalDesign | T3Design:
+    loop_payload = context.design.get(LOOP_DESIGN_KEY)
+    if loop_payload is not None:
+        if str(loop_payload.get("design_id")) != T3_DESIGN_ID:
+            raise ValueError(
+                f"the loop-design key carries {loop_payload.get('design_id')!r}, not "
+                f"{T3_DESIGN_ID!r}"
+            )
+        return T3Design.model_validate(loop_payload)
     payload = context.design.get(INVERSE_DESIGN_KEY)
     if payload is None:
         return p1_design_for(context, family)
@@ -204,7 +238,16 @@ def render_theta(theta: ThetaRecord, context: PriorContext) -> RenderedParameter
     coefficients = geology_coefficients(theta, context)
     design = _design_for(context, theta.s)
     try:
-        if isinstance(design, InversePhysicalDesign):
+        if isinstance(design, T3Design):
+            state_index = context.n_geology - N_P1_GEOLOGY_IN_V
+            state_coordinate = float(theta.z_perp[state_index])
+            arrays = render_t3_coefficients(
+                coefficients,
+                design,
+                family=theta.s,
+                state_coordinate=state_coordinate,
+            )
+        elif isinstance(design, InversePhysicalDesign):
             state_index = context.n_geology - N_P1_GEOLOGY_IN_V
             state_coordinate = float(theta.z_perp[state_index]) if context.n_state_residual else 0.0
             arrays = render_inverse_coefficients(
@@ -367,12 +410,16 @@ def build_inverse_case(
         rock=RockSpec(porosity=geology["porosity"], permeability_m2=geology["permeability_m2"]),
         fluids=FluidSpec(),
         wells=(
-            inverse_well_specs(design)
+            t3_well_specs(design)
+            if isinstance(design, T3Design)
+            else inverse_well_specs(design)
             if isinstance(design, InversePhysicalDesign)
             else well_specs(design)
         ),
         controls=(
-            inverse_control_segments(design)
+            t3_control_segments(design)
+            if isinstance(design, T3Design)
+            else inverse_control_segments(design)
             if isinstance(design, InversePhysicalDesign)
             else control_segments(design)
         ),
@@ -382,7 +429,8 @@ def build_inverse_case(
             sw=initial["sw"],
             meaning=(
                 "developed_state"
-                if isinstance(design, InversePhysicalDesign) and design.is_t4
+                if isinstance(design, T3Design)
+                or (isinstance(design, InversePhysicalDesign) and design.is_t4)
                 else "synthetic_initial"
             ),
         ),
@@ -394,7 +442,9 @@ def build_inverse_case(
             pressure_available=PRESSURE_AVAILABLE,
         ),
         renderer_version=(
-            INVERSE_RENDERER_VERSION
+            T3_RENDERER_VERSION
+            if isinstance(design, T3Design)
+            else INVERSE_RENDERER_VERSION
             if isinstance(design, InversePhysicalDesign)
             else RENDERER_VERSION
         ),
