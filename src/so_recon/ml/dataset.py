@@ -20,6 +20,7 @@ from so_recon.config.learning import SplitName
 from so_recon.ml.contracts import CorpusManifest, ParentRow
 from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import ArtifactRef
+from so_recon.registry.hashing import sha256_file
 
 
 @dataclass(frozen=True)
@@ -66,9 +67,22 @@ class CorpusDataset:
         return tuple(row for row in rows if row.split == split)
 
     def labels(self) -> dict[str, dict[str, Any]]:
-        """The label table keyed by parent id, loaded once from `labels.parquet`."""
+        """The label table keyed by parent id, loaded once from `labels.parquet`.
+
+        The file is proved against `labels_ref.sha256` before a single label is read:
+        tampered label values would otherwise flow into training silently, and a digest
+        check is the cheapest place that refusal can live.
+        """
         if self._labels is None:
             path = self._paths.resolve(self._manifest.labels_ref.path)
+            digest = sha256_file(path)
+            if digest != self._manifest.labels_ref.sha256:
+                raise ValueError(
+                    f"labels.parquet {self._manifest.labels_ref.path} fails its published "
+                    f"digest (got {digest}, the manifest vouches for "
+                    f"{self._manifest.labels_ref.sha256}): the training stream was "
+                    "modified after publication"
+                )
             table = pq.read_table(path).to_pylist()
             self._labels = {str(row["parent_id"]): row for row in table}
             declared = {row.parent_id for row in self._manifest.parents}
@@ -83,13 +97,22 @@ class CorpusDataset:
         return self._labels
 
     def load_context(self, parent: ParentRow) -> dict[str, Any]:
-        """The inference input of one parent, read from the context stream."""
-        path = self._context_path(parent.parent_id)
-        index = json.loads((self._root / "context" / "index.json").read_text(encoding="utf-8"))
-        import hashlib
+        """The inference input of one parent, read from the context stream.
 
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if index["files"].get(path.name) != digest:
+        The stream index is proved against `context_dir_ref.sha256` FIRST — an index a
+        tamperer rewrote would otherwise vouch for its own tampering — and the context
+        file against that verified index.
+        """
+        path = self._context_path(parent.parent_id)
+        index_path = self._root / "context" / "index.json"
+        index_digest = sha256_file(index_path)
+        if index_digest != self._manifest.context_dir_ref.sha256:
+            raise ValueError(
+                f"context stream index {self._manifest.context_dir_ref.path} fails its "
+                "published digest: the context stream was modified after publication"
+            )
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        if index["files"].get(path.name) != sha256_file(path):
             raise ValueError(
                 f"context file {path.name} does not match the stream index: the corpus "
                 "context stream was modified after publication"

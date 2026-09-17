@@ -22,6 +22,7 @@ a failed parent consumes its slot in the manifest exactly as it consumed its com
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,8 +34,15 @@ import pyarrow.parquet as pq
 
 from so_recon.config.learning import FamilyPlan, LearningConfig, SplitName, corpus_totals
 from so_recon.geology.density import GaussianConditionalPrior
-from so_recon.geology.renderer import RenderedParameters, build_inverse_case, render_theta
+from so_recon.geology.renderer import (
+    RenderedParameters,
+    build_inverse_case,
+    geology_coefficients,
+    render_theta,
+    theta_hash,
+)
 from so_recon.inference.contracts import (
+    N_P1_GEOLOGY_IN_V,
     ModelObservations,
     ObservationBundle,
     PriorContext,
@@ -51,9 +59,14 @@ from so_recon.ml.contracts import (
 )
 from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import ArtifactRef, register_artifact, write_json_artifact
-from so_recon.registry.hashing import sha256_json
+from so_recon.registry.hashing import sha256_file, sha256_json
 from so_recon.registry.run import RunContext
-from so_recon.simulator.contracts import CaseBundle, OutputRequest
+from so_recon.simulator.contracts import (
+    SECONDS_PER_DAY,
+    CaseBundle,
+    ControlSegment,
+    OutputRequest,
+)
 from so_recon.simulator.forward import (
     BASE_MAX_NONLINEAR_ITERATIONS,
     DEFAULT_MAX_TIMESTEP_DAYS,
@@ -84,6 +97,11 @@ CORPUS_COMMAND = "e03-build-corpus"
 #: verification number, not the historical E02 runner's 1e-4.
 TRUTH_BALANCE_CUMULATIVE_MAX = 1.0e-3
 TRUTH_BALANCE_STEP_MEDIAN_MAX = 1.0e-5
+
+#: The controls gate of the corpus truth checks (plan §6.1 «проверить ... controls»).
+#: The same number `configs/e01_tolerances.yml` fixes as `rate_control_relative_max`,
+#: restated here because the corpus truth payload cites its thresholds explicitly.
+TRUTH_RATE_CONTROL_RELATIVE_MAX = 1.0e-4
 
 RunFactory = Callable[[str, tuple[str, ...]], RunContext]
 
@@ -175,7 +193,7 @@ def run_parent_forward(
         raise CorpusForwardError(
             f"corpus forward {result.job_id} ended {result.status}: {result.reason}"
         )
-    checks = _corpus_truth_checks(result, paths)
+    checks = _corpus_truth_checks(result, case, paths)
     if checks["status"] != "PASS":
         forward_ctx.finish("FAIL", notes=["e03 corpus truth checks failed"])
         raise CorpusForwardError(f"corpus forward failed its physical checks: {checks}")
@@ -188,19 +206,28 @@ def run_parent_forward(
     )
 
 
-def _corpus_truth_checks(result: Any, paths: ProjectPaths) -> dict[str, Any]:
+def _corpus_truth_checks(result: Any, case: CaseBundle, paths: ProjectPaths) -> dict[str, Any]:
     """The E02 truth checks under the E03 NORMATIVE step threshold of 1e-5.
 
     The historical E02 runner allowed a 1e-4 median step balance for its own scope; plan
     §0.2 item 10 fixes 1e-5 for E03 unless a documented exception exists for a task
-    class. The cumulative threshold is unchanged.
+    class. The cumulative threshold is unchanged. Plan §6.1 also names the CONTROLS, so
+    the rate targets the case declared are verified against the published monthly table
+    here (`simulate`'s own request checks cover only the time axis and the restart).
     """
     states = _so_states(result, paths)
     if result.balances_path is None:
         raise CorpusForwardError("complete corpus truth has no balance artifact")
     balances = pq.read_table(paths.resolve(result.balances_path)).to_pylist()
+    if not balances:
+        # An empty table must not die inside max() as an unexplained ValueError: it is a
+        # forward that published no balance statement, and it is recorded as one.
+        raise CorpusForwardError(
+            f"corpus forward {result.job_id} published an empty balance table"
+        )
     cumulative = max(float(row["cumulative_relative"]) for row in balances)
     step = max(float(row["median_step_relative"]) for row in balances)
+    controls = _corpus_controls_check(case.controls, result, paths)
     checks = {
         "complete": result.status == "COMPLETE",
         "finite_bounded_so": bool(
@@ -208,6 +235,7 @@ def _corpus_truth_checks(result: Any, paths: ProjectPaths) -> dict[str, Any]:
         ),
         "balance_cumulative": cumulative <= TRUTH_BALANCE_CUMULATIVE_MAX,
         "balance_step_median": step <= TRUTH_BALANCE_STEP_MEDIAN_MAX,
+        "controls_rate": controls["rate_control_relative"] <= TRUTH_RATE_CONTROL_RELATIVE_MAX,
     }
     return {
         "status": "PASS" if all(checks.values()) else "FAIL",
@@ -216,6 +244,85 @@ def _corpus_truth_checks(result: Any, paths: ProjectPaths) -> dict[str, Any]:
         "balance_step_median_relative_max": step,
         "so_min": float(states.min()),
         "so_max": float(states.max()),
+        **controls,
+    }
+
+
+#: Which published monthly column carries the volume each rate target prescribes.
+_RATE_TARGET_COLUMNS: dict[str, str] = {
+    "water_rate": "water_inj_m3_sc",
+    "liquid_rate": "liquid_prod_m3_sc",
+}
+
+
+def _corpus_controls_check(
+    controls: Sequence[ControlSegment], result: Any, paths: ProjectPaths
+) -> dict[str, Any]:
+    """Verify the case's controls against the monthly table the forward published.
+
+    A rate-target segment makes a claim the published volumes can falsify: the segment's
+    own day rate integrated over its overlap with each month (the same target
+    `_rate_control_relative` scores in the E01 acceptance stack, `value * overlap /
+    SECONDS_PER_DAY`). A `bhp` segment makes no rate claim — the solver is free to flow
+    whatever rate that pressure produces — so it is recorded as pressure-controlled and
+    verified only for schedule coverage: its wells and months must all be present. The
+    month edges are taken from the published table itself, so the check scores the
+    schedule that actually ran against the schedule the case declared.
+    """
+    monthly = pq.read_table(paths.resolve(result.monthly_path)).to_pylist()
+    rows = {(str(row["well_id"]), int(row["month_index"])): row for row in monthly}
+    edges = {
+        int(row["month_index"]): (float(row["start_s"]), float(row["end_s"]))
+        for row in monthly
+    }
+    n_months = len(edges)
+    if not monthly or sorted(edges) != list(range(n_months)):
+        raise CorpusForwardError(
+            f"corpus forward {result.job_id} published a monthly table whose months are not "
+            "0..n-1 without gaps or repeats"
+        )
+    control_wells = {segment.well_id for segment in controls}
+    if {well for well, _month in rows} != control_wells:
+        raise CorpusForwardError(
+            f"corpus forward {result.job_id} published monthly rows for wells "
+            f"{sorted({well for well, _ in rows})} but the case controls {sorted(control_wells)}"
+        )
+    targets: dict[tuple[str, int], tuple[str, float]] = {}
+    bhp_wells: set[str] = set()
+    for segment in controls:
+        if segment.target == "bhp":
+            bhp_wells.add(segment.well_id)
+            continue
+        column = _RATE_TARGET_COLUMNS.get(segment.target)
+        if column is None:
+            raise CorpusForwardError(
+                f"corpus forward {result.job_id} controls well {segment.well_id!r} on "
+                f"{segment.target!r}, which no published monthly column can verify"
+            )
+        for month in range(n_months):
+            start_s, end_s = edges[month]
+            overlap = min(segment.end_s, end_s) - max(segment.start_s, start_s)
+            if overlap > 0.0:
+                key = (segment.well_id, month)
+                _kind, total = targets.get(key, (column, 0.0))
+                targets[key] = (column, total + segment.value * overlap / SECONDS_PER_DAY)
+    worst = 0.0
+    for (well, month), (column, target) in sorted(targets.items()):
+        row = rows.get((well, month))
+        if row is None:
+            raise CorpusForwardError(
+                f"corpus forward {result.job_id} published no monthly row for well {well!r} "
+                f"month {month}, which its own controls schedule"
+            )
+        actual = float(row[column])
+        worst = max(worst, abs(actual - target) / max(abs(target), 1.0e-6))
+    return {
+        "controls_months": n_months,
+        "rate_controlled_wells": sorted({well for well, _ in targets}),
+        "bhp_controlled_wells": sorted(bhp_wells),
+        "n_rate_targets": len(targets),
+        "rate_control_relative": worst,
+        "rate_control_relative_max": TRUTH_RATE_CONTROL_RELATIVE_MAX,
     }
 
 
@@ -380,6 +487,18 @@ def build_learning_corpus(
     labels_ref = _write_labels(labels_path, labels_rows, paths, ctx)
     context_ref = _register_stream_dir(context_dir, paths, ctx, schema=CONTEXT_SCHEMA)
     truth_ref = _register_stream_dir(truth_dir, paths, ctx, schema=TRUTH_SCHEMA)
+    # Plan §6.1: before the manifest certifies them, re-read every published stream
+    # from disk and prove it against its refs. A mismatch here is a build-integrity
+    # violation, not a parent failure: it aborts the build rather than publishing a
+    # manifest that vouches for bytes that are not on disk.
+    _verify_published_streams(
+        root,
+        parents,
+        labels_ref=labels_ref,
+        context_ref=context_ref,
+        truth_ref=truth_ref,
+        paths=paths,
+    )
     source_commit, source_dirty = _source_state(paths)
     manifest = CorpusManifest(
         experiment_id=experiment,
@@ -422,6 +541,66 @@ class _CorpusStageError(RuntimeError):
         self.stage = stage
 
 
+def _stage(stage: str, call: Callable[[], Any]):
+    """Run one parent stage so that whatever it raises becomes a recorded failure.
+
+    Nothing here retries and nothing re-draws with a fresh seed (plan §6.1): the stage
+    either completes or the parent is published as a `FailureRow` naming the stage. A
+    `CorpusForwardError` passes through untouched because the builder records it with
+    the forward's own attempt accounting.
+    """
+    try:
+        return call()
+    except (_CorpusStageError, CorpusForwardError):
+        raise
+    except Exception as error:
+        raise _CorpusStageError(stage, f"{type(error).__name__}: {error}") from error
+
+
+#: The build-time theta→physical round-trip tolerance (plan §6.1): the renderer is
+#: deterministic, so the label must reproduce its arrays to float round-off.
+ROUND_TRIP_ATOL = 1.0e-12
+
+
+def _render_round_trip(
+    theta: ThetaRecord, context: PriorContext, rendered: RenderedParameters
+) -> dict[str, Any]:
+    """Prove the recorded label and the forwarded arrays are the same object.
+
+    Two directions, both closed to `ROUND_TRIP_ATOL`: re-rendering the theta reproduces
+    every physical array (determinism, plus the nuisance coordinates' noise law), and
+    re-whitening the rendered geology coefficients returns the theta's own whitened
+    coordinates — the same check `make_t3_world` makes of its truth theta, applied to a
+    corpus draw against the arrays the forward actually consumed.
+    """
+    reproduced = render_theta(theta, context)
+    arrays_match = all(
+        np.allclose(reproduced.arrays[name], values, rtol=0.0, atol=ROUND_TRIP_ATOL)
+        for name, values in rendered.arrays.items()
+    ) and set(reproduced.arrays) == set(rendered.arrays)
+    coefficients = geology_coefficients(theta, context)
+    whitened = context.rotation.T @ np.linalg.solve(context.chol, coefficients - context.mean)
+    geology_residual = context.n_geology - N_P1_GEOLOGY_IN_V
+    worst = max(
+        float(np.max(np.abs(whitened - np.asarray(expected))))
+        for whitened, expected in (
+            (whitened[:N_P1_GEOLOGY_IN_V], theta.v[:N_P1_GEOLOGY_IN_V]),
+            (whitened[N_P1_GEOLOGY_IN_V:], theta.z_perp[:geology_residual]),
+        )
+    )
+    report = {
+        "arrays_reproduce": bool(arrays_match),
+        "geology_round_trip_max_abs": worst,
+        "tolerance": ROUND_TRIP_ATOL,
+    }
+    if not arrays_match or worst > ROUND_TRIP_ATOL:
+        raise _CorpusStageError(
+            "render",
+            f"theta {theta_hash(theta)} does not round-trip through its renderer: {report}",
+        )
+    return report
+
+
 def _build_one_parent(
     *,
     ctx: RunContext,
@@ -438,105 +617,123 @@ def _build_one_parent(
     truth_dir: Any,
 ) -> ParentRow:
     # 1-2: the conditional context, conditioned on this world's own static G.
-    context, _pending, generator_ref = _world_for(design_id, seed, paths, ctx)
+    context, _pending, generator_ref = _stage(
+        "context", lambda: _world_for(design_id, seed, paths, ctx)
+    )
     # 3: a NEW theta from the prior — the corpus label, not the world's internal truth.
-    prior = GaussianConditionalPrior(context)
     rng = truth_latent_rng(seed)
-    theta = prior.sample(1, rng)[0]
-    # 4: render + the physical forward under the E03 thresholds.
-    rendered = render_theta(theta, context)
-    case = build_inverse_case(rendered, context, paths, ctx)
-    truth = run_parent_forward(
-        rendered, case, ctx=ctx, worker=worker, ledger=ledger, paths=paths, run_factory=run_factory
+    theta = _stage(
+        "draw",
+        lambda: GaussianConditionalPrior(context).sample(1, rng)[0],
+    )
+    # 4: render + the physical forward under the E03 thresholds. The theta→arrays
+    # round-trip is part of the render stage: a label that cannot reproduce the arrays
+    # it was forwarded with is a failure, not a corpus entry (plan §6.1).
+    rendered = _stage("render", lambda: render_theta(theta, context))
+    round_trip = _stage("render", lambda: _render_round_trip(theta, context, rendered))
+    case = _stage("render", lambda: build_inverse_case(rendered, context, paths, ctx))
+    truth = _stage(
+        "forward",
+        lambda: run_parent_forward(
+            rendered, case, ctx=ctx, worker=worker, ledger=ledger, paths=paths,
+            run_factory=run_factory,
+        ),
     )
     # 5: prediction and the noisy history — with the noise OF THIS THETA, explicitly.
-    template = _history_template(context, case)
-    prediction = history_prediction(truth, template, paths)
+    template = _stage("history", lambda: _history_template(context, case))
+    prediction = _stage("prediction", lambda: history_prediction(truth, template, paths))
     h_seed = history_seed(seed)
-    observations = generate_dynamic_history(
-        context, prediction, seed=h_seed, noise=rendered.noise
+    observations = _stage(
+        "history",
+        lambda: generate_dynamic_history(
+            context, prediction, seed=h_seed, noise=rendered.noise
+        ),
     )
     # 6: publish the three streams separately. The canonical inference input is the
     # SAME six-key shape E02 published (context/G/U/observations/density_schema/basis),
     # validated by the same recursive allowlist; per-world identity stays outside it.
-    canonical = inference_payload(
-        {
-            "context": _prior_context_payload(context),
-            "G": context.design.get("log_k_observations", []),
-            "U": [segment.model_dump(mode="json") for segment in case.controls],
-            "observations": observations.model_dump(mode="json"),
-            "density_schema": context.density_schema.model_dump(mode="json"),
-            "basis": {
-                "basis_hash": context.density_schema.basis_hash,
-                "transform_version": context.density_schema.transform_version,
-            },
+    def _publish() -> ParentRow:
+        canonical = inference_payload(
+            {
+                "context": _prior_context_payload(context),
+                "G": context.design.get("log_k_observations", []),
+                "U": [segment.model_dump(mode="json") for segment in case.controls],
+                "observations": observations.model_dump(mode="json"),
+                "density_schema": context.density_schema.model_dump(mode="json"),
+                "basis": {
+                    "basis_hash": context.density_schema.basis_hash,
+                    "transform_version": context.density_schema.transform_version,
+                },
+            }
+        )
+        context_payload = {
+            "schema_version": CONTEXT_SCHEMA,
+            "parent_id": parent_id,
+            "design_id": design_id,
+            "split": split,
+            "cutoff_s": observations.cutoff_s,
+            "well_ids": sorted({row.well_id for row in observations.history}),
+            "inference_input": canonical,
         }
-    )
-    context_payload = {
-        "schema_version": CONTEXT_SCHEMA,
-        "parent_id": parent_id,
-        "design_id": design_id,
-        "split": split,
-        "cutoff_s": observations.cutoff_s,
-        "well_ids": sorted({row.well_id for row in observations.history}),
-        "inference_input": canonical,
-    }
-    context_ref = write_json_artifact(
-        context_dir / f"{parent_id}.json",
-        context_payload,
-        paths,
-        schema_version=CONTEXT_SCHEMA,
-        producer_run_id=ctx.run_id,
-        parent_artifact_ids=(generator_ref.artifact_id,),
-        now=datetime.now(UTC),
-    )
-    truth_payload = {
-        "schema_version": TRUTH_SCHEMA,
-        "warning": "synthetic truth; evaluator-only; never an inference payload",
-        "parent_id": parent_id,
-        "design_id": design_id,
-        "split": split,
-        "truth_seed": seed,
-        "history_seed": h_seed,
-        "theta": theta.model_dump(mode="json"),
-        "noise": rendered.noise.model_dump(mode="json"),
-        "forward": truth.forward_ref.model_dump(mode="json"),
-        "model_hash": truth.model_hash,
-        "physical_checks": truth.checks,
-        "generator": generator_ref.model_dump(mode="json"),
-    }
-    truth_ref = write_json_artifact(
-        truth_dir / f"{parent_id}.json",
-        truth_payload,
-        paths,
-        schema_version=TRUTH_SCHEMA,
-        producer_run_id=ctx.run_id,
-        parent_artifact_ids=(generator_ref.artifact_id, truth.forward_ref.artifact_id),
-        now=datetime.now(UTC),
-    )
-    view = ViewRow(
-        view_id="m36-copy0",
-        prefix_months=36,
-        noise_copy=0,
-        observation_hash=observations.observation_hash,
-        weight=1.0,
-    )
-    return ParentRow(
-        parent_id=parent_id,
-        design_id=design_id,
-        split=split,
-        truth_seed=seed,
-        history_seed=h_seed,
-        theta=theta,
-        noise=rendered.noise,
-        schema_id=context.density_schema.schema_id,
-        basis_hash=context.density_schema.basis_hash,
-        observation_hash=observations.observation_hash,
-        model_hash=truth.model_hash,
-        context_ref=context_ref,
-        truth_ref=truth_ref,
-        views=(view,),
-    )
+        context_ref = write_json_artifact(
+            context_dir / f"{parent_id}.json",
+            context_payload,
+            paths,
+            schema_version=CONTEXT_SCHEMA,
+            producer_run_id=ctx.run_id,
+            parent_artifact_ids=(generator_ref.artifact_id,),
+            now=datetime.now(UTC),
+        )
+        truth_payload = {
+            "schema_version": TRUTH_SCHEMA,
+            "warning": "synthetic truth; evaluator-only; never an inference payload",
+            "parent_id": parent_id,
+            "design_id": design_id,
+            "split": split,
+            "truth_seed": seed,
+            "history_seed": h_seed,
+            "theta": theta.model_dump(mode="json"),
+            "noise": rendered.noise.model_dump(mode="json"),
+            "forward": truth.forward_ref.model_dump(mode="json"),
+            "model_hash": truth.model_hash,
+            "physical_checks": truth.checks,
+            "renderer_checks": round_trip,
+            "generator": generator_ref.model_dump(mode="json"),
+        }
+        truth_ref = write_json_artifact(
+            truth_dir / f"{parent_id}.json",
+            truth_payload,
+            paths,
+            schema_version=TRUTH_SCHEMA,
+            producer_run_id=ctx.run_id,
+            parent_artifact_ids=(generator_ref.artifact_id, truth.forward_ref.artifact_id),
+            now=datetime.now(UTC),
+        )
+        view = ViewRow(
+            view_id="m36-copy0",
+            prefix_months=36,
+            noise_copy=0,
+            observation_hash=observations.observation_hash,
+            weight=1.0,
+        )
+        return ParentRow(
+            parent_id=parent_id,
+            design_id=design_id,
+            split=split,
+            truth_seed=seed,
+            history_seed=h_seed,
+            theta=theta,
+            noise=rendered.noise,
+            schema_id=context.density_schema.schema_id,
+            basis_hash=context.density_schema.basis_hash,
+            observation_hash=observations.observation_hash,
+            model_hash=truth.model_hash,
+            context_ref=context_ref,
+            truth_ref=truth_ref,
+            views=(view,),
+        )
+
+    return _stage("publish", _publish)
 
 
 def _register_stream_dir(
@@ -548,8 +745,6 @@ def _register_stream_dir(
     lists every file in the directory with its digest; loading re-verifies the one file
     it actually opens against this list.
     """
-    import hashlib
-
     files = sorted(path for path in directory.iterdir() if path.is_file())
     index = {
         "schema_version": schema,
@@ -565,6 +760,60 @@ def _register_stream_dir(
         producer_run_id=ctx.run_id,
         now=datetime.now(UTC),
     )
+
+
+def _verify_published_streams(
+    root: Any,
+    parents: Sequence[ParentRow],
+    *,
+    labels_ref: ArtifactRef,
+    context_ref: ArtifactRef,
+    truth_ref: ArtifactRef,
+    paths: ProjectPaths,
+) -> None:
+    """Re-read every published stream and prove it against its refs (plan §6.1).
+
+    The labels file is hashed against `labels_ref` and its parent ids against the rows
+    the manifest is about to carry; each stream index is hashed against its ref and
+    every file it names against its own digest, with the file set on disk exactly the
+    set of complete parents. Nothing is re-derived from memory: the bytes on disk are
+    what a later reader gets, so they are what is verified.
+    """
+    labels_path = paths.resolve(labels_ref.path)
+    if sha256_file(labels_path) != labels_ref.sha256:
+        raise RuntimeError(
+            f"published labels {labels_ref.path} fail their own ref digest: the stream "
+            "changed between writing and verification"
+        )
+    published_ids = set(pq.read_table(labels_path).column("parent_id").to_pylist())
+    expected_ids = {parent.parent_id for parent in parents}
+    if published_ids != expected_ids:
+        raise RuntimeError(
+            f"published labels name parents {sorted(published_ids)} but the build completed "
+            f"{sorted(expected_ids)}: the labels and the manifest would disagree"
+        )
+    for ref, stream in ((context_ref, "context"), (truth_ref, "truth")):
+        directory = root / stream
+        index_path = directory / "index.json"
+        if sha256_file(index_path) != ref.sha256:
+            raise RuntimeError(
+                f"published {stream} stream index fails its own ref digest: the stream "
+                "changed between writing and verification"
+            )
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        expected_files = {f"{parent.parent_id}.json" for parent in parents}
+        if set(index["files"]) != expected_files:
+            raise RuntimeError(
+                f"the {stream} stream index names files {sorted(index['files'])} but the "
+                f"build completed parents {sorted(expected_files)}: a stream file went "
+                "missing or appeared from nowhere"
+            )
+        for name, digest in index["files"].items():
+            if sha256_file(directory / name) != digest:
+                raise RuntimeError(
+                    f"published {stream} file {name} fails its index digest: the stream "
+                    "was modified after publication"
+                )
 
 
 def _write_labels(
@@ -634,9 +883,7 @@ def load_corpus_manifest(ref: ArtifactRef, paths: ProjectPaths) -> CorpusManifes
     path = paths.resolve(ref.path)
     if not path.is_file():
         raise ValueError(f"corpus manifest {ref.path} not found")
-    import hashlib
-
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = sha256_file(path)
     if digest != ref.sha256:
         raise ValueError(f"corpus manifest {ref.path} failed identity check")
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -691,8 +938,10 @@ __all__ = [
     "CORPUS_HISTORY_TAG",
     "CorpusForwardError",
     "LABELS_SCHEMA",
+    "ROUND_TRIP_ATOL",
     "TRUTH_BALANCE_CUMULATIVE_MAX",
     "TRUTH_BALANCE_STEP_MEDIAN_MAX",
+    "TRUTH_RATE_CONTROL_RELATIVE_MAX",
     "TRUTH_SCHEMA",
     "WELL_TIME_FEATURES",
     "ParentForwardOutcome",
