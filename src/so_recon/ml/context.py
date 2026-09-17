@@ -27,7 +27,12 @@ import numpy.typing as npt
 
 from so_recon.config.learning import SplitName
 from so_recon.inference.contracts import HistoryRow, ObservationBundle
-from so_recon.ml.contracts import F64, ContextBatch, ContextSpec
+from so_recon.ml.contracts import (
+    F64,
+    FORBIDDEN_CONTEXT_FEATURES,
+    ContextBatch,
+    ContextSpec,
+)
 from so_recon.simulator.schedule import month_edges_s
 from so_recon.synthetic.inverse_corpus import WELL_TIME_FEATURES, default_context_spec
 from so_recon.synthetic.p1 import (
@@ -117,11 +122,11 @@ def build_context_batch(
     nothing past the prefix is read, so a future-tail mutation cannot leak.
     """
     inference_input = payload["inference_input"]
-    for forbidden in ("truth", "theta", "seed"):
-        if forbidden in json_keys(inference_input):
-            raise ForbiddenContextInput(
-                f"the inference input carries {forbidden!r}: the encoder never sees it"
-            )
+    forbidden_keys = sorted(FORBIDDEN_CONTEXT_FEATURES & json_keys(inference_input))
+    if forbidden_keys:
+        raise ForbiddenContextInput(
+            f"the inference input carries {forbidden_keys}: the encoder never sees them"
+        )
     # The payload's row order carries no meaning: the builder sorts before the bundle
     # validates, so a reordered history is the same history (no fixed well order).
     observations_payload = dict(inference_input["observations"])

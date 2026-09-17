@@ -46,6 +46,11 @@ class FeatureScaler:
     def fit(cls, batches: Sequence[ContextBatch], spec: ContextSpec) -> FeatureScaler:
         if not batches:
             raise ValueError("a scaler needs at least one train batch")
+        not_train = sorted({batch.split for batch in batches if batch.split != "train"})
+        if not_train:
+            raise ValueError(
+                f"a scaler is fit on train batches only, these carry split={not_train}"
+            )
         well_time = np.concatenate(
             [batch.well_time.reshape(-1, batch.well_time.shape[-1]) for batch in batches]
         )

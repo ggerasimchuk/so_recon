@@ -212,12 +212,24 @@ def test_prefix_bounds_are_validated(spec) -> None:
         build_context_batch(_payload(), spec=spec, prefix_months=99)
 
 
-def test_forbidden_inputs_are_refused(spec) -> None:
-    for key in ("truth", "theta", "seed"):
-        payload = _payload()
-        payload["inference_input"][key] = {"leak": True}
-        with pytest.raises(ForbiddenContextInput):
-            build_context_batch(payload, spec=spec)
+@pytest.mark.parametrize(
+    "key",
+    (
+        "truth",
+        "theta",
+        "seed",
+        "s",
+        "full_permeability",
+        "full_porosity",
+        "full_so",
+        "full_pressure",
+    ),
+)
+def test_forbidden_inputs_are_refused(spec, key) -> None:
+    payload = _payload()
+    payload["inference_input"][key] = {"leak": True}
+    with pytest.raises(ForbiddenContextInput, match=repr(key)):
+        build_context_batch(payload, spec=spec)
 
 
 def test_wells_missing_from_the_declared_geometry_are_refused(spec) -> None:
@@ -399,6 +411,16 @@ def test_scaler_refuses_another_spec(batches, spec) -> None:
     other = default_context_spec(cutoff_s=1.0, max_wells=4, max_months=12)
     with pytest.raises(ValueError, match="another context spec"):
         FeatureScaler.from_payload(scaler.payload(), other)
+
+
+def test_scaler_refuses_non_train_batches(spec) -> None:
+    dev_payload = _payload()
+    dev_payload["split"] = "development"
+    train = build_context_batch(_payload(), spec=spec)
+    dev = build_context_batch(dev_payload, spec=spec)
+    with pytest.raises(ValueError, match="train"):
+        FeatureScaler.fit([train, dev], spec)
+    FeatureScaler.fit([train], spec)
 
 
 def test_causal_blocks_see_only_the_past() -> None:
