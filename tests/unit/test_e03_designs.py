@@ -43,6 +43,7 @@ from so_recon.synthetic.loop_designs import (
     t5_well_specs,
 )
 from so_recon.synthetic.p1 import INITIAL_SW
+from so_recon.validation.physical_smc import closed_preflight_case
 
 
 @pytest.fixture(scope="module")
@@ -322,6 +323,64 @@ def test_build_inverse_case_yields_a_t3_case(tmp_path: Path) -> None:
     assert case.initial.meaning == "developed_state"
     assert case.wells[0].model == "multisegment"
     assert any(segment.connection_open == (True, False) for segment in case.controls)
+
+
+# --------------------------------------------------------------------------------------
+# the closed transient preflight (plan E03 §3.2: T3 passes the same gate as T4)
+# --------------------------------------------------------------------------------------
+
+
+def _t3_solver_case(tmp_path: Path):
+    paths = ProjectPaths.default(tmp_path)
+    paths.ensure_dirs()
+    ctx = RunContext.start(
+        command="test-t3-preflight",
+        argv=(),
+        cfg=None,
+        paths=paths,
+        now=datetime.now(UTC),
+    )
+    design = t3_design()
+    arrays = render_t3_coefficients(
+        np.zeros(design.n_geology), design, family=0, state_coordinate=0.0
+    )
+    context = t3_prior_context(design, arrays, np.random.default_rng(13))
+    theta = ThetaRecord(
+        schema_id=context.density_schema.schema_id,
+        s=0,
+        v=(0.0,) * 11,
+        z_perp=(0.0,) * 5,
+        basis_hash=context.density_schema.basis_hash,
+    )
+    return build_inverse_case(render_theta(theta, context), context, paths, ctx)
+
+
+def test_t3_case_is_accepted_by_the_closed_transient_preflight(tmp_path: Path) -> None:
+    case = _t3_solver_case(tmp_path)
+
+    preflight = closed_preflight_case(case)
+
+    assert preflight.case_id == f"{case.case_id}-closed-preflight"
+    assert preflight.report_edges_s == case.report_edges_s[:2]
+    assert len(preflight.controls) == len(case.wells)
+    assert all(
+        control.role == "shut" and control.target == "disabled" for control in preflight.controls
+    )
+    assert all(not any(control.connection_open) for control in preflight.controls)
+    assert preflight.initial.meaning == "developed_state"
+    assert preflight.model_hash != case.model_hash
+
+
+def test_t3_case_without_a_developed_state_is_refused_by_the_closed_preflight(
+    tmp_path: Path,
+) -> None:
+    case = _t3_solver_case(tmp_path)
+    synthetic = case.model_copy(
+        update={"initial": case.initial.model_copy(update={"meaning": "synthetic_initial"})}
+    )
+
+    with pytest.raises(ValueError, match="closed transient preflight"):
+        closed_preflight_case(synthetic)
 
 
 # --------------------------------------------------------------------------------------
