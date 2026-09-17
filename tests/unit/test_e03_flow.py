@@ -782,6 +782,30 @@ def test_binding_refuses_a_foreign_layout(tmp_path: Path, spec: Any) -> None:
         )
 
 
+def test_binding_refuses_a_same_shape_schema_of_another_basis(
+    tmp_path: Path, spec: Any
+) -> None:
+    bundle = _build_bundle(tmp_path / "ckpt", spec=spec, context=_prior_context())
+    other_basis = _prior_context(seed=42)
+    trained = bundle.context.density_schema
+    foreign = other_basis.density_schema
+    assert foreign.schema_id == trained.schema_id
+    assert (foreign.n_v, foreign.n_residual, foreign.families) == (
+        trained.n_v,
+        trained.n_residual,
+        trained.families,
+    )
+    assert foreign.basis_hash != trained.basis_hash
+    with pytest.raises(ValueError, match="basis"):
+        bind_frozen_proposal(
+            checkpoint=bundle.checkpoint,
+            manifest=bundle.manifest,
+            spec=spec,
+            batch=bundle.batch,
+            schema=foreign,
+        )
+
+
 def test_a_theta_from_another_basis_is_never_scored(bundle: _Bundle) -> None:
     model = bundle.bind()
     context = bundle.context

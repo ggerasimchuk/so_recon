@@ -303,12 +303,13 @@ def _matched_layout(supported: tuple[LayoutSupport, ...], schema: DensitySchema)
             layout.n_v == schema.n_v
             and layout.n_residual == schema.n_residual
             and tuple(layout.families) == tuple(schema.families)
+            and layout.basis_hash == schema.basis_hash
         ):
             return layout
     raise ValueError(
         f"schema {schema.schema_id!r} (n_v={schema.n_v}, n_residual={schema.n_residual}, "
-        f"families={list(schema.families)}) matches no supported layout of the proposal: "
-        "the latent layout this world declares was never trained for"
+        f"families={list(schema.families)}, basis={schema.basis_hash}) matches no supported "
+        "layout of the proposal: the latent layout this world declares was never trained for"
     )
 
 
