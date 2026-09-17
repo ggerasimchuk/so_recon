@@ -1,9 +1,11 @@
-"""so-recon command line: manifest | env-report | smoke | the six E01 commands.
+"""so-recon command line: manifest | env-report | smoke | the E01–E03 commands.
 
 This module parses and dispatches. Every command BODY lives elsewhere — `so_recon.smoke`
-for the legacy smoke case and `so_recon.simulator.commands` for E01's `forward`,
-`forward-resume`, `verify-physics`, `synthetic-p1`, `benchmark-forward` and `e01-report` —
-so that adding a command adds a parser here and nothing else.
+for the legacy smoke case, `so_recon.simulator.commands` for E01's `forward`,
+`forward-resume`, `verify-physics`, `synthetic-p1`, `benchmark-forward` and `e01-report`,
+`so_recon.inference.commands` for E02, and `so_recon.ml.commands` for E03's
+`train-proposal` and `export-proposal` — so that adding a command adds a parser here and
+nothing else.
 
 `--root` and `--config` are GLOBAL and come before the subcommand. That order is part of
 the interface every existing invocation was written against and the new commands do not
@@ -158,6 +160,37 @@ def _parser() -> argparse.ArgumentParser:
 
     e02_report = sub.add_parser("e02-report", help="derive E02 status from actual run dirs")
     e02_report.add_argument("--runs", nargs="+", required=True, help="run directories to read")
+
+    # ---- E03 (plan §14). Pure-Python commands over published artifacts: import and
+    # config validation never start a native job, and neither do the commands themselves.
+    train_proposal = sub.add_parser(
+        "train-proposal", help="one bounded CPU training session over a published corpus"
+    )
+    train_proposal.add_argument(
+        "--corpus", required=True, type=Path, help="path to a published corpus manifest"
+    )
+    train_proposal.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="cap this session to N epochs (the operator's smoke bound; training stays resumable)",
+    )
+    train_proposal.add_argument(
+        "--resume", type=Path, default=None, help="path to a training_state.pt to continue"
+    )
+
+    export_proposal = sub.add_parser(
+        "export-proposal", help="verify and re-export the CPU Float64 frozen proposal"
+    )
+    export_proposal.add_argument(
+        "--training-manifest",
+        required=True,
+        type=Path,
+        help="path to a training_manifest.json",
+    )
+    export_proposal.add_argument(
+        "--out", type=Path, default=None, help="export root (default artifacts/proposals/<run_id>)"
+    )
     return p
 
 
@@ -359,6 +392,39 @@ def _e02(
     return _report(ctx, paths)
 
 
+def _e03(
+    args: argparse.Namespace,
+    cfg: ProjectConfig,
+    paths: ProjectPaths,
+    full_argv: list[str],
+) -> int | None:
+    """Dispatch the E03 learned-proposal commands; nothing here touches Julia."""
+    if args.command not in ("train-proposal", "export-proposal"):
+        return None
+    # Imported at dispatch so config validation and every other command stay free of the
+    # torch import these two bodies pay for.
+    from so_recon.ml.commands import run_export_proposal, run_train_proposal
+
+    if args.command == "train-proposal":
+        ctx = run_train_proposal(
+            cfg,
+            paths,
+            corpus_path=args.corpus,
+            epochs=args.epochs,
+            resume=args.resume,
+            argv=full_argv,
+        )
+    else:
+        ctx = run_export_proposal(
+            cfg,
+            paths,
+            training_manifest_path=args.training_manifest,
+            out=args.out,
+            argv=full_argv,
+        )
+    return _report(ctx, paths)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -395,6 +461,9 @@ def main(
         e02 = _e02(args, cfg, paths, full_argv)
         if e02 is not None:
             return e02
+        e03 = _e03(args, cfg, paths, full_argv)
+        if e03 is not None:
+            return e03
 
         if args.command == "smoke":
             factory = launcher_factory or default_launcher

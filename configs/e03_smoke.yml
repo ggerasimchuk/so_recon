@@ -1,0 +1,121 @@
+# SO-RECON E03 SMOKE session (plan §12 bounded training, §14 CLI): the same frozen
+# learning plan as configs/e03.yml, with `training.max_epochs` capped so a thin-slice
+# session (`so-recon --config configs/e03_smoke.yml train-proposal --corpus ...`) can
+# never become an automatic long-run. The §7.4 optimizer settings are unchanged; a
+# further per-session bound is available with `--epochs`.
+spec_version: "4.0"
+config_version: "E03.1"
+project_name: SO-RECON
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  artifacts: artifacts
+  reports: reports
+  configs: configs
+  julia: julia
+
+sources:
+  files: []
+
+julia:
+  project: julia
+  smoke_script: julia/smoke/smoke_case.jl
+  timeout_s: 1800
+
+resources:
+  profile: P1_LOOP
+  soft_bytes: 12884901888
+  hard_bytes: 17179869184
+  reserve_bytes: 6442450944
+  disk_budget_bytes: 5368709120
+  wall_budget_s: 3600
+  job_timeout_s: 900
+  startup_timeout_s: 300
+  max_new_forward: 2000
+  julia_workers: 1
+  julia_threads: 4
+  blas_threads: 1
+  poll_interval_s: 0.25
+  max_swap_growth_bytes: 536870912
+
+inference:
+  n_particles: 32
+  cess_fraction: 0.8
+  resample_fraction: 0.5
+  max_beta_steps: 24
+  moves_per_level: 2
+  seed: 11
+  rw_scale: 0.25
+  pcn_scale: 0.2
+
+learning:
+  config_version: e03-learning-1
+  corpus_seed: 3117
+  training_seed: 9101
+  training_seed_replica: 9102
+  defensive_epsilon: 0.10
+  estimator: posterior_mean
+  primary_support: eight_quadrants
+  primary_month: 36
+  diagnostic_months: [12, 24]
+  prefix_months: [12, 24, 36]
+  max_noise_copies: 2
+  inference_seeds: [11, 12]
+  particle_counts: [32, 64]
+  training:
+    optimizer: adamw
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-4
+    batch_size: 8
+    max_epochs: 8
+    patience: 20
+    gradient_norm_cap: 5.0
+    dtype: float32
+    device: cpu
+    num_workers: 0
+    torch_threads: 1
+  encoder:
+    variant: graph
+    width: 64
+    heads: 2
+    context_dim: 128
+    dropout: 0.0
+    max_wells: 8
+    max_months: 36
+  flow:
+    n_transforms: 6
+    n_bins: 8
+    tail_bound: 4.0
+    min_bin_width: 1.0e-3
+    min_bin_height: 1.0e-3
+    min_derivative: 1.0e-3
+    base: normal
+    tails: linear
+    architecture_version: e03-conditional-nsf-1
+  context_builder_version: e03-context-1
+  operational_dtype: float64
+  operational_backend: cpu
+  corpus:
+    - design_id: e02-t1-v1
+      train: 64
+      development: 16
+      evaluation: 4
+    - design_id: e02-t2-v2
+      train: 24
+      development: 6
+      evaluation: 1
+    - design_id: e03-t3-v1
+      train: 16
+      development: 4
+      evaluation: 1
+    - design_id: e02-t4-v1
+      train: 24
+      development: 6
+      evaluation: 2
+  thin_slice:
+    - design_id: e02-t1-v1
+      train: 8
+      development: 2
+      evaluation: 1
