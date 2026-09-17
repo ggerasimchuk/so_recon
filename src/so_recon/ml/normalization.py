@@ -8,7 +8,7 @@ still means what the spec says it means.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -46,9 +46,11 @@ class FeatureScaler:
     def fit(cls, batches: Sequence[ContextBatch], spec: ContextSpec) -> FeatureScaler:
         if not batches:
             raise ValueError("a scaler needs at least one train batch")
-        well_time = np.concatenate([batch.well_time.reshape(-1, batch.well_time.shape[-1]) for batch in batches])
+        well_time = np.concatenate(
+            [batch.well_time.reshape(-1, batch.well_time.shape[-1]) for batch in batches]
+        )
         mask = np.concatenate([batch.well_mask.reshape(-1) for batch in batches])
-        static = np.concatenate([batch.static for batches_item in [batches] for batch in batches_item])
+        static = np.concatenate([batch.static for batch in batches])
         well_masked = well_time[mask]
         wt: dict[str, dict[str, float]] = {"mean": {}, "std": {}}
         for name in SCALED_WELL_TIME_FEATURES:
@@ -76,9 +78,9 @@ class FeatureScaler:
         well_time = np.array(batch.well_time, dtype=np.float64, copy=True)
         for name in SCALED_WELL_TIME_FEATURES:
             index = self._spec.well_time_features.index(name)
-            well_time[..., index] = (
-                well_time[..., index] - self._wt_mean[name]
-            ) / self._wt_std[name]
+            well_time[..., index] = (well_time[..., index] - self._wt_mean[name]) / self._wt_std[
+                name
+            ]
         static = np.array(batch.static, dtype=np.float64, copy=True)
         for name in SCALED_STATIC_FEATURES:
             index = self._spec.static_features.index(name)

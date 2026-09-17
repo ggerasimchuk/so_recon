@@ -8,7 +8,7 @@ permutation invariance of the three encoders at Float64.
 
 from __future__ import annotations
 
-import copy
+from datetime import date
 from typing import Any
 
 import numpy as np
@@ -24,8 +24,10 @@ from so_recon.ml.context import (
     default_context_spec,
     permute_batch,
 )
+from so_recon.ml.contracts import ContextBatch
 from so_recon.ml.encoders import GraphEncoder, SummaryEncoder, TemporalSetEncoder, build_encoder
 from so_recon.ml.normalization import FeatureScaler
+from so_recon.simulator.schedule import month_edges_s
 from so_recon.synthetic.inverse_corpus import WELL_TIME_FEATURES
 
 
@@ -46,26 +48,17 @@ def _payload(*, bhp: bool = False) -> dict[str, Any]:
     wells = [("I1", 2, 2, 0), ("I2", 2, 13, 0), ("P1", 13, 2, 1), ("P2", 13, 13, 1)]
     design = {
         "design_id": "e02-t2-v2",
+        "shape": [16, 16, 2],
+        "n_months": 36,
+        "start_date": "2000-01-01",
         "well_columns": [
             {"well_id": name, "column": [i, j], "role": "producer" if role else "injector"}
             for name, i, j, role in wells
         ],
     }
     months = 36
-    edges = [0.0]
-    for month in range(months):
-        edges.append(edges[-1] + 2.628e6 * (1 + 0.01 * (month % 2)))
-    edges = edges[: months + 1]
-    controls = [
-        _control(
-            name,
-            "bhp" if bhp else ("water_rate" if role == 0 else "liquid_rate"),
-            1.0e7 if bhp else 60.0 * (1.0 if month // 12 == 0 else 0.75 if month // 12 == 1 else 1.25),
-        )
-        for name, _i, _j, role in wells
-        for month in [0]
-    ]
-    # per-month control segments (start at each month edge)
+    edges = month_edges_s(date(2000, 1, 1), months)
+    # per-month control segments on the declared calendar (one segment per month edge)
     controls = []
     for name, _i, _j, role in wells:
         for month in range(months):
@@ -74,7 +67,7 @@ def _payload(*, bhp: bool = False) -> dict[str, Any]:
                     **_control(
                         name,
                         "bhp" if bhp else ("water_rate" if role == 0 else "liquid_rate"),
-                        1.0e7 if bhp else 60.0,
+                        1.0e7 if bhp else 20.0,
                     ),
                     "start_s": edges[month],
                     "end_s": edges[month + 1],
@@ -162,7 +155,10 @@ def test_bhp_protocol_is_encoded_as_bhp_not_as_a_rate(spec) -> None:
     rate = build_context_batch(_payload(bhp=False), spec=spec)
     bhp = build_context_batch(_payload(bhp=True), spec=spec)
     kinds = {name: index for index, name in enumerate(spec.well_time_features)}
-    np.testing.assert_array_equal(rate.well_time[..., kinds["control_kind_liquid_rate"]], 0.0)
+    # a rate protocol never lights the BHP kind, and vice versa: the two protocols are
+    # different channels, never one dimensionless column (plan §7.1)
+    np.testing.assert_array_equal(rate.well_time[..., kinds["control_kind_bhp"]], 0.0)
+    assert rate.well_time[..., kinds["control_kind_water_rate"]].max() == 1.0
     assert bhp.well_time[..., kinds["control_kind_bhp"]].max() == 1.0
     assert bhp.well_time[..., kinds["control_kind_liquid_rate"]].max() == 0.0
     # BHP values normalize by the declared pressure range, not the rate scale
@@ -191,9 +187,10 @@ def test_observed_zero_is_not_missing(spec) -> None:
         assert missing.well_time[w, 0, kinds["observed_valid"]] == 0.0
         assert missing.well_time[w, 0, kinds["observed_bin_center"]] == 0.0
         # the validity channel is what separates an observed zero from a missing month
-        assert zero.well_time[w, 0, kinds["observed_valid"]] != missing.well_time[
-            w, 0, kinds["observed_valid"]
-        ]
+        assert (
+            zero.well_time[w, 0, kinds["observed_valid"]]
+            != missing.well_time[w, 0, kinds["observed_valid"]]
+        )
 
 
 def test_future_tail_mutation_cannot_change_a_prefix(spec) -> None:
@@ -241,6 +238,61 @@ def test_wells_missing_from_the_declared_geometry_are_refused(spec) -> None:
         build_context_batch(payload, spec=spec)
 
 
+def test_p1_corpus_design_builds_from_declared_constants(spec) -> None:
+    """The P1 corpus publishes no `well_columns` and BLOCK controls, not per-month ones.
+
+    The real thin-slice corpus (e03-corpus-thin-1) is exactly this shape: its design is
+    the frozen P1 constants, and its controls change three times in 36 months. The
+    builder must read geometry from the declared design and months from the declared
+    calendar — never guess months from control starts.
+    """
+    payload = _payload()
+    payload["inference_input"]["context"]["design"] = {
+        "p1_design": {
+            "design_id": "p1-two-layer-v2",
+            "family": "base",
+            "shape": [16, 16, 2],
+            "extent_m": [100.0, 100.0, 20.0],
+            "n_months": 36,
+            "start_date": "2000-01-01",
+        }
+    }
+    edges = month_edges_s(date(2000, 1, 1), 36)
+    blocks = []
+    for name, _i, _j, role in [("I1", 0, 0, 0), ("I2", 0, 0, 0), ("P1", 0, 0, 1), ("P2", 0, 0, 1)]:
+        for first, last, factor in ((0, 12, 1.0), (12, 24, 0.75), (24, 36, 1.25)):
+            blocks.append(
+                {
+                    **_control(name, "water_rate" if role == 0 else "liquid_rate", 20.0 * factor),
+                    "start_s": edges[first],
+                    "end_s": edges[last],
+                }
+            )
+    payload["inference_input"]["U"] = blocks
+    batch = build_context_batch(payload, spec=spec)
+    assert batch.well_ids == ("I1", "I2", "P1", "P2")
+    kinds = {name: index for index, name in enumerate(spec.well_time_features)}
+    i1 = batch.well_ids.index("I1")
+    assert batch.well_time[i1, 5, kinds["control_value_normalized"]] == pytest.approx(1.0)
+    assert batch.well_time[i1, 15, kinds["control_value_normalized"]] == pytest.approx(0.75)
+    assert batch.well_time[i1, 30, kinds["control_value_normalized"]] == pytest.approx(1.25)
+    # P1 geometry comes from the declared constants: P1 sits at column (13, 2)
+    p1 = batch.well_ids.index("P1")
+    assert batch.static[p1, spec.static_features.index("well_i_normalized")] == pytest.approx(
+        13.0 / 16.0
+    )
+    assert batch.static[p1, spec.static_features.index("well_j_normalized")] == pytest.approx(
+        2.0 / 16.0
+    )
+
+
+def test_a_calendar_that_disagrees_with_the_history_is_refused(spec) -> None:
+    payload = _payload()
+    payload["inference_input"]["context"]["design"]["inverse_design"]["n_months"] = 24
+    with pytest.raises(ForbiddenContextInput, match="calendar"):
+        build_context_batch(payload, spec=spec)
+
+
 def test_shut_connection_is_its_own_channel(spec) -> None:
     payload = _payload()
     for segment in payload["inference_input"]["U"]:
@@ -264,16 +316,14 @@ def batches(spec):
     return [build_context_batch(payload, spec=spec) for payload in payloads]
 
 
-@pytest.mark.parametrize(
-    "encoder_cls", [GraphEncoder, TemporalSetEncoder, SummaryEncoder]
-)
+@pytest.mark.parametrize("encoder_cls", [GraphEncoder, TemporalSetEncoder, SummaryEncoder])
 def test_encoders_are_well_permutation_invariant_at_float64(encoder_cls, batches) -> None:
-    torch.set_default_dtype(torch.float64)
     params = EncoderParams(variant="graph", width=32, heads=2, context_dim=24)
     if encoder_cls is GraphEncoder:
         encoder: torch.nn.Module = encoder_cls(params, len(WELL_TIME_FEATURES), 5)
     else:
         encoder = encoder_cls(params, len(WELL_TIME_FEATURES))
+    encoder = encoder.to(torch.float64)
     encoder.eval()
     batch = batches[0]
     order = np.asarray([2, 0, 3, 1])
@@ -285,18 +335,43 @@ def test_encoders_are_well_permutation_invariant_at_float64(encoder_cls, batches
     assert delta <= 1e-8, f"{encoder_cls.__name__} learned the well order: {delta}"
 
 
-def test_masked_values_do_not_enter_the_pooled_context(batches) -> None:
-    torch.set_default_dtype(torch.float64)
+@pytest.mark.parametrize("encoder_cls", [GraphEncoder, TemporalSetEncoder, SummaryEncoder])
+def test_masked_values_do_not_enter_the_pooled_context(encoder_cls, batches) -> None:
     params = EncoderParams(width=32, heads=2, context_dim=24)
-    encoder = GraphEncoder(params, len(WELL_TIME_FEATURES), 5)
+    if encoder_cls is GraphEncoder:
+        encoder: torch.nn.Module = encoder_cls(params, len(WELL_TIME_FEATURES), 5)
+    else:
+        encoder = encoder_cls(params, len(WELL_TIME_FEATURES))
+    encoder = encoder.to(torch.float64)
     encoder.eval()
     batch = batches[0]
-    mutated = batch
+
+    # With a FIXED mask, the values at masked positions are irrelevant: two worlds
+    # whose masked months hold different garbage produce the same context exactly
+    # (masked months never enter the pooled representation, plan §7.1)
+    def _padded(garbage: float) -> ContextBatch:
+        well_time = np.array(batch.well_time)
+        well_mask = np.array(batch.well_mask)
+        well_time[0, 30:, :] = garbage
+        well_mask[0, 30:] = False
+        return ContextBatch(
+            parent_id=batch.parent_id,
+            design_id=batch.design_id,
+            split=batch.split,
+            spec_hash=batch.spec_hash,
+            well_time=well_time,
+            well_mask=well_mask,
+            static=batch.static,
+            edge_index=batch.edge_index,
+            edge_attr=batch.edge_attr,
+            well_ids=batch.well_ids,
+        )
+
     with torch.no_grad():
-        base = encoder(batch)
-        moved = encoder(mutated)
-    # trivially equal here, but the invariant is pinned for the mutation tests below
-    assert float((base - moved).abs().max()) == 0.0
+        first = encoder(_padded(7.0))
+        second = encoder(_padded(-123.5))
+    delta = float((first - second).abs().max())
+    assert delta == 0.0, f"{encoder_cls.__name__} read a masked month: {delta}"
 
 
 def test_scaler_moves_only_the_declared_channels(batches, spec) -> None:
@@ -327,12 +402,11 @@ def test_scaler_refuses_another_spec(batches, spec) -> None:
 
 
 def test_causal_blocks_see_only_the_past() -> None:
-    torch.set_default_dtype(torch.float64)
     from so_recon.ml.encoders import CausalTemporalBlock
 
-    block = CausalTemporalBlock(4)
+    block = CausalTemporalBlock(4).to(torch.float64)
     block.eval()
-    x = torch.zeros(1, 2, 6, 4)
+    x = torch.zeros(1, 2, 6, 4, dtype=torch.float64)
     x[0, 0, 3, 0] = 5.0
     with torch.no_grad():
         out = block(x)

@@ -6,23 +6,35 @@ contract; they differ only in how wells interact:
 * `GraphEncoder` — the main path: causal temporal blocks per well, then edge-conditioned
   graph attention over the wells (relative position/distance only — never a conductance
   derived from the true K), then masked pooling;
-* `TemporalSetEncoder` — the same temporal trunk without message passing, pooled
-  permutation-invariantly (the ablation that isolates the graph's contribution);
+* `TemporalSetEncoder` — the same temporal trunk and statics without message passing,
+  pooled permutation-invariantly (the ablation that isolates the graph's contribution);
 * `SummaryEncoder` — declared per-well aggregates with set pooling, no temporal trunk.
+
+Each encoder ends the same way: per-well node vectors of width `width`, masked mean+max
+pooling over wells to `2 * width`, and one shared head shape to `context_dim`.
 
 Causality is structural: the temporal blocks convolve over the month axis with LEFT
 padding only, so month `t` is a function of months `<= t` alone. Well permutation
 invariance holds by construction (rows, edges and statics permute together) and is
 pinned by test at Float64 to 1e-8.
+
+No global torch state is read or written: the compute dtype is whatever dtype the
+module's parameters carry, so the Float64 operational pass casts the module (`.double()`)
+and training keeps Float32 without anyone touching `torch.set_default_dtype`.
 """
 
 from __future__ import annotations
 
+import numpy as np
 import torch
 from torch import nn
 
 from so_recon.config.learning import EncoderParams
 from so_recon.ml.contracts import ContextBatch
+
+#: Static feature count of the default context spec; the real caller passes the spec's
+#: own count, the default only keeps direct construction honest.
+DEFAULT_N_STATIC_FEATURES = 5
 
 
 class CausalTemporalBlock(nn.Module):
@@ -45,7 +57,7 @@ class CausalTemporalBlock(nn.Module):
 
 
 class EdgeGraphAttention(nn.Module):
-    """Multi-head attention over wells with edge attributes as key/query modifiers."""
+    """Multi-head attention over wells with edge attributes as score biases."""
 
     def __init__(self, width: int, heads: int, edge_features: int) -> None:
         super().__init__()
@@ -83,18 +95,17 @@ class EdgeGraphAttention(nn.Module):
         return nodes + self.out(mixed)
 
 
-def _pad_to_width(features: torch.Tensor, width: int) -> torch.Tensor:
-    if features.shape[-1] == width:
-        return features
-    if features.shape[-1] > width:
-        return features[..., :width]
-    padding = torch.full(
-        (*features.shape[:-1], width - features.shape[-1]),
-        0.0,
-        dtype=features.dtype,
-        device=features.device,
-    )
-    return torch.cat([features, padding], dim=-1)
+def _to_tensors(
+    batch: ContextBatch, dtype: torch.dtype, device: torch.device
+) -> tuple[torch.Tensor, ...]:
+    # np.array copies the read-only contract arrays, so no tensor ever aliases them.
+    # The mask stays boolean: it selects (`torch.where`) as often as it scales.
+    well_time = torch.from_numpy(np.array(batch.well_time)).to(dtype=dtype, device=device)
+    mask = torch.from_numpy(np.array(batch.well_mask)).to(device=device)
+    static = torch.from_numpy(np.array(batch.static)).to(dtype=dtype, device=device)
+    edge_index = torch.from_numpy(np.array(batch.edge_index)).to(device=device)
+    edge_attr = torch.from_numpy(np.array(batch.edge_attr)).to(dtype=dtype, device=device)
+    return well_time, mask, static, edge_index, edge_attr
 
 
 def _masked_pooling(nodes: torch.Tensor, presence: torch.Tensor) -> torch.Tensor:
@@ -103,134 +114,145 @@ def _masked_pooling(nodes: torch.Tensor, presence: torch.Tensor) -> torch.Tensor
     total = weights.sum().clamp(min=1.0)
     mean = (nodes * weights).sum(dim=1) / total
     neg = torch.finfo(nodes.dtype).min
-    maxed = torch.where(
-        presence.unsqueeze(-1), nodes, torch.full_like(nodes, neg)
-    ).max(dim=1).values
+    maxed = (
+        torch.where(presence.unsqueeze(-1), nodes, torch.full_like(nodes, neg)).max(dim=1).values
+    )
     return torch.cat([mean, maxed], dim=-1)
 
 
-def _to_tensors(batch: ContextBatch, dtype: torch.dtype) -> tuple[torch.Tensor, ...]:
-    well_time = torch.as_tensor(batch.well_time, dtype=dtype)
-    mask = torch.as_tensor(batch.well_mask, dtype=dtype)
-    static = torch.as_tensor(batch.static, dtype=dtype)
-    edge_index = torch.as_tensor(batch.edge_index, dtype=torch.long)
-    edge_attr = torch.as_tensor(batch.edge_attr, dtype=dtype)
-    return well_time, mask, static, edge_index, edge_attr
+def _temporal_pool(h: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean over each well's valid months; masked months contribute nothing.
+
+    `h` is (1, W, T, width), `mask` is (W, T): the mean runs over the time axis and
+    divides by each well's own count of valid months.
+    """
+    weights = mask.unsqueeze(-1)  # (W, T, 1)
+    summed = (h * weights).sum(dim=2)  # (1, W, width)
+    count = weights.sum(dim=1)  # (W, 1)
+    return summed / count.clamp(min=1.0)
+
+
+def _context_head(width: int, context_dim: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(2 * width, context_dim),
+        nn.GELU(),
+        nn.Linear(context_dim, context_dim),
+    )
 
 
 class GraphEncoder(nn.Module):
-    """The main path: causal temporal trunk + edge-conditioned graph attention."""
+    """The main path: causal temporal trunk + statics + edge-conditioned attention."""
 
-    def __init__(self, params: EncoderParams, n_well_time_features: int, n_edge_features: int) -> None:
+    def __init__(
+        self,
+        params: EncoderParams,
+        n_well_time_features: int,
+        n_edge_features: int,
+        n_static_features: int = DEFAULT_N_STATIC_FEATURES,
+    ) -> None:
         super().__init__()
         self.params = params
         self.input = nn.Linear(n_well_time_features, params.width)
         self.blocks = nn.ModuleList(CausalTemporalBlock(params.width) for _ in range(2))
+        self.static = nn.Linear(n_static_features, params.width)
         self.graph1 = EdgeGraphAttention(params.width, params.heads, n_edge_features)
         self.graph2 = EdgeGraphAttention(params.width, params.heads, n_edge_features)
-        self.static = nn.Linear(1, params.width) if params.width else None
-        self.head = nn.Sequential(
-            nn.Linear(4 * params.width, params.context_dim),
-            nn.GELU(),
-            nn.Linear(params.context_dim, params.context_dim),
-        )
+        self.head = _context_head(params.width, params.context_dim)
 
     def forward(self, batch: ContextBatch) -> torch.Tensor:
         well_time, mask, static, edge_index, edge_attr = _to_tensors(
-            batch, torch.get_default_dtype()
+            batch, self.input.weight.dtype, self.input.weight.device
         )
-        nodes = well_time.unsqueeze(0)  # (1, W, T, F)
-        h = self.input(nodes)
+        h = self.input(well_time.unsqueeze(0))  # (1, W, T, width)
         for block in self.blocks:
             h = block(h) * mask.unsqueeze(-1).unsqueeze(0)
         presence = mask.any(dim=1)  # (W,)
-        temporal = (h * mask.unsqueeze(-1).unsqueeze(0)).sum(dim=2) / mask.sum(
-            dim=1, keepdim=True
-        ).clamp(min=1.0).unsqueeze(0)
-        nodes_flat = (temporal + self.static(static.mean(dim=-1, keepdim=True)).unsqueeze(0)).squeeze(0)
-        nodes_flat = self.graph1(nodes_flat.unsqueeze(0), edge_index, edge_attr)
-        nodes_flat = self.graph2(nodes_flat, edge_index, edge_attr)
-        pooled = _masked_pooling(nodes_flat, presence.unsqueeze(0))
-        return self.head(pooled)
+        nodes = _temporal_pool(h, mask) + self.static(static)  # (1, W, width)
+        nodes = self.graph1(nodes, edge_index, edge_attr)
+        nodes = self.graph2(nodes, edge_index, edge_attr)
+        pooled = _masked_pooling(nodes, presence.unsqueeze(0))  # (1, 2*width)
+        return self.head(pooled)  # (1, context_dim)
 
 
 class TemporalSetEncoder(nn.Module):
-    """The ablation: the same temporal trunk, no message passing between wells."""
+    """The ablation: the same trunk and statics, no message passing between wells."""
 
-    def __init__(self, params: EncoderParams, n_well_time_features: int) -> None:
+    def __init__(
+        self,
+        params: EncoderParams,
+        n_well_time_features: int,
+        n_static_features: int = DEFAULT_N_STATIC_FEATURES,
+    ) -> None:
         super().__init__()
         self.params = params
         self.input = nn.Linear(n_well_time_features, params.width)
         self.blocks = nn.ModuleList(CausalTemporalBlock(params.width) for _ in range(2))
-        self.head = nn.Sequential(
-            nn.Linear(2 * params.width, params.context_dim),
-            nn.GELU(),
-            nn.Linear(params.context_dim, params.context_dim),
-        )
+        self.static = nn.Linear(n_static_features, params.width)
+        self.head = _context_head(params.width, params.context_dim)
 
     def forward(self, batch: ContextBatch) -> torch.Tensor:
-        well_time, mask, _static, _edge_index, _edge_attr = _to_tensors(
-            batch, torch.get_default_dtype()
+        well_time, mask, static, _edge_index, _edge_attr = _to_tensors(
+            batch, self.input.weight.dtype, self.input.weight.device
         )
-        nodes = well_time.unsqueeze(0)
-        h = self.input(nodes)
+        h = self.input(well_time.unsqueeze(0))
         for block in self.blocks:
             h = block(h) * mask.unsqueeze(-1).unsqueeze(0)
         presence = mask.any(dim=1)
-        temporal = (h * mask.unsqueeze(-1).unsqueeze(0)).sum(dim=2) / mask.sum(
-            dim=1, keepdim=True
-        ).clamp(min=1.0).unsqueeze(0)
-        pooled = _masked_pooling(temporal.squeeze(0), presence.unsqueeze(0))
+        nodes = _temporal_pool(h, mask) + self.static(static)
+        pooled = _masked_pooling(nodes, presence.unsqueeze(0))
         return self.head(pooled)
 
 
 class SummaryEncoder(nn.Module):
     """Declared per-well aggregates with set pooling: no temporal trunk at all."""
 
-    def __init__(self, params: EncoderParams, n_well_time_features: int) -> None:
+    def __init__(
+        self,
+        params: EncoderParams,
+        n_well_time_features: int,
+        n_static_features: int = DEFAULT_N_STATIC_FEATURES,
+    ) -> None:
         super().__init__()
         self.params = params
         self.input = nn.Linear(n_well_time_features, params.width)
-        self.project = nn.Sequential(
-            nn.Linear(params.width, params.width),
+        self.static = nn.Linear(n_static_features, params.width)
+        self.combine = nn.Sequential(
+            nn.Linear(3 * params.width, params.width),
             nn.GELU(),
-            nn.Linear(params.width, params.width),
         )
-        self.head = nn.Sequential(
-            nn.Linear(2 * params.width + 1, params.context_dim),
-            nn.GELU(),
-            nn.Linear(params.context_dim, params.context_dim),
-        )
+        self.head = _context_head(params.width, params.context_dim)
 
     def forward(self, batch: ContextBatch) -> torch.Tensor:
         well_time, mask, static, _edge_index, _edge_attr = _to_tensors(
-            batch, torch.get_default_dtype()
+            batch, self.input.weight.dtype, self.input.weight.device
         )
-        projected = self.input(well_time)
+        projected = self.input(well_time)  # (W, T, width)
         presence = mask.any(dim=1)
         # declared aggregates over the observed months only
         observed = mask.unsqueeze(-1)
         mean_feature = (projected * observed).sum(dim=1) / observed.sum(dim=1).clamp(min=1.0)
         neg = torch.finfo(projected.dtype).min
-        max_feature = torch.where(
-            observed, projected, torch.full_like(projected, neg)
-        ).max(dim=1).values
-        summary = torch.cat(
-            [mean_feature, max_feature, static.mean(dim=1, keepdim=True)], dim=-1
+        max_feature = (
+            torch.where(observed, projected, torch.full_like(projected, neg)).max(dim=1).values
         )
-        pooled = _masked_pooling(self.project(summary), presence.unsqueeze(0))
+        nodes = self.combine(torch.cat([mean_feature, max_feature, self.static(static)], dim=-1))
+        pooled = _masked_pooling(nodes, presence.unsqueeze(0))
         return self.head(pooled)
 
 
 def build_encoder(
-    variant: str, params: EncoderParams, n_well_time_features: int, n_edge_features: int
+    variant: str,
+    params: EncoderParams,
+    n_well_time_features: int,
+    n_edge_features: int,
+    n_static_features: int = DEFAULT_N_STATIC_FEATURES,
 ) -> nn.Module:
     if variant == "graph":
-        return GraphEncoder(params, n_well_time_features, n_edge_features)
+        return GraphEncoder(params, n_well_time_features, n_edge_features, n_static_features)
     if variant == "temporal_set":
-        return TemporalSetEncoder(params, n_well_time_features)
+        return TemporalSetEncoder(params, n_well_time_features, n_static_features)
     if variant == "summary":
-        return SummaryEncoder(params, n_well_time_features)
+        return SummaryEncoder(params, n_well_time_features, n_static_features)
     raise ValueError(f"unknown encoder variant {variant!r}")
 
 
