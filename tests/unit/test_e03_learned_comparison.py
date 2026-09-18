@@ -241,14 +241,33 @@ def test_comparison_row_carries_the_primary_metrics_and_products() -> None:
 
 def test_world_averaging_weights_worlds_equally_not_rows() -> None:
     rows = [
-        {"parent_id": "A", "mae": 0.2},
-        {"parent_id": "B", "mae": 0.4},
-        {"parent_id": "B", "mae": 0.5},
+        {"parent_id": "A", "method_id": "M", "mae": 0.2},
+        {"parent_id": "B", "method_id": "M", "mae": 0.4},
+        {"parent_id": "B", "method_id": "M", "mae": 0.5},
     ]
     # per-world seed mean first: A -> 0.2, B -> 0.45; then equal world weight -> 0.325
     assert average_over_worlds(rows, "mae") == pytest.approx(0.325)
     with pytest.raises(ValueError, match="mae"):
-        average_over_worlds([{"parent_id": "A"}], "mae")
+        average_over_worlds([{"parent_id": "A", "method_id": "M"}], "mae")
+
+
+def test_world_averaging_refuses_rows_without_method_id() -> None:
+    # an unlabelled row cannot be grouped by method, so it is refused outright
+    with pytest.raises(ValueError, match="method_id"):
+        average_over_worlds([{"parent_id": "A", "mae": 0.2}], "mae")
+
+
+def test_world_averaging_refuses_pooling_two_methods() -> None:
+    rows = [
+        {"parent_id": "A", "method_id": "q_learned", "mae": 0.2},
+        {"parent_id": "A", "method_id": "defensive_mixture", "mae": 0.6},
+    ]
+    # the refusal names both methods, so the mix can never pass silently
+    with pytest.raises(ValueError, match=r"defensive_mixture.*q_learned"):
+        average_over_worlds(rows, "mae")
+    # averaged per method in separate calls, the equal-world law still holds
+    assert average_over_worlds(rows[:1], "mae") == pytest.approx(0.2)
+    assert average_over_worlds(rows[1:], "mae") == pytest.approx(0.6)
 
 
 # --------------------------------------------------------------------------------------

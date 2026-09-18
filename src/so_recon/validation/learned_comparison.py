@@ -18,7 +18,8 @@ engine does not record (residual movement) are `None` with a note, never invente
 
 World averaging (plan §5.5) seeds-then-worlds: the per-world mean over inference
 seeds first, then equal weight per independent world. Cells, zones and rows are
-never pooled into a pseudo-sample.
+never pooled into a pseudo-sample, and methods are never pooled either: the
+average is per method, and rows of more than one `method_id` are refused.
 
 Operational products build from the posterior bundle and checkpoint alone — the
 loader has no truth parameter to misuse; truth is scored separately by
@@ -308,8 +309,28 @@ def average_over_worlds(rows: Sequence[Mapping[str, Any]], metric: str) -> float
     """Equal weight per independent world: seed-mean within a world, then world mean.
 
     Never a pooled mean over rows (and the rows themselves carry scalars, never
-    pooled cells or zones), per plan §5.5.
+    pooled cells or zones), per plan §5.5. The average is PER METHOD: every row
+    must carry `method_id`, and rows of more than one method are refused —
+    averaging across methods is exactly the pseudo-pooling §5.5 bans, so it can
+    never be produced silently. Average each method's rows in its own call.
     """
+    method_ids: list[str] = []
+    for row in rows:
+        if "method_id" not in row:
+            raise ValueError(
+                f"row for parent {row.get('parent_id')!r} carries no method_id: "
+                "world averaging is per method and cannot group an unlabelled row"
+            )
+        method_id = str(row["method_id"])
+        if method_id not in method_ids:
+            method_ids.append(method_id)
+    if len(method_ids) > 1:
+        named = ", ".join(repr(method_id) for method_id in sorted(method_ids))
+        raise ValueError(
+            f"average_over_worlds is per method: the rows mix {len(method_ids)} methods "
+            f"({named}); averaging across methods pools them, which plan §5.5 forbids — "
+            "average each method's rows in a separate call"
+        )
     by_world: dict[str, list[float]] = {}
     for row in rows:
         if metric not in row or row[metric] is None:
