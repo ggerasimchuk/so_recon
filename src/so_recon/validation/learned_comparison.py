@@ -56,6 +56,7 @@ from so_recon.validation.e03_protocol import (
 from so_recon.validation.ensemble_states import (
     DEFAULT_QUANTILE_PROBABILITIES,
     EnsembleStateProducts,
+    ParticleZones,
     ZoneSupport,
     aggregate_particle_zones,
     ensemble_state_products,
@@ -406,17 +407,29 @@ def load_particle_states(
     return stacked
 
 
-def operational_products_from_bundle(
+@dataclass(frozen=True)
+class BundleEnsemble:
+    """The particle evidence of ONE completed run: zones, weights and s labels.
+
+    This is the single place a finished SMC run is turned into an ensemble, so the
+    operational products and any truth-conditional score are computed from the SAME
+    validated forwards and the SAME weight vector, read once.
+    """
+
+    zones: ParticleZones
+    weights: F64
+    s_labels: tuple[int, ...]
+
+
+def bundle_ensemble(
     bundle: Mapping[str, Any],
     checkpoint_manifest: Mapping[str, Any],
     paths: ProjectPaths,
     *,
     support: ZoneSupport,
     time_index: int,
-    admissible_s: Sequence[int] | None = None,
-    probabilities: tuple[float, ...] = DEFAULT_QUANTILE_PROBABILITIES,
-) -> EnsembleStateProducts:
-    """Build the month-36 (or any report time) operational products WITHOUT truth.
+) -> BundleEnsemble:
+    """Load one COMPLETE beta=1 run's particle evidence, validated against its bundle.
 
     The posterior bundle names the distinct physical forwards; the checkpoint maps
     every particle to ITS OWN forward and carries its weights. Every particle forward
@@ -456,11 +469,32 @@ def operational_products_from_bundle(
     weights = np.exp(log_weights - log_weights.max())
     so, pv, bo = load_particle_states(refs, paths, time_index)
     zones = aggregate_particle_zones(so=so, pv=pv, bo=bo, support=support)
+    return BundleEnsemble(
+        zones=zones,
+        weights=np.asarray(weights, dtype=np.float64),
+        s_labels=tuple(labels),
+    )
+
+
+def operational_products_from_bundle(
+    bundle: Mapping[str, Any],
+    checkpoint_manifest: Mapping[str, Any],
+    paths: ProjectPaths,
+    *,
+    support: ZoneSupport,
+    time_index: int,
+    admissible_s: Sequence[int] | None = None,
+    probabilities: tuple[float, ...] = DEFAULT_QUANTILE_PROBABILITIES,
+) -> EnsembleStateProducts:
+    """Build the month-36 (or any report time) operational products WITHOUT truth."""
+    ensemble = bundle_ensemble(
+        bundle, checkpoint_manifest, paths, support=support, time_index=time_index
+    )
     return ensemble_state_products(
-        zones,
-        weights,
+        ensemble.zones,
+        ensemble.weights,
         support=support,
-        s_labels=labels,
+        s_labels=ensemble.s_labels,
         admissible_s=admissible_s,
         probabilities=probabilities,
     )
@@ -584,10 +618,12 @@ def render_ensemble_state_maps(
 __all__ = [
     "B0_PROVENANCE",
     "B0Selection",
+    "BundleEnsemble",
     "RESIDUAL_MOVEMENT_NOTE",
     "RunDiagnostics",
     "average_over_worlds",
     "b0_from_prior_start_checkpoint",
+    "bundle_ensemble",
     "comparison_row",
     "ensemble_state_figure",
     "load_particle_states",

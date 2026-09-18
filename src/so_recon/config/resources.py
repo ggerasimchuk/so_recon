@@ -143,10 +143,13 @@ P1_LOOP_PROFILE = ResourceProfile(
     max_swap_growth_bytes=512 * MIB,
 )
 
-#: P1_E03_SMOKE — the E03 first-thin-cycle session (plan E03 §12, Task 09): one complete
-#: SMC method at smoke knobs (N16, ≤12 tempering levels, 2 moves per level ⇒ ≤ 400 new
-#: forwards worst case) does not fit a P1_LOOP hour at the measured ~20 s per T1 forward,
-#: and §12 forbids quietly resuming over a cap to finish it. The preset therefore moves
+#: P1_E03_SMOKE — the PER-STAGE session cap of the E03 first thin cycle (plan E03 §12,
+#: Task 09). Every stage of that cycle — the micro-corpus, B1, raw q and M — runs its own
+#: bounded session under this single preset, so the cap is set by the LARGEST stage: one
+#: complete SMC method at smoke knobs (N16, ≤12 tempering levels, 2 moves per level ⇒
+#: ≤ 400 new forwards worst case), which does not fit a P1_LOOP hour at the measured ~20 s
+#: per T1 forward, while §12 forbids quietly resuming over a cap to finish it. The smaller
+#: stages sit far inside the same cap. The preset therefore moves
 #: only the three session limits COMPUTE §§2, 10 scope per profile: the wall budget to
 #: three hours and the forward count to 512, leaving the per-job timeout, memory, disk,
 #: threads, poll interval and swap limit exactly as P1_LOOP. A session that exceeds these

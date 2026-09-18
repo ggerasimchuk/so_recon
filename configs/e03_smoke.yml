@@ -35,14 +35,16 @@ julia:
   timeout_s: 1800
 
 resources:
-  # SMOKE-ONLY cycle session caps (plan §12): the approved P1_E03_SMOKE preset. One
-  # bounded session per stage (corpus, B1, raw q, M) — a session over cap stops
-  # INCOMPLETE_BUDGET and is NEVER resumed automatically; finishing is an explicitly
-  # started new session, a human decision. Wall 3 h / 512 new forwards holds one
-  # complete N16 SMC method (<= 16*(1+12*2) = 400 forwards worst case at ~20 s per
-  # T1 forward) which a P1_LOOP hour cannot (Task 07 measured ~20 s/forward,
-  # 510 forwards for one complete N32 learned run). Memory, disk, threads and the
-  # per-job timeout stay exactly the P1_LOOP policy.
+  # SMOKE-ONLY cycle session caps (plan §12): the approved P1_E03_SMOKE preset. It is a
+  # PER-STAGE cap — every stage of the cycle (corpus, B1, raw q, M) runs its own bounded
+  # session under this one preset, so the number must hold the LARGEST stage, which is one
+  # complete N16 SMC method (<= 16*(1+12*2) = 400 forwards worst case at ~20 s per T1
+  # forward). The smaller stages (the five-world micro-corpus is order 10 forwards) are
+  # simply far inside it. Wall 3 h / 512 new forwards is what a P1_LOOP hour cannot hold
+  # (Task 07 measured ~20 s/forward, 510 forwards for one complete N32 learned run).
+  # A session over cap stops INCOMPLETE_BUDGET and is NEVER resumed automatically;
+  # finishing is an explicitly started new session, a human decision. Memory, disk,
+  # threads and the per-job timeout stay exactly the P1_LOOP policy.
   profile: P1_E03_SMOKE
   soft_bytes: 12884901888
   hard_bytes: 17179869184

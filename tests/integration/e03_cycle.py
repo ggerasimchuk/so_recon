@@ -78,15 +78,20 @@ from so_recon.validation.learned_comparison import (
     B0_PROVENANCE,
     RunDiagnostics,
     b0_from_prior_start_checkpoint,
+    bundle_ensemble,
     comparison_row,
     load_particle_states,
-    operational_products_from_bundle,
     render_ensemble_state_maps,
     run_diagnostics_from_payloads,
 )
 
 CYCLE_REPORT_SCHEMA = "e03-cycle-report-1"
 RAW_Q_ENSEMBLE_SCHEMA = "e03-raw-proposal-ensemble-1"
+
+#: Why the raw-q ensemble's `posterior_claim` is False. The note is prose and carries no
+#: machine meaning; the claim itself is the boolean beside it.
+RAW_Q_POSTERIOR_CLAIM_NOTE = "a raw proposal ensemble is never a posterior (plan §4.4)"
+
 CYCLE_EXPERIMENT_ID = "e03-cycle-smoke-1"
 CYCLE_RUN_LABEL = "e03-cycle-smoke-1"
 CYCLE_DESIGN_ID = "e02-t1-v1"
@@ -276,7 +281,10 @@ def raw_q_ensemble_payload(
         "schema_version": RAW_Q_ENSEMBLE_SCHEMA,
         "parent_id": parent_id,
         "ensemble_kind": RAW_PROPOSAL_ENSEMBLE_KIND,
-        "posterior_claim": "REFUSED: a raw proposal ensemble is never a posterior (§4.4)",
+        # The claim is a BOOLEAN, machine-checkable field; the prose lives beside it and
+        # never in it, so no reader can mistake an explanation for a value (§4.4).
+        "posterior_claim": False,
+        "posterior_claim_note": RAW_Q_POSTERIOR_CLAIM_NOTE,
         "q_fingerprint": law.q.fingerprint,
         "mixture_fingerprint": law.mixture.fingerprint,
         "epsilon": float(law.epsilon),
@@ -320,23 +328,29 @@ def zones_from_evaluations(
     return zones, products
 
 
-def zones_from_checkpoint(
-    *,
-    checkpoint_manifest: Mapping[str, Any],
-    paths: ProjectPaths,
-    support: ZoneSupport,
-    time_index: int,
-) -> tuple[ParticleZones, np.ndarray]:
-    """Zones and normalised weights of a finished SMC run (B1, M), for truth scoring."""
-    state = checkpoint_manifest["state"]
-    particles = list(state["particles"])
-    evaluations = [particle["evaluation"] for particle in particles]
-    refs, _labels = _refs_and_labels(evaluations)
-    so, pv, bo = load_particle_states(refs, paths, time_index)
-    zones = aggregate_particle_zones(so=so, pv=pv, bo=bo, support=support)
-    log_weights = np.asarray(state["log_weights"], dtype=np.float64)
-    weights = np.exp(log_weights - log_weights.max())
-    return zones, weights / weights.sum()
+def select_run_parent(parent_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The cycle's ONE run world, chosen from what the corpus manifest actually publishes.
+
+    `ParentRow` is a strict model with no ordinal field, so the choice cannot be made on
+    a position the manifest never wrote down. It is made on the identity it does write:
+    the `CYCLE_RUN_PARENT_INDEX`-th TRAIN parent of the cycle design, in parent-id order.
+    Parent ids are pure functions of the corpus seed, so this names the same world on
+    every rebuild of the same corpus — and never an `evaluation` parent.
+    """
+    candidates = sorted(
+        (
+            dict(row)
+            for row in parent_rows
+            if row["design_id"] == CYCLE_DESIGN_ID and row["split"] == "train"
+        ),
+        key=lambda row: str(row["parent_id"]),
+    )
+    if len(candidates) <= CYCLE_RUN_PARENT_INDEX:
+        raise ValueError(
+            f"the cycle corpus publishes {len(candidates)} train parents of "
+            f"{CYCLE_DESIGN_ID}, so it names no run world at index {CYCLE_RUN_PARENT_INDEX}"
+        )
+    return candidates[CYCLE_RUN_PARENT_INDEX]
 
 
 @dataclass(frozen=True)
@@ -369,33 +383,36 @@ def evaluate_method(
     checkpoint_manifest: Mapping[str, Any] | None = None,
     posterior_bundle: Mapping[str, Any] | None = None,
     evaluations: Sequence[Mapping[str, Any]] | None = None,
-    uniform_weights: bool = False,
 ) -> MethodEvaluation:
     """Wire one method into the Task 08 evaluator.
 
-    SMC methods (B1, M) enter through their published posterior bundle and checkpoint —
-    `operational_products_from_bundle` is the loader that refuses anything but a
-    COMPLETE beta=1 bundle. Draw-set methods (B0, Q) enter through their evaluations
-    with uniform weights. Truth enters exactly once, in the score.
+    SMC methods (B1, M) enter through their published posterior bundle and checkpoint:
+    `bundle_ensemble` is the loader that refuses anything but a COMPLETE beta=1 bundle
+    and a particle forward the bundle published. Its ONE reading of the physical states
+    and its ONE weight vector feed both the operational products and the score, so the
+    two can never rest on independently derived weights. Draw-set methods (B0, Q) enter
+    through their evaluations with uniform weights. Truth enters exactly once, in the
+    score.
     """
     from so_recon.validation.ensemble_states import score_ensemble_states
 
     run: RunDiagnostics | None = None
     if smc_payload is not None and checkpoint_manifest is not None:
         run = run_diagnostics_from_payloads(smc_payload, checkpoint_manifest)
-        products = operational_products_from_bundle(
+        ensemble = bundle_ensemble(
             dict(posterior_bundle or {}),
             dict(checkpoint_manifest),
             paths,
             support=support,
             time_index=time_index,
-            admissible_s=admissible_s,
         )
-        zones, weights = zones_from_checkpoint(
-            checkpoint_manifest=checkpoint_manifest,
-            paths=paths,
+        zones, weights = ensemble.zones, ensemble.weights
+        products = ensemble_state_products(
+            zones,
+            weights,
             support=support,
-            time_index=time_index,
+            s_labels=ensemble.s_labels,
+            admissible_s=admissible_s,
         )
         kind = POSTERIOR_ENSEMBLE_KIND
         claim = True
@@ -543,9 +560,9 @@ def cycle_checks(
         "b0_provenance_proven": b0.get("provenance") == B0_PROVENANCE,
         "b0_is_the_prior_start_ensemble": int(b0.get("n_draws", 0)) == int(b0.get("expected", -1)),
         "b0_never_claims_posterior": b0.get("ensemble_kind") == PRIOR_ENSEMBLE_KIND
-        and not bool(b0.get("posterior_claim")),
+        and b0.get("posterior_claim") is False,
         "q_never_claims_posterior": q.get("ensemble_kind") == RAW_PROPOSAL_ENSEMBLE_KIND
-        and not bool(q.get("posterior_claim")),
+        and q.get("posterior_claim") is False,
         "method_ids_distinct": method_ids == sorted(METHOD_IDS),
         "every_method_cost_recorded": all(
             method in costs
@@ -623,6 +640,22 @@ def _stage_ledger(
     )
 
 
+def _declared_output(ctx: RunContext, name: str, paths: ProjectPaths) -> Path:
+    """The file of a run's NAMED output — the contract, not a guessed sibling filename.
+
+    Both SMC runners register their posterior bundle as `posterior_bundle`; a run that
+    did not declare it is refused here rather than silently read from a path that
+    happens to exist.
+    """
+    ref = ctx.record.outputs.get(name)
+    if ref is None:
+        raise ValueError(
+            f"run {ctx.run_id} declared no {name!r} output: "
+            f"it published {sorted(ctx.record.outputs)}"
+        )
+    return paths.resolve(ref.path)
+
+
 def _register_png(path: Path, ctx: RunContext, paths: ProjectPaths) -> ArtifactRef:
     return register_artifact(
         path,
@@ -652,6 +685,7 @@ def run_e03_cycle_smoke(
     from so_recon.geology.density import GaussianConditionalPrior
     from so_recon.inference.learned_loop import (
         bind_defensive_law,
+        learned_state_times,
         load_parent_world,
         run_learned_smc,
     )
@@ -705,22 +739,7 @@ def run_e03_cycle_smoke(
                 experiment_id=CYCLE_EXPERIMENT_ID,
             )
             corpus_payload = json.loads(paths.resolve(corpus_ref.path).read_text(encoding="utf-8"))
-            parent_rows = [
-                row
-                for row in corpus_payload["parents"]
-                if row["design_id"] == CYCLE_DESIGN_ID
-                and int(row.get("parent_index", -1)) == CYCLE_RUN_PARENT_INDEX
-            ] or [
-                row
-                for row in sorted(corpus_payload["parents"], key=lambda row: str(row["parent_id"]))
-                if row["design_id"] == CYCLE_DESIGN_ID and row["split"] == "train"
-            ]
-            if len(parent_rows) != 1:
-                raise ValueError(
-                    f"the cycle corpus names no unique run parent "
-                    f"({CYCLE_DESIGN_ID} train index {CYCLE_RUN_PARENT_INDEX})"
-                )
-            parent_row = parent_rows[0]
+            parent_row = select_run_parent(corpus_payload["parents"])
             run_parent_id = str(parent_row["parent_id"])
             context_path = paths.resolve(str(parent_row["context_ref"]["path"]))
             truth_path = paths.resolve(str(parent_row["truth_ref"]["path"]))
@@ -750,7 +769,7 @@ def run_e03_cycle_smoke(
                 train_ctx = run_train_proposal(
                     cfg, paths, corpus_path=paths.resolve(corpus_ref.path), argv=[]
                 )
-                training_path = train_ctx.run_dir / "training_manifest.json"
+                training_path = _declared_output(train_ctx, "training_manifest", paths)
                 training_payload = json.loads(training_path.read_text(encoding="utf-8"))
                 export_ctx = run_export_proposal(
                     cfg,
@@ -759,9 +778,7 @@ def run_e03_cycle_smoke(
                     out=session / "proposal",
                     argv=[],
                 )
-                proposal_manifest_path = paths.resolve(
-                    str(export_ctx.record.outputs["proposal_manifest"].path)
-                )
+                proposal_manifest_path = _declared_output(export_ctx, "proposal_manifest", paths)
                 proposal_provenance = {
                     "source": "cycle-smoke-training",
                     "training_run": train_ctx.run_id,
@@ -784,12 +801,11 @@ def run_e03_cycle_smoke(
             observations = ObservationBundle.model_validate(
                 parent_context_payload["inference_input"]["observations"]
             )
-            state_times_s = tuple(
-                float(value) for value in parent_truth_payload.get("state_times_s", ())
-            ) or tuple(
-                float(value)
-                for value in _parent_state_times(parent_context_payload, parent_truth_payload)
-            )
+            # The corpus truth payload publishes no state times (it is not part of its
+            # contract), so B1's are derived from the run world's OWN design calendar —
+            # the very function the learned runner uses, so B1 and M report at the same
+            # months.
+            state_times_s = tuple(learned_state_times(context))
             experiment_payload = experiment_payload_from_parent(
                 parent_context_payload=parent_context_payload,
                 parent_truth_payload=parent_truth_payload,
@@ -820,9 +836,7 @@ def run_e03_cycle_smoke(
             )
             b1_payload = json.loads(paths.resolve(b1_ref.path).read_text(encoding="utf-8"))
             b1_bundle = json.loads(
-                (paths.resolve(b1_ref.path).parent / "posterior_bundle.json").read_text(
-                    encoding="utf-8"
-                )
+                _declared_output(b1_ctx, "posterior_bundle", paths).read_text(encoding="utf-8")
             )
             b1_checkpoint = json.loads(
                 paths.resolve(b1_payload["checkpoint"]["path"]).read_text(encoding="utf-8")
@@ -869,9 +883,7 @@ def run_e03_cycle_smoke(
             )
             m_payload = json.loads(paths.resolve(m_ref.path).read_text(encoding="utf-8"))
             m_bundle = json.loads(
-                (paths.resolve(m_ref.path).parent / "posterior_bundle.json").read_text(
-                    encoding="utf-8"
-                )
+                _declared_output(m_ctx, "posterior_bundle", paths).read_text(encoding="utf-8")
             )
             m_checkpoint = json.loads(
                 paths.resolve(m_payload["checkpoint"]["path"]).read_text(encoding="utf-8")
@@ -957,7 +969,6 @@ def run_e03_cycle_smoke(
                     truth_so=truth_so,
                     truth_pv=truth_pv,
                     evaluations=b0.evaluations,
-                    uniform_weights=True,
                 ),
                 "B1": evaluate_method(
                     method_id="B1",
@@ -984,7 +995,6 @@ def run_e03_cycle_smoke(
                     truth_so=truth_so,
                     truth_pv=truth_pv,
                     evaluations=q_evaluations,
-                    uniform_weights=True,
                 ),
                 "M": evaluate_method(
                     method_id="M",
@@ -1120,17 +1130,6 @@ def run_e03_cycle_smoke(
         raise
 
 
-def _parent_state_times(
-    parent_context_payload: Mapping[str, Any], parent_truth_payload: Mapping[str, Any]
-) -> list[float]:
-    """The month 0/12/24/36 edges of the run world's own design calendar."""
-    from so_recon.inference.learned_loop import learned_state_times
-
-    context = PriorContext.model_validate(parent_context_payload["inference_input"]["context"])
-    _ = parent_truth_payload
-    return [float(value) for value in learned_state_times(context)]
-
-
 __all__ = [
     "B0_COST_NOTE",
     "CYCLE_CORPUS_DEVELOPMENT",
@@ -1147,6 +1146,7 @@ __all__ = [
     "MethodEvaluation",
     "PROPOSAL_MANIFEST_ENV",
     "RAW_Q_ENSEMBLE_SCHEMA",
+    "RAW_Q_POSTERIOR_CLAIM_NOTE",
     "SCIENTIFIC_STATUS_INCONCLUSIVE",
     "SCIENTIFIC_STATUS_REASON",
     "assemble_cycle_report",
@@ -1160,8 +1160,8 @@ __all__ = [
     "raw_q_evaluations",
     "render_cycle_figures",
     "run_e03_cycle_smoke",
+    "select_run_parent",
     "smoke_inference_config",
     "truth_rows",
-    "zones_from_checkpoint",
     "zones_from_evaluations",
 ]
