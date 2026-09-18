@@ -46,7 +46,15 @@ So `-log_alpha / beta` is the likelihood DROP a prior-scale residual perturbatio
 read from what the engine already publishes. The measurement is one-sided: an uphill move
 is capped at `log_alpha = 0` and enters as a drop of 0.0, so the statistic is the drop
 distribution, not the signed response. Levels at `beta = 0` carry no likelihood at all
-and are counted, not scored.
+and are counted, not scored — and since `log_alpha` is then identically 0, those moves are
+accepted almost surely, which is why the acceptance rate that describes the drops is the
+one taken over the SCORED moves.
+
+A drop is a response to a perturbation of a particular size — the `pcn_scale` of
+`z' = sqrt(1-h^2) z + h N(0,I)` — so the same number means different things at h=0.2 and
+h=0.9. The checkpoint publishes `state.diagnostics.config_hash`, which pins that setting
+along with the rest of the `InferenceConfig`, and the report carries it. The step size
+itself appears only when a caller offers the config whose digest reproduces that hash.
 """
 
 from __future__ import annotations
@@ -59,6 +67,7 @@ from typing import Any
 
 import numpy as np
 
+from so_recon.config.inference import InferenceConfig
 from so_recon.config.learning import SplitName
 from so_recon.geology.density import GaussianConditionalPrior
 from so_recon.inference.contracts import DensitySchema, PriorContext, ThetaRecord
@@ -69,7 +78,7 @@ from so_recon.ml.contracts import TrainingManifest as TrainingManifestRecord
 from so_recon.ml.dataset import CorpusDataset
 from so_recon.ml.proposal import FrozenConditionalNSF, bind_frozen_proposal
 from so_recon.paths import ProjectPaths
-from so_recon.registry.hashing import sha256_file
+from so_recon.registry.hashing import sha256_file, sha256_json
 from so_recon.registry.run import RunRecord
 
 #: The kernel whose recorded acceptance ratio is the residual likelihood response.
@@ -465,8 +474,19 @@ def categorical_support(
 
 @dataclass(frozen=True)
 class ResidualSensitivity:
-    """The likelihood response to the residual block raw q draws from the prior."""
+    """The likelihood response to the residual block raw q draws from the prior.
 
+    A drop is only interpretable beside the perturbation that caused it. `config_hash` is
+    the run's published `sha256_json(InferenceConfig)` — it pins `pcn_scale` (the `h` of
+    `z' = sqrt(1-h^2) z + h N(0,I)`) together with every other declared SMC setting, so two
+    runs' drop distributions are comparable exactly when their `config_hash` agrees.
+    `pcn_scale` carries the step size itself only when the caller offered the config whose
+    digest MATCHES that hash; the checkpoint publishes the hash, never the value, and an
+    unverified number is not put here.
+    """
+
+    config_hash: str
+    pcn_scale: float | None
     n_residual_moves: int
     n_scored: int
     n_out_of_support: int
@@ -474,7 +494,13 @@ class ResidualSensitivity:
     log_l_drops: tuple[float, ...]
     median_log_l_drop: float | None
     max_log_l_drop: float | None
-    acceptance_rate: float | None
+    #: Accepted share among the SCORED moves (beta > 0, in support) — the only regime the
+    #: drop statistic describes.
+    acceptance_rate_scored: float | None
+    #: Accepted share among every recorded pcn move. Structurally higher than the scored
+    #: rate: at beta = 0 the likelihood is not in the target, log_alpha is 0 and the move
+    #: is accepted almost surely. Reported so the difference is visible, never as the rate.
+    acceptance_rate_all: float | None
     derivation: str
 
 
@@ -492,13 +518,22 @@ def _diagnostics_block(checkpoint_manifest: Mapping[str, Any]) -> Mapping[str, A
 
 
 def residual_l_sensitivity(
-    checkpoint_manifest: Mapping[str, Any], *, schema: DensitySchema
+    checkpoint_manifest: Mapping[str, Any],
+    *,
+    schema: DensitySchema,
+    config: InferenceConfig | None = None,
 ) -> ResidualSensitivity:
     """The residual likelihood-drop distribution of one SMC run (plan §10.3).
 
     Reads only what the engine publishes: `state.diagnostics.moves` (kernel, level,
-    accepted, log_alpha) and `state.diagnostics.beta_history`. See the module docstring
-    for why a pCN `log_alpha` is `min(0, beta * (log L' - log L))` and nothing else.
+    accepted, log_alpha), `state.diagnostics.beta_history` and the run's
+    `state.diagnostics.config_hash`. See the module docstring for why a pCN `log_alpha` is
+    `min(0, beta * (log L' - log L))` and nothing else.
+
+    `config` is optional and is not trusted: it is accepted only when its own digest
+    reproduces the `config_hash` the run published, and then `pcn_scale` — the magnitude
+    of the perturbation every drop answers to — is reported from it. Without it the scale
+    stays `None` and only the hash that pins it is published.
     """
     if schema.n_residual < 1:
         raise ValueError(
@@ -516,8 +551,33 @@ def residual_l_sensitivity(
             "the checkpoint publishes no state.diagnostics.beta_history: a move's level "
             "cannot be turned into the beta that was in force"
         )
+    if "config_hash" not in diagnostics:
+        raise ValueError(
+            "the checkpoint publishes no state.diagnostics.config_hash: without it the "
+            "drops carry no record of the pcn step size that caused them"
+        )
+    config_hash = str(diagnostics["config_hash"])
+    pcn_scale: float | None = None
+    if config is not None:
+        offered = sha256_json(config.model_dump(mode="json"))
+        if offered != config_hash:
+            raise ValueError(
+                f"the InferenceConfig offered hashes to {offered} but the run published "
+                f"config_hash {config_hash}: that is the config of another run, and its "
+                "pcn_scale would misdescribe these drops"
+            )
+        pcn_scale = float(config.pcn_scale)
     state = checkpoint_manifest["state"]
-    for particle in state.get("particles", ()):
+    # `particles` is a REQUIRED field of SMCState, so an absent or empty one is a broken
+    # manifest — never a default that lets the layout precondition of §5.2 go unchecked.
+    particles = state.get("particles")
+    if not isinstance(particles, Sequence) or not particles:
+        raise ValueError(
+            "the checkpoint carries no state.particles: the §5.2 residual layout this "
+            "derivation depends on is established from the particles' own theta, and "
+            "cannot be assumed for a run that published none"
+        )
+    for particle in particles:
         theta = particle["evaluation"]["theta"]
         if str(theta["schema_id"]) != schema.schema_id:
             raise ValueError(
@@ -532,7 +592,8 @@ def residual_l_sensitivity(
             )
     beta_history = [float(value) for value in diagnostics["beta_history"]]
     drops: list[float] = []
-    accepted = 0
+    accepted_all = 0
+    accepted_scored = 0
     out_of_support = 0
     before_tempering = 0
     residual_moves = [
@@ -545,8 +606,9 @@ def residual_l_sensitivity(
                 f"a pcn move records level {level} but beta_history has "
                 f"{len(beta_history)} entries: the beta in force at that level is unknown"
             )
-        if bool(move["accepted"]):
-            accepted += 1
+        was_accepted = bool(move["accepted"])
+        if was_accepted:
+            accepted_all += 1
         log_alpha = move["log_alpha"]
         if log_alpha is None:
             out_of_support += 1
@@ -556,8 +618,12 @@ def residual_l_sensitivity(
             before_tempering += 1
             continue
         drops.append(-float(log_alpha) / beta)
+        if was_accepted:
+            accepted_scored += 1
     ordered = tuple(sorted(drops))
     return ResidualSensitivity(
+        config_hash=config_hash,
+        pcn_scale=pcn_scale,
         n_residual_moves=len(residual_moves),
         n_scored=len(ordered),
         n_out_of_support=out_of_support,
@@ -565,7 +631,8 @@ def residual_l_sensitivity(
         log_l_drops=ordered,
         median_log_l_drop=float(np.median(ordered)) if ordered else None,
         max_log_l_drop=float(max(ordered)) if ordered else None,
-        acceptance_rate=(accepted / len(residual_moves)) if residual_moves else None,
+        acceptance_rate_scored=(accepted_scored / len(ordered)) if ordered else None,
+        acceptance_rate_all=(accepted_all / len(residual_moves)) if residual_moves else None,
         derivation=RESIDUAL_DERIVATION,
     )
 

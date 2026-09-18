@@ -36,6 +36,7 @@ import numpy as np
 import pytest
 import torch
 
+from so_recon.config.inference import InferenceConfig
 from so_recon.config.learning import (
     EncoderParams,
     FamilyPlan,
@@ -43,7 +44,16 @@ from so_recon.config.learning import (
     LearningConfig,
     TrainingHyperParams,
 )
-from so_recon.inference.contracts import DensitySchema, NoiseTheta, PriorContext, ThetaRecord
+from so_recon.inference.checkpoint import CHECKPOINT_SCHEMA_VERSION
+from so_recon.inference.contracts import (
+    DensitySchema,
+    NoiseTheta,
+    Particle,
+    PriorContext,
+    SMCState,
+    TargetEvaluation,
+    ThetaRecord,
+)
 from so_recon.ml.checkpoint import load_checkpoint, save_checkpoint
 from so_recon.ml.contracts import (
     CorpusManifest,
@@ -727,7 +737,22 @@ def _move(level: int, kernel: str, log_alpha: float | None, accepted: bool) -> d
     }
 
 
-def _checkpoint_manifest(moves: list[dict[str, Any]], beta_history: list[float]) -> dict[str, Any]:
+def _inference_config() -> InferenceConfig:
+    return InferenceConfig(seed=11, n_particles=2, pcn_scale=0.2)
+
+
+def _checkpoint_manifest(
+    moves: list[dict[str, Any]],
+    beta_history: list[float],
+    *,
+    config: InferenceConfig | None = None,
+) -> dict[str, Any]:
+    """A checkpoint manifest built the way `inference.checkpoint.save_state` builds one.
+
+    The state goes through the real `SMCState` and its real `model_dump(mode="json")`, so
+    the payload the diagnostics read is the producer's shape — `TargetEvaluation` with its
+    log fields and support flags included — and not a hand-written subset of it.
+    """
     schema = _schema()
     theta = ThetaRecord(
         schema_id=schema.schema_id,
@@ -736,18 +761,42 @@ def _checkpoint_manifest(moves: list[dict[str, Any]], beta_history: list[float])
         z_perp=tuple([0.0] * schema.n_residual),
         basis_hash=schema.basis_hash,
     )
-    return {
-        "schema_version": "e02-smc-checkpoint-1",
-        "state": {
-            "particles": [
-                {
-                    "particle_id": 0,
-                    "ancestor_id": 0,
-                    "evaluation": {"theta": theta.model_dump(mode="json")},
-                }
-            ],
-            "diagnostics": {"moves": moves, "beta_history": beta_history},
+    evaluation = TargetEvaluation(
+        theta=theta,
+        log_p0=-12.5,
+        log_p0_in_support=True,
+        log_l=-3.25,
+        log_l_in_support=True,
+        log_r=-12.5,
+        log_r_in_support=True,
+        forward_ref=None,
+        cache_key="e03-task-10-fixture",
+    )
+    state = SMCState(
+        particles=(Particle(particle_id=0, ancestor_id=0, evaluation=evaluation),),
+        log_weights=(0.0,),
+        log_weights_in_support=(True,),
+        beta=1.0,
+        level=max(len(beta_history) - 1, 0),
+        log_evidence=0.0,
+        log_evidence_in_support=True,
+        phase="finalize",
+        cursor=0,
+        rng_state=np.random.default_rng(0).bit_generator.state,
+        proposal_hash=sha256_json({"proposal": "fixture"}),
+        target_hash=sha256_json({"target": "fixture"}),
+        pending_proposal=None,
+        pending_log_u=None,
+        algorithm_status="COMPLETE",
+        diagnostics={
+            "config_hash": sha256_json((config or _inference_config()).model_dump(mode="json")),
+            "moves": moves,
+            "beta_history": beta_history,
         },
+    )
+    return {
+        "schema_version": CHECKPOINT_SCHEMA_VERSION,
+        "state": state.model_dump(mode="json"),
     }
 
 
@@ -763,7 +812,9 @@ def test_residual_sensitivity_is_the_likelihood_drop_the_pcn_moves_record() -> N
         _move(2, "pcn", 0.0, accepted=True),  # uphill, recorded as drop 0.0
         _move(2, "pcn", None, accepted=False),  # out of support, not a drop
         _move(2, "rw", -8.0, accepted=False),  # another block entirely
-        _move(0, "pcn", -3.0, accepted=False),  # beta 0.0: L is not in the target yet
+        # beta 0.0: L is not in the target yet, so log_alpha is identically 0 and the
+        # move is accepted almost surely. Counted, never scored, never in the rate.
+        _move(0, "pcn", 0.0, accepted=True),
     ]
     report = residual_l_sensitivity(_checkpoint_manifest(moves, [0.0, 0.5, 1.0]), schema=_schema())
     assert report.n_residual_moves == 5
@@ -773,8 +824,60 @@ def test_residual_sensitivity_is_the_likelihood_drop_the_pcn_moves_record() -> N
     assert report.log_l_drops == (0.0, 0.25, 2.0)
     assert report.median_log_l_drop == pytest.approx(0.25)
     assert report.max_log_l_drop == pytest.approx(2.0)
-    assert report.acceptance_rate == pytest.approx(1.0 / 5.0)
+    # the rate that describes the drops is the one over the scored moves; the all-moves
+    # rate is structurally higher because every beta=0 move is an acceptance
+    assert report.acceptance_rate_scored == pytest.approx(1.0 / 3.0)
+    assert report.acceptance_rate_all == pytest.approx(2.0 / 5.0)
+    assert report.acceptance_rate_all > report.acceptance_rate_scored
     assert "pcn" in report.derivation and "log L" in report.derivation
+
+
+def test_the_drops_carry_the_config_hash_that_pins_the_step_size() -> None:
+    from so_recon.validation.proposal_diagnostics import residual_l_sensitivity
+
+    config = _inference_config()
+    manifest = _checkpoint_manifest(
+        [_move(1, "pcn", -1.0, accepted=False)], [0.0, 1.0], config=config
+    )
+
+    # without a config the run's own hash is still published: it pins pcn_scale
+    bare = residual_l_sensitivity(manifest, schema=_schema())
+    assert bare.config_hash == sha256_json(config.model_dump(mode="json"))
+    assert bare.pcn_scale is None
+
+    # with the config whose digest IS that hash, the step size itself is reported
+    named = residual_l_sensitivity(manifest, schema=_schema(), config=config)
+    assert named.pcn_scale == pytest.approx(0.2)
+    assert named.config_hash == bare.config_hash
+
+    # a config from another run is refused rather than used to describe these drops
+    other = config.model_copy(update={"pcn_scale": 0.9})
+    with pytest.raises(ValueError, match="config_hash"):
+        residual_l_sensitivity(manifest, schema=_schema(), config=other)
+
+
+def test_residual_sensitivity_refuses_a_checkpoint_with_no_config_hash() -> None:
+    from so_recon.validation.proposal_diagnostics import residual_l_sensitivity
+
+    manifest = _checkpoint_manifest([_move(1, "pcn", -1.0, accepted=False)], [0.0, 1.0])
+    del manifest["state"]["diagnostics"]["config_hash"]
+    with pytest.raises(ValueError, match="config_hash"):
+        residual_l_sensitivity(manifest, schema=_schema())
+
+
+@pytest.mark.parametrize("particles", [None, []])
+def test_a_checkpoint_without_particles_cannot_establish_the_layout(
+    particles: list[Any] | None,
+) -> None:
+    from so_recon.validation.proposal_diagnostics import residual_l_sensitivity
+
+    manifest = _checkpoint_manifest([_move(1, "pcn", -1.0, accepted=False)], [0.0, 1.0])
+    if particles is None:
+        del manifest["state"]["particles"]
+    else:
+        manifest["state"]["particles"] = particles
+    with pytest.raises(ValueError, match=r"state\.particles"):
+        residual_l_sensitivity(manifest, schema=_schema())
 
 
 def test_residual_sensitivity_without_a_residual_block_is_refused() -> None:
