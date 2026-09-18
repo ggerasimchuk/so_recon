@@ -161,8 +161,9 @@ def _parser() -> argparse.ArgumentParser:
     e02_report = sub.add_parser("e02-report", help="derive E02 status from actual run dirs")
     e02_report.add_argument("--runs", nargs="+", required=True, help="run directories to read")
 
-    # ---- E03 (plan §14). Pure-Python commands over published artifacts: import and
-    # config validation never start a native job, and neither do the commands themselves.
+    # ---- E03 (plan §14). train/export are pure-Python commands over published artifacts:
+    # import and config validation never start a native job. run-learned-loop (below) is
+    # the learned-SMC exception: it starts one bounded Julia session.
     train_proposal = sub.add_parser(
         "train-proposal", help="one bounded CPU training session over a published corpus"
     )
@@ -191,6 +192,37 @@ def _parser() -> argparse.ArgumentParser:
     export_proposal.add_argument(
         "--out", type=Path, default=None, help="export root (default artifacts/proposals/<run_id>)"
     )
+
+    # The one E03 command that runs physics: a bounded learned SMC session against one
+    # published corpus run world (plan E03 §5.4, §12).
+    learned_loop = sub.add_parser(
+        "run-learned-loop",
+        help="one learned defensive-mixture SMC run on a published corpus parent",
+    )
+    learned_loop.add_argument(
+        "--corpus", required=True, type=Path, help="path to the published corpus manifest"
+    )
+    learned_loop.add_argument(
+        "--parent",
+        required=True,
+        type=Path,
+        help="path to the corpus parent's context/<parent_id>.json run world",
+    )
+    learned_loop.add_argument(
+        "--proposal",
+        required=True,
+        type=Path,
+        help="path to an exported proposal_manifest.json (Task 06 export)",
+    )
+    learned_loop.add_argument(
+        "--resume", type=Path, default=None, help="path to a learned run payload to continue"
+    )
+    learned_loop.add_argument(
+        "--session-id",
+        default=None,
+        help="artifacts session id (default <parent>-learned-smc-<run>)",
+    )
+    learned_loop.add_argument("--julia", default=None, help="path to julia executable")
     return p
 
 
@@ -398,9 +430,30 @@ def _e03(
     paths: ProjectPaths,
     full_argv: list[str],
 ) -> int | None:
-    """Dispatch the E03 learned-proposal commands; nothing here touches Julia."""
-    if args.command not in ("train-proposal", "export-proposal"):
+    """Dispatch the E03 learned-proposal commands.
+
+    `train-proposal`/`export-proposal` stay pure Python on published artifacts (no torch
+    import at dispatch, no native job). `run-learned-loop` is the exception this stage
+    adds: it imports the torch-side freezing machinery AND starts one bounded Julia
+    session, because its evidence is a physical SMC run.
+    """
+    if args.command not in ("train-proposal", "export-proposal", "run-learned-loop"):
         return None
+    if args.command == "run-learned-loop":
+        from so_recon.inference.learned_loop import run_learned_loop_command
+
+        ctx = run_learned_loop_command(
+            cfg,
+            paths,
+            corpus_path=args.corpus,
+            parent_path=args.parent,
+            proposal_manifest_path=args.proposal,
+            resume=args.resume,
+            session_id=args.session_id,
+            julia=args.julia,
+            argv=full_argv,
+        )
+        return _report(ctx, paths)
     # Imported at dispatch so config validation and every other command stay free of the
     # torch import these two bodies pay for.
     from so_recon.ml.commands import run_export_proposal, run_train_proposal
