@@ -31,6 +31,7 @@ from so_recon.config.resources import (
     MIB,
     MIN_RESERVE_BYTES,
     P0_VERIFY_PROFILE,
+    P1_E03_SMOKE_PROFILE,
     P1_LOOP_PROFILE,
     MissingResourceProfileError,
     ResourceProfile,
@@ -303,6 +304,31 @@ def test_p1_preset_changes_only_the_three_approved_limits() -> None:
     }
     assert (P1_LOOP_PROFILE.wall_budget_s, P1_LOOP_PROFILE.job_timeout_s) == (3600, 900)
     assert P1_LOOP_PROFILE.max_new_forward == 2000
+
+
+def test_p1_e03_smoke_preset_moves_only_the_session_limits_of_p1_loop() -> None:
+    """The E03 smoke cycle needs one complete N16 SMC method per session (plan E03 §12).
+
+    Everything but the wall budget and the forward count stays P1_LOOP: a smoke session
+    is the same machine policy with a longer single sitting, never a relabelled memory or
+    disk allowance.
+    """
+    p1 = P1_LOOP_PROFILE.model_dump()
+    smoke = P1_E03_SMOKE_PROFILE.model_dump()
+    assert {k for k in p1 if p1[k] != smoke[k]} == {
+        "profile",
+        "wall_budget_s",
+        "max_new_forward",
+    }
+    assert (P1_E03_SMOKE_PROFILE.wall_budget_s, P1_E03_SMOKE_PROFILE.max_new_forward) == (
+        10800,
+        512,
+    )
+    assert P1_E03_SMOKE_PROFILE.job_timeout_s == P1_LOOP_PROFILE.job_timeout_s
+    assert resource_profile("P1_E03_SMOKE") == P1_E03_SMOKE_PROFILE
+    assert require_resource_profile(P1_E03_SMOKE_PROFILE, command="forward") is (
+        P1_E03_SMOKE_PROFILE
+    )
 
 
 def test_presets_are_looked_up_by_name() -> None:

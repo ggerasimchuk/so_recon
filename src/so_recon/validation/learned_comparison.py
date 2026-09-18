@@ -50,6 +50,7 @@ from so_recon.simulator.results import load_forward_result
 from so_recon.validation.e03_protocol import (
     DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
     POSTERIOR_ENSEMBLE_KIND,
+    PRIOR_ENSEMBLE_KIND,
     RAW_PROPOSAL_ENSEMBLE_KIND,
 )
 from so_recon.validation.ensemble_states import (
@@ -238,10 +239,13 @@ def comparison_row(
     """One world/method/seed row of the comparison matrix (plan §10.2).
 
     A raw-q row exists (its state products and even its truth-conditional scores are
-    legitimate diagnostics) but never with a posterior claim.
+    legitimate diagnostics) but never with a posterior claim. The same holds for B0's
+    uncorrected prior draws: `prior_ensemble` is a real ensemble with state evidence,
+    and it is still not a posterior.
     """
     allowed = {
         RAW_PROPOSAL_ENSEMBLE_KIND,
+        PRIOR_ENSEMBLE_KIND,
         POSTERIOR_ENSEMBLE_KIND,
         DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
     }

@@ -3,8 +3,18 @@
 # session (`so-recon --config configs/e03_smoke.yml train-proposal --corpus ...`) can
 # never become an automatic long-run. The §7.4 optimizer settings are unchanged; a
 # further per-session bound is available with `--epochs`.
+#
+# E03.2 — Task 09 first thin full-cycle knobs (plan §10.1, §12): the `inference:` block
+# below and the P1_E03_SMOKE session caps are the CYCLE smoke namespace consumed by
+# tests/integration/test_e03_learned_loop.py (B0 / B1 / raw q / M on one new T1 world).
+# They are SMOKE-ONLY and deliberately distinct from the scientific matrix of
+# configs/e03.yml (N32/N64, inference seeds 11/12, max_beta_steps 24): a smoke cycle must
+# never be mistakable for a matrix cell. The beta ladder stays COMPLETE to beta=1.0 —
+# only its resolution is coarser (max_beta_steps caps the CESS-adaptive tempering; the
+# target beta=1 is never weakened; §5.4). The 1e-5 truth-balance law is not a knob: it is
+# frozen in configs/e03_tolerances.yml and verified by the runners at start.
 spec_version: "4.0"
-config_version: "E03.1"
+config_version: "E03.2"
 project_name: SO-RECON
 
 paths:
@@ -25,15 +35,23 @@ julia:
   timeout_s: 1800
 
 resources:
-  profile: P1_LOOP
+  # SMOKE-ONLY cycle session caps (plan §12): the approved P1_E03_SMOKE preset. One
+  # bounded session per stage (corpus, B1, raw q, M) — a session over cap stops
+  # INCOMPLETE_BUDGET and is NEVER resumed automatically; finishing is an explicitly
+  # started new session, a human decision. Wall 3 h / 512 new forwards holds one
+  # complete N16 SMC method (<= 16*(1+12*2) = 400 forwards worst case at ~20 s per
+  # T1 forward) which a P1_LOOP hour cannot (Task 07 measured ~20 s/forward,
+  # 510 forwards for one complete N32 learned run). Memory, disk, threads and the
+  # per-job timeout stay exactly the P1_LOOP policy.
+  profile: P1_E03_SMOKE
   soft_bytes: 12884901888
   hard_bytes: 17179869184
   reserve_bytes: 6442450944
   disk_budget_bytes: 5368709120
-  wall_budget_s: 3600
+  wall_budget_s: 10800
   job_timeout_s: 900
   startup_timeout_s: 300
-  max_new_forward: 2000
+  max_new_forward: 512
   julia_workers: 1
   julia_threads: 4
   blas_threads: 1
@@ -41,12 +59,18 @@ resources:
   max_swap_growth_bytes: 536870912
 
 inference:
-  n_particles: 32
+  # SMOKE-ONLY cycle knobs (Task 09): N16 with a coarser-but-COMPLETE beta ladder, an
+  # inference seed outside the scientific {11, 12}. Contrast configs/e03.yml:
+  # n_particles 32, max_beta_steps 24, seed 11 — the scientific matrix namespace.
+  # moves_per_level keeps the E02 default (2); cess/resample fractions and the kernel
+  # scales are unchanged, so the smoke differs from a matrix cell only in N, ladder
+  # resolution and seed.
+  n_particles: 16
   cess_fraction: 0.8
   resample_fraction: 0.5
-  max_beta_steps: 24
+  max_beta_steps: 12
   moves_per_level: 2
-  seed: 11
+  seed: 1301
   rw_scale: 0.25
   pcn_scale: 0.2
 

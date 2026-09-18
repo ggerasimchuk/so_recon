@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 GIB = 1024**3
 MIB = 1024**2
 
-ResourceProfileId = Literal["P0_VERIFY", "P1_LOOP"]
+ResourceProfileId = Literal["P0_VERIFY", "P1_LOOP", "P1_E03_SMOKE"]
 
 #: COMPUTE §5: «резервом не менее 6 GiB для ОС и прочих процессов». A profile that
 #: reserves less than this is refused rather than quietly starving the machine.
@@ -143,9 +143,36 @@ P1_LOOP_PROFILE = ResourceProfile(
     max_swap_growth_bytes=512 * MIB,
 )
 
+#: P1_E03_SMOKE — the E03 first-thin-cycle session (plan E03 §12, Task 09): one complete
+#: SMC method at smoke knobs (N16, ≤12 tempering levels, 2 moves per level ⇒ ≤ 400 new
+#: forwards worst case) does not fit a P1_LOOP hour at the measured ~20 s per T1 forward,
+#: and §12 forbids quietly resuming over a cap to finish it. The preset therefore moves
+#: only the three session limits COMPUTE §§2, 10 scope per profile: the wall budget to
+#: three hours and the forward count to 512, leaving the per-job timeout, memory, disk,
+#: threads, poll interval and swap limit exactly as P1_LOOP. A session that exceeds these
+#: caps stops INCOMPLETE_BUDGET and is NEVER resumed automatically; finishing it is a new,
+#: explicitly started session — a human decision, not a config value.
+P1_E03_SMOKE_PROFILE = ResourceProfile(
+    profile="P1_E03_SMOKE",
+    soft_bytes=12 * GIB,
+    hard_bytes=16 * GIB,
+    reserve_bytes=6 * GIB,
+    disk_budget_bytes=5 * GIB,
+    wall_budget_s=10800,
+    job_timeout_s=900,
+    startup_timeout_s=300,
+    max_new_forward=512,
+    julia_workers=1,
+    julia_threads=4,
+    blas_threads=1,
+    poll_interval_s=0.25,
+    max_swap_growth_bytes=512 * MIB,
+)
+
 RESOURCE_PROFILES: dict[str, ResourceProfile] = {
     P0_VERIFY_PROFILE.profile: P0_VERIFY_PROFILE,
     P1_LOOP_PROFILE.profile: P1_LOOP_PROFILE,
+    P1_E03_SMOKE_PROFILE.profile: P1_E03_SMOKE_PROFILE,
 }
 
 

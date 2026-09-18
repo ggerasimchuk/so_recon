@@ -43,6 +43,11 @@ SCIENTIFIC_TARGET_IDENTITY_KIND = "e03-scientific-target-identity-1"
 #: publishing one must say so with exactly this marker; only beta=1 COMPLETE runs may use
 #: the posterior label.
 RAW_PROPOSAL_ENSEMBLE_KIND = "raw_proposal"
+#: §4.4/§10.1: B0 is the static conditional prior — p0 draws with proven provenance
+#: (`log_r == log_p0`). It is a legitimate ensemble with state evidence, but it is the
+#: UNCORRECTED prior: it never carries a posterior claim, and it is neither a raw learned
+#: proposal (that marker is q's) nor a beta<1 diagnostic partial.
+PRIOR_ENSEMBLE_KIND = "prior_ensemble"
 POSTERIOR_ENSEMBLE_KIND = "posterior"
 DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND = "diagnostic_partial"
 

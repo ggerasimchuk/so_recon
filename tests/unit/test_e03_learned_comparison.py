@@ -6,8 +6,8 @@ Rows this suite pins:
   draws whose sampling density EQUALS p0 (`log_r == log_p0`, the artifact-level
   provenance proof), demands their physical forwards, and never consults the learned
   proposal — so changing q cannot change the selected B0;
-* a raw-q ensemble is labelled `ensemble_kind=raw_proposal` and never carries a
-  posterior claim (plan §4.4);
+* a raw-q ensemble is labelled `ensemble_kind=raw_proposal` and B0's draws
+  `ensemble_kind=prior_ensemble`; neither ever carries a posterior claim (plan §4.4);
 * world averaging weights independent worlds equally — seed-averaged per world first,
   never a pooled pseudo-sample over rows or cells;
 * run diagnostics (beta path, pre-resampling ESS, per-kernel acceptance, ancestors,
@@ -30,6 +30,7 @@ import pytest
 from so_recon.paths import ProjectPaths
 from so_recon.validation.e03_protocol import (
     POSTERIOR_ENSEMBLE_KIND,
+    PRIOR_ENSEMBLE_KIND,
     RAW_PROPOSAL_ENSEMBLE_KIND,
 )
 from so_recon.validation.ensemble_states import (
@@ -205,6 +206,32 @@ def test_comparison_row_refuses_a_raw_proposal_posterior_claim() -> None:
     )
     assert row["posterior_claim"] is False
     assert row["ensemble_kind"] == RAW_PROPOSAL_ENSEMBLE_KIND
+
+
+def test_comparison_row_refuses_a_prior_ensemble_posterior_claim() -> None:
+    """B0's row exists, and it is the UNCORRECTED prior: never a posterior (plan §4.4)."""
+    products, scores = _products_fixture()
+    with pytest.raises(ValueError, match="posterior"):
+        comparison_row(
+            parent_id="e02-t1-v1-0008",
+            method_id="B0",
+            inference_seed=11,
+            ensemble_kind=PRIOR_ENSEMBLE_KIND,
+            posterior_claim=True,
+            products=products,
+            scores=scores,
+        )
+    row = comparison_row(
+        parent_id="e02-t1-v1-0008",
+        method_id="B0",
+        inference_seed=11,
+        ensemble_kind=PRIOR_ENSEMBLE_KIND,
+        posterior_claim=False,
+        products=products,
+        scores=scores,
+    )
+    assert row["ensemble_kind"] == PRIOR_ENSEMBLE_KIND
+    assert row["posterior_claim"] is False
 
 
 def test_comparison_row_carries_the_primary_metrics_and_products() -> None:
