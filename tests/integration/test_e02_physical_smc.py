@@ -182,7 +182,7 @@ def test_registered_physical_matrix_action() -> None:
 
     try:
         with PersistentJuliaWorker(
-            _julia(), ROOT / "julia", session, P1_LOOP_PROFILE, paths=paths, probe=probe
+            _julia(), ROOT / "julia", session, profile, paths=paths, probe=probe
         ) as worker:
             if action == "setup":
                 ref = prepare_physical_experiment(
