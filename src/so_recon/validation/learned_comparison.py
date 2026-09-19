@@ -1,7 +1,8 @@
 """The E03 comparison skeleton: per world/method/seed rows over the state evaluator.
 
-The scientific matrix (plan §10) is Task 11's; what this module fixes now is the
-STRUCTURE the matrix fills, and the two label laws that make a filled matrix honest:
+The scientific matrix itself (plan §10) is assembled by `validation.e03_report`; what
+this module fixes is the STRUCTURE that matrix fills, and the two label laws that make
+a filled matrix honest:
 
 * **B0 is the static conditional prior only** (plan §4.4, §10.1). The selection reads
   prior-start initial draws whose recorded sampling density EQUALS p0
@@ -13,8 +14,10 @@ STRUCTURE the matrix fills, and the two label laws that make a filled matrix hon
 
 Per-run rows flatten the evaluator's products and scores plus the run diagnostics
 the artifacts already carry (beta path, pre-resampling ESS, per-kernel acceptance,
-unique ancestors, distinct physical states, runtime/RSS/disk/failures). Fields the
-engine does not record (residual movement) are `None` with a note, never invented.
+unique ancestors, distinct physical states, runtime/RSS/disk/failures). Residual
+movement is Task 10's derivation (`validation.proposal_diagnostics`): it is summarised
+into the row when the caller supplies THIS run's diagnostic, and is an explicit absence
+with a note when it does not — never invented here.
 
 World averaging (plan §5.5) seeds-then-worlds: the per-world mean over inference
 seeds first, then equal weight per independent world. Cells, zones and rows are
@@ -32,7 +35,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib
 
@@ -63,15 +66,20 @@ from so_recon.validation.ensemble_states import (
     zone_value_map,
 )
 
+if TYPE_CHECKING:  # `proposal_diagnostics` pulls torch in; a row builder must stay light
+    from so_recon.validation.proposal_diagnostics import ResidualSensitivity
+
 #: The provenance statement a B0 selection carries on its face.
 B0_PROVENANCE = "prior_start_initial_draws_log_r_equals_log_p0"
 
-#: Why `residual_movement` is None in every row this version can build: the SMC
-#: checkpoint records moves without the z_perp they moved between, so the honest row
-#: is an explicit absence, not a number derived from something else.
+#: Why a row's `residual_movement` is None: the caller offered no residual diagnostic for
+#: this run. The number itself is NOT absent from the project any more —
+#: `validation.proposal_diagnostics.residual_l_sensitivity` derives it from the published
+#: pCN move records (plan §10.3) — so a row without it is a row whose caller did not pass
+#: it, never a claim that it cannot exist.
 RESIDUAL_MOVEMENT_NOTE = (
-    "not recorded by the SMC engine: per-move z_perp is absent from the checkpoint; "
-    "needs a versioned diagnostic before the number can exist (plan §10.3)"
+    "no residual diagnostic was supplied for this run: derive it with "
+    "validation.proposal_diagnostics.residual_l_sensitivity and pass it in (plan §10.3)"
 )
 
 
@@ -95,7 +103,9 @@ class RunDiagnostics:
     peak_rss_bytes: int | None
     output_bytes: int | None
     failures: int
-    residual_movement: None
+    #: The §10.3 residual movement, summarised from the run's own pCN acceptance records
+    #: (Task 10's derivation), or None when the caller offered none.
+    residual_movement: dict[str, Any] | None
     residual_movement_note: str
     n_particles: int
 
@@ -108,13 +118,41 @@ def _finite_or_none(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def residual_movement_summary(residual: ResidualSensitivity) -> dict[str, Any]:
+    """The row-sized view of Task 10's residual diagnostic (plan §10.2 «residual movement»).
+
+    A drop is only interpretable beside the perturbation that caused it, so the summary
+    carries the run's `config_hash` (which pins the pCN step size) and the `pcn_scale`
+    itself only when the producer verified the config against that hash. Nothing is
+    recomputed here: every field is copied from `ResidualSensitivity`.
+    """
+    return {
+        "median_log_l_drop": residual.median_log_l_drop,
+        "max_log_l_drop": residual.max_log_l_drop,
+        "acceptance_rate_scored": residual.acceptance_rate_scored,
+        "n_scored": residual.n_scored,
+        "n_residual_moves": residual.n_residual_moves,
+        "n_out_of_support": residual.n_out_of_support,
+        "n_before_tempering": residual.n_before_tempering,
+        "config_hash": residual.config_hash,
+        "pcn_scale": residual.pcn_scale,
+    }
+
+
 def run_diagnostics_from_payloads(
     smc_payload: Mapping[str, Any],
     checkpoint_manifest: Mapping[str, Any],
     *,
     forward_costs: Iterable[Mapping[str, Any]] = (),
+    residual: ResidualSensitivity | None = None,
 ) -> RunDiagnostics:
-    """Read one run's diagnostics from its `learned_smc.json`-shape payload and checkpoint."""
+    """Read one run's diagnostics from its `learned_smc.json`-shape payload and checkpoint.
+
+    `residual` is the run's OWN `residual_l_sensitivity` result; it is summarised into the
+    row as `residual_movement`. Passing another run's diagnostic would be a provenance
+    error the caller must not make, so the summary keeps the `config_hash` that identifies
+    the run whose moves produced it.
+    """
     state = checkpoint_manifest["state"]
     particles = list(state["particles"])
     diagnostics = state.get("diagnostics", {})
@@ -155,8 +193,10 @@ def run_diagnostics_from_payloads(
             int(session["output_bytes"]) if session.get("output_bytes") is not None else None
         ),
         failures=len(smc_payload.get("failures", [])),
-        residual_movement=None,
-        residual_movement_note=RESIDUAL_MOVEMENT_NOTE,
+        residual_movement=None if residual is None else residual_movement_summary(residual),
+        residual_movement_note=(
+            RESIDUAL_MOVEMENT_NOTE if residual is None else residual.derivation
+        ),
         n_particles=len(particles),
     )
 
@@ -233,11 +273,18 @@ def comparison_row(
     inference_seed: int,
     ensemble_kind: str,
     posterior_claim: bool,
+    n_particles: int | None = None,
+    scientific_target_identity: str | None = None,
     products: EnsembleStateProducts | None = None,
     scores: Any | None = None,
     run: RunDiagnostics | None = None,
 ) -> dict[str, Any]:
-    """One world/method/seed row of the comparison matrix (plan §10.2).
+    """One world/method/N/seed row of the comparison matrix (plan §10.2).
+
+    `n_particles` and `scientific_target_identity` are what makes a row a MATRIX CELL:
+    N is part of the §10.1 cell identity, and §4.3 requires B1 and M to be shown to infer
+    the same posterior before they are compared. `validation.e03_report` refuses a matrix
+    whose result rows omit either.
 
     A raw-q row exists (its state products and even its truth-conditional scores are
     legitimate diagnostics) but never with a posterior claim. The same holds for B0's
@@ -267,7 +314,16 @@ def comparison_row(
         "posterior_claim": posterior_claim,
         "estimator": "posterior_mean",
     }
+    if n_particles is not None:
+        row["n_particles"] = int(n_particles)
+    if scientific_target_identity is not None:
+        row["scientific_target_identity"] = scientific_target_identity
     if products is not None:
+        if n_particles is not None and int(n_particles) != products.n_particles:
+            raise ValueError(
+                f"the row declares n_particles={n_particles} but its products carry "
+                f"{products.n_particles}: the cell's N and the ensemble it scores disagree"
+            )
         row.update(
             {
                 "zone_names": list(products.zone_names),
@@ -629,5 +685,6 @@ __all__ = [
     "load_particle_states",
     "operational_products_from_bundle",
     "render_ensemble_state_maps",
+    "residual_movement_summary",
     "run_diagnostics_from_payloads",
 ]

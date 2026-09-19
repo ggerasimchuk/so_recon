@@ -47,6 +47,7 @@ from so_recon.validation.learned_comparison import (
     operational_products_from_bundle,
     run_diagnostics_from_payloads,
 )
+from so_recon.validation.proposal_diagnostics import ResidualSensitivity
 
 ONE_ZONE = ZoneSupport(
     names=("both-cells",), matrix=np.array([[1.0, 1.0]]), kind="primary_quadrants"
@@ -346,7 +347,83 @@ def test_run_diagnostics_from_payloads() -> None:
     assert run.output_bytes == 1000
     assert run.failures == 0
     assert run.residual_movement is None
-    assert "not recorded" in (run.residual_movement_note or "")
+    assert "no residual diagnostic was supplied" in (run.residual_movement_note or "")
+
+
+def test_run_diagnostics_carry_the_residual_movement_the_run_published() -> None:
+    residual = ResidualSensitivity(
+        config_hash="d" * 64,
+        pcn_scale=0.3,
+        n_residual_moves=5,
+        n_scored=3,
+        n_out_of_support=1,
+        n_before_tempering=1,
+        log_l_drops=(0.1, 0.4, 0.9),
+        median_log_l_drop=0.4,
+        max_log_l_drop=0.9,
+        acceptance_rate_scored=2 / 3,
+        acceptance_rate_all=0.8,
+        derivation="pcn log_alpha = min(0, beta * (log L' - log L))",
+    )
+    run = run_diagnostics_from_payloads(_smc_payload(), _moves_manifest(), residual=residual)
+    assert run.residual_movement == {
+        "median_log_l_drop": 0.4,
+        "max_log_l_drop": 0.9,
+        "acceptance_rate_scored": pytest.approx(2 / 3),
+        "n_scored": 3,
+        "n_residual_moves": 5,
+        "n_out_of_support": 1,
+        "n_before_tempering": 1,
+        "config_hash": "d" * 64,
+        "pcn_scale": 0.3,
+    }
+    assert run.residual_movement_note == residual.derivation
+    row = comparison_row(
+        parent_id="w0",
+        method_id="M",
+        inference_seed=11,
+        ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+        posterior_claim=True,
+        run=run,
+    )
+    assert row["residual_movement"]["median_log_l_drop"] == 0.4
+
+
+def test_a_row_names_its_particle_count_and_scientific_target() -> None:
+    row = comparison_row(
+        parent_id="w0",
+        method_id="B1",
+        inference_seed=12,
+        ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+        posterior_claim=True,
+        n_particles=64,
+        scientific_target_identity="e" * 64,
+    )
+    assert row["n_particles"] == 64
+    assert row["scientific_target_identity"] == "e" * 64
+
+
+def test_a_row_refuses_a_particle_count_its_products_contradict() -> None:
+    support = ONE_ZONE
+    zones = aggregate_particle_zones(
+        so=np.array([[0.5, 0.5], [0.7, 0.7]]),
+        pv=np.ones((2, 2)),
+        bo=np.ones((2, 2)),
+        support=support,
+    )
+    products = ensemble_state_products(
+        zones, np.array([0.5, 0.5]), support=support, s_labels=(0, 1)
+    )
+    with pytest.raises(ValueError, match="n_particles"):
+        comparison_row(
+            parent_id="w0",
+            method_id="M",
+            inference_seed=11,
+            ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+            posterior_claim=True,
+            n_particles=64,
+            products=products,
+        )
 
 
 # --------------------------------------------------------------------------------------

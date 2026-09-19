@@ -30,9 +30,21 @@
     "particle_counts": [32, 64],
     "inference_seeds": [11, 12],
     "main_matrix_smc_runs": 64,
+    "additional_methods": ["B0", "Q", "A_summary", "A_set"],
     "primary_support": "eight_quadrants",
+    "primary_estimator": "posterior_mean",
+    "primary_metric": "mae",
+    "secondary_metric": "rmse",
     "primary_month": 36,
-    "diagnostic_months": [12, 24]
+    "diagnostic_months": [12, 24],
+    "diagnostic_only_supports": ["layer_aggregates", "t4_remote_zones"],
+    "frozen_main_particle_count": 64,
+    "learning_curve": {
+      "registered_expansion": [128, 256],
+      "not_registered": [512],
+      "note": "128->256 is one registered bounded step; 512 is never started automatically."
+    },
+    "note": "8 evaluation parents x [B1, M] x N{32,64} x seeds{11,12} = 64 SMC runs. B0/Q, truth, T5, the second training seed and the ablations are counted additionally, never inside those 64."
   },
   "t5": {
     "enabled": true,
