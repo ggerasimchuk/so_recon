@@ -34,6 +34,7 @@ from so_recon.config.resources import (
     P1_E02_MATRIX_PROFILE,
     P1_E03_SMOKE_PROFILE,
     P1_LOOP_PROFILE,
+    RESOURCE_PROFILES,
     MissingResourceProfileError,
     ResourceProfile,
     UnapprovedResourceProfileError,
@@ -68,6 +69,7 @@ from so_recon.simulator.contracts import (
     ForwardResult,
     ForwardStatus,
 )
+from tests.integration.test_e02_physical_smc import _profile as e02_physical_profile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -363,6 +365,36 @@ def test_presets_are_looked_up_by_name() -> None:
     assert resource_profile("P1_LOOP") == P1_LOOP_PROFILE
     with pytest.raises(ValueError, match="unknown resource profile"):
         resource_profile("P2_FIELD")
+
+
+# ---------------------------------- the E02 matrix driver's profile override
+
+
+def test_the_e02_matrix_driver_defaults_to_p1_loop_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("E02_PHYSICAL_PROFILE", raising=False)
+    assert e02_physical_profile() == P1_LOOP_PROFILE
+
+
+def test_the_e02_matrix_driver_selects_the_matrix_profile_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("E02_PHYSICAL_PROFILE", "P1_E02_MATRIX")
+    profile = e02_physical_profile()
+    assert profile == P1_E02_MATRIX_PROFILE
+    assert profile.wall_budget_s == 21600
+
+
+def test_the_e02_matrix_driver_refuses_an_unknown_profile_name_loudly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("E02_PHYSICAL_PROFILE", "P2_MADE_UP")
+    with pytest.raises(ValueError, match="unknown resource profile") as excinfo:
+        e02_physical_profile()
+    assert "P2_MADE_UP" in str(excinfo.value)
+    for name in RESOURCE_PROFILES:
+        assert name in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

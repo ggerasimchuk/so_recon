@@ -12,7 +12,7 @@ from typing import cast
 import pytest
 
 from so_recon.config.inference import InferenceConfig
-from so_recon.config.resources import P1_LOOP_PROFILE
+from so_recon.config.resources import P1_LOOP_PROFILE, ResourceProfile, resource_profile
 from so_recon.environment.resources import ResourceSnapshot, probe_resources
 from so_recon.paths import ProjectPaths
 from so_recon.registry.artifact import ArtifactRef, register_artifact
@@ -49,6 +49,22 @@ def _required(name: str) -> str:
 def _path(name: str, paths: ProjectPaths) -> Path:
     value = Path(_required(name))
     return value if value.is_absolute() else paths.root / value
+
+
+def _profile() -> ResourceProfile:
+    """The session's resource profile: P1_LOOP unless E02_PHYSICAL_PROFILE overrides it.
+
+    The matrix's own P1_E02_MATRIX preset (six-hour wall budget, COMPUTE §§2, 10 fix the
+    rest) is reachable only by naming it here explicitly; an absent variable keeps
+    exactly today's P1_LOOP behaviour so nothing already recorded changes meaning. An
+    unknown name fails loudly through `resource_profile` rather than falling back to a
+    default — a silent fallback would run a six-hour campaign under a one-hour cap, the
+    defect this override exists to remove.
+    """
+    name = os.environ.get("E02_PHYSICAL_PROFILE")
+    if name is None:
+        return P1_LOOP_PROFILE
+    return resource_profile(name)
 
 
 def _julia() -> Path:
@@ -121,9 +137,10 @@ def test_registered_physical_matrix_action() -> None:
     session_id = os.environ.get("E02_PHYSICAL_SESSION_ID", f"{experiment_id}-{suffix}")
     session = paths.artifacts / session_id
     probe = _resource_probe(session)
+    profile = _profile()
     ledger = (
         BudgetLedger.start(
-            profile=P1_LOOP_PROFILE,
+            profile=profile,
             path=session / "ledger.json",
             session_id=session_id,
             probe=probe,
@@ -131,7 +148,7 @@ def test_registered_physical_matrix_action() -> None:
         if parent_ledger_path is None
         else BudgetLedger.resume(
             parent_path=parent_ledger_path,
-            profile=P1_LOOP_PROFILE,
+            profile=profile,
             path=session / "ledger.json",
             session_id=session_id,
             probe=probe,
