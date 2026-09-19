@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 GIB = 1024**3
 MIB = 1024**2
 
-ResourceProfileId = Literal["P0_VERIFY", "P1_LOOP", "P1_E03_SMOKE"]
+ResourceProfileId = Literal["P0_VERIFY", "P1_LOOP", "P1_E03_SMOKE", "P1_E02_MATRIX"]
 
 #: COMPUTE §5: «резервом не менее 6 GiB для ОС и прочих процессов». A profile that
 #: reserves less than this is refused rather than quietly starving the machine.
@@ -172,10 +172,46 @@ P1_E03_SMOKE_PROFILE = ResourceProfile(
     max_swap_growth_bytes=512 * MIB,
 )
 
+#: P1_E02_MATRIX — the PER-RUN session cap of the remaining E02 native matrix (4
+#: experiments x particle counts {32, 64} x inference seeds {11, 12} = 16 posterior runs,
+#: launched one `inverse-p1` command at a time on the partner's machine). A measured N32
+#: learned run took 510 forwards at ~20 s each (~2.9 h); an N64 run is roughly double —
+#: neither fits inside a P1_LOOP hour, and plan E03 §12 forbids quietly resuming a run
+#: over its cap to finish it («множество автоматических resume по одному часу не должно
+#: обходить запрет на несанкционированный long-run»). That rule is about authorization,
+#: not about the count: the partner has explicitly authorised this campaign, so the
+#: honest fix is a session window that holds one complete run, not a resume loop that
+#: works around the cap. The preset therefore moves only the two session limits COMPUTE
+#: §§2, 10 scope per profile: the wall budget to six hours (one complete N64 run at the
+#: measured per-forward cost, with margin) and the forward count to 1200 (an N64 run's
+#: ~1020 forwards, with margin) — leaving the per-job timeout, memory, disk, threads, poll
+#: interval and swap limit exactly as P1_LOOP. A session that exceeds these caps still
+#: stops INCOMPLETE_BUDGET and is NEVER resumed automatically; finishing it is a new,
+#: explicitly started session — a human decision, not a config value. Selecting this
+#: profile for the matrix runs is a separate, deliberate step; this preset only makes the
+#: budget exist and be validated.
+P1_E02_MATRIX_PROFILE = ResourceProfile(
+    profile="P1_E02_MATRIX",
+    soft_bytes=12 * GIB,
+    hard_bytes=16 * GIB,
+    reserve_bytes=6 * GIB,
+    disk_budget_bytes=5 * GIB,
+    wall_budget_s=21600,
+    job_timeout_s=900,
+    startup_timeout_s=300,
+    max_new_forward=1200,
+    julia_workers=1,
+    julia_threads=4,
+    blas_threads=1,
+    poll_interval_s=0.25,
+    max_swap_growth_bytes=512 * MIB,
+)
+
 RESOURCE_PROFILES: dict[str, ResourceProfile] = {
     P0_VERIFY_PROFILE.profile: P0_VERIFY_PROFILE,
     P1_LOOP_PROFILE.profile: P1_LOOP_PROFILE,
     P1_E03_SMOKE_PROFILE.profile: P1_E03_SMOKE_PROFILE,
+    P1_E02_MATRIX_PROFILE.profile: P1_E02_MATRIX_PROFILE,
 }
 
 

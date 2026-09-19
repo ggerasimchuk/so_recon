@@ -31,6 +31,7 @@ from so_recon.config.resources import (
     MIB,
     MIN_RESERVE_BYTES,
     P0_VERIFY_PROFILE,
+    P1_E02_MATRIX_PROFILE,
     P1_E03_SMOKE_PROFILE,
     P1_LOOP_PROFILE,
     MissingResourceProfileError,
@@ -328,6 +329,32 @@ def test_p1_e03_smoke_preset_moves_only_the_session_limits_of_p1_loop() -> None:
     assert resource_profile("P1_E03_SMOKE") == P1_E03_SMOKE_PROFILE
     assert require_resource_profile(P1_E03_SMOKE_PROFILE, command="forward") is (
         P1_E03_SMOKE_PROFILE
+    )
+
+
+def test_p1_e02_matrix_preset_moves_only_the_session_limits_of_p1_loop() -> None:
+    """The remaining E02 native matrix needs one complete run per session (plan E03 §12).
+
+    A measured N32 learned run took 510 forwards at ~20 s each; an N64 run is roughly
+    double, and neither fits a P1_LOOP hour. Everything but the wall budget and the
+    forward count stays P1_LOOP: a matrix session is the same machine policy with a
+    longer single sitting, never a relabelled memory or disk allowance.
+    """
+    p1 = P1_LOOP_PROFILE.model_dump()
+    matrix = P1_E02_MATRIX_PROFILE.model_dump()
+    assert {k for k in p1 if p1[k] != matrix[k]} == {
+        "profile",
+        "wall_budget_s",
+        "max_new_forward",
+    }
+    assert (P1_E02_MATRIX_PROFILE.wall_budget_s, P1_E02_MATRIX_PROFILE.max_new_forward) == (
+        21600,
+        1200,
+    )
+    assert P1_E02_MATRIX_PROFILE.job_timeout_s == P1_LOOP_PROFILE.job_timeout_s
+    assert resource_profile("P1_E02_MATRIX") == P1_E02_MATRIX_PROFILE
+    assert require_resource_profile(P1_E02_MATRIX_PROFILE, command="forward") is (
+        P1_E02_MATRIX_PROFILE
     )
 
 
