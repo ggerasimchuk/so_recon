@@ -181,15 +181,18 @@ P1_E03_SMOKE_PROFILE = ResourceProfile(
 #: обходить запрет на несанкционированный long-run»). That rule is about authorization,
 #: not about the count: the partner has explicitly authorised this campaign, so the
 #: honest fix is a session window that holds one complete run, not a resume loop that
-#: works around the cap. The preset therefore moves only the two session limits COMPUTE
-#: §§2, 10 scope per profile: the wall budget to six hours (one complete N64 run at the
-#: measured per-forward cost, with margin) and the forward count to 1200 (an N64 run's
-#: ~1020 forwards, with margin) — leaving the per-job timeout, memory, disk, threads, poll
-#: interval and swap limit exactly as P1_LOOP. A session that exceeds these caps still
-#: stops INCOMPLETE_BUDGET and is NEVER resumed automatically; finishing it is a new,
-#: explicitly started session — a human decision, not a config value. Selecting this
-#: profile for the matrix runs is a separate, deliberate step; this preset only makes the
-#: budget exist and be validated.
+#: works around the cap. The preset therefore moves only the ONE session limit that needs
+#: to move: the wall budget, to six hours (one complete N64 run at the measured
+#: per-forward cost, with margin). `max_new_forward` stays at P1_LOOP's 2000 — at
+#: ~12-20 s per forward a six-hour window can exceed 1200 forwards well before it exceeds
+#: six hours, so a lower forward cap would just relocate the extra stop this profile
+#: exists to remove from the wall budget to the forward counter. The wall window is meant
+#: to be the single binding cap; the forward counter, per-job timeout, memory, disk,
+#: threads, poll interval and swap limit all stay exactly P1_LOOP's. A session that
+#: exceeds these caps still stops INCOMPLETE_BUDGET and is NEVER resumed automatically;
+#: finishing it is a new, explicitly started session — a human decision, not a config
+#: value. Selecting this profile for the matrix runs is a separate, deliberate step; this
+#: preset only makes the budget exist and be validated.
 P1_E02_MATRIX_PROFILE = ResourceProfile(
     profile="P1_E02_MATRIX",
     soft_bytes=12 * GIB,
@@ -199,7 +202,7 @@ P1_E02_MATRIX_PROFILE = ResourceProfile(
     wall_budget_s=21600,
     job_timeout_s=900,
     startup_timeout_s=300,
-    max_new_forward=1200,
+    max_new_forward=2000,
     julia_workers=1,
     julia_threads=4,
     blas_threads=1,
