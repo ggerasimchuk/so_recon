@@ -19,10 +19,26 @@ are `validation.learned_comparison`, and the residual diagnostic is
   matrix cannot present itself as complete (§10.1).
 
 * **A beta<1 run is a diagnostic.** It occupies its cell as `INCOMPLETE` — visible, with
-  its beta and algorithm status in the reason — and is excluded from `results_for`, so it
-  cannot enter the accuracy curve (§10.4). Removing incomplete or failed cells before
-  averaging and calling the remainder a win is exactly what `WorldAverage.evidence` makes
-  impossible to do silently.
+  the beta and the algorithm status THE ROW PUBLISHES in the reason — and is excluded from
+  `results_for`, so it cannot enter the accuracy curve (§10.4). Removing incomplete or
+  failed cells before averaging and calling the remainder a win is exactly what
+  `WorldAverage.evidence` makes impossible to do silently.
+
+* **The label is not the evidence** (§4.4). Every main cell's status is derived from the
+  row's own `beta` and `algorithm_status` and the `ensemble_kind` is cross-checked against
+  them — on the assembly path, not only in the payload helper — so a row labelled
+  `posterior` at beta<1 is refused instead of becoming a `RESULT`. A row that states the
+  label and withholds the two fields it is derived from is refused likewise.
+
+* **The primary score is the frozen one** (§10.2). A scored main row must name the support
+  its metrics were computed on (`support_kind`, copied by `learned_comparison` from the
+  products) and it must be `ensemble_states.PRIMARY_SUPPORT_KIND` with the posterior-mean
+  estimator: a layer-aggregate or T4-remote-zone error written under the key `mae` is
+  refused rather than averaged as if it were the eight-quadrant number. The report MONTH
+  is not yet bound — no producer contract carries it (routed to Task 12).
+
+* **One particle count per average** (§11). `world_average` covers exactly one N and says
+  which; it refuses to pool N32 with N64, the mixture `relative_improvement` refuses.
 
 * **Aggregation is §5.5.** Seeds are averaged WITHIN a world, then worlds equally. The
   value is produced by `learned_comparison.average_over_worlds`, so its cross-method
@@ -61,6 +77,7 @@ from so_recon.validation.e03_protocol import (
     completed_posterior,
     ensemble_kind,
 )
+from so_recon.validation.ensemble_states import DIAGNOSTIC_LAYER_KIND, PRIMARY_SUPPORT_KIND
 from so_recon.validation.learned_comparison import average_over_worlds
 
 E03_COMPARISON_REPORT_SCHEMA = "e03-comparison-report-1"
@@ -79,6 +96,13 @@ PRIMARY_SUPPORT = "eight_quadrants"
 PRIMARY_ESTIMATOR = "posterior_mean"
 DIAGNOSTIC_MONTHS: tuple[int, ...] = (12, 24)
 DIAGNOSTIC_ONLY_SUPPORTS: tuple[str, ...] = ("layer_aggregates", "t4_remote_zones")
+
+#: `DIAGNOSTIC_ONLY_SUPPORTS` under the names the PRODUCER writes: a support's own
+#: `ensemble_states.ZoneSupport.kind`, which every `EnsembleStateProducts` carries and
+#: `learned_comparison.comparison_row` copies into a row as `support_kind`. A row's
+#: support is checked against `ensemble_states.PRIMARY_SUPPORT_KIND`, so the frozen
+#: support is one value stated by the producer and by this report, never a label alone.
+DIAGNOSTIC_ONLY_SUPPORT_KINDS: tuple[str, ...] = (DIAGNOSTIC_LAYER_KIND,)
 
 #: §11 PROMISING_STATE: the frozen main comparison is the N64 slice; N32 stays a
 #: convergence/cost diagnostic and is never a way to pick the smaller error.
@@ -187,23 +211,63 @@ def _row_cell(row: Mapping[str, Any]) -> MatrixCell:
     )
 
 
-def _row_status(row: Mapping[str, Any]) -> tuple[CellStatus, str]:
-    kind = str(row.get("ensemble_kind", ""))
-    if kind == POSTERIOR_ENSEMBLE_KIND:
-        return "RESULT", "beta=1 COMPLETE posterior ensemble"
-    if kind == DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND:
-        beta = row.get("beta")
-        status = row.get("algorithm_status")
-        return (
-            "INCOMPLETE",
-            f"diagnostic partial ensemble (beta={beta!r}, algorithm_status={status!r}): a "
-            "beta<1 or incomplete run is a diagnostic and never enters the accuracy curve",
+def _check_primary_score(row: Mapping[str, Any]) -> None:
+    """§10.2: a main cell's score is the frozen primary one or it is not a main cell.
+
+    The support and the estimator are published BY the row (`learned_comparison`
+    copies them from the products that produced the metrics), so a layer-aggregate or
+    T4-remote-zone MAE written under the key `mae` is refused here instead of being
+    averaged as if it were the eight-quadrant number. A row carrying no metric at all
+    makes no accuracy claim and has nothing to check.
+    """
+    if not any(metric in row for metric in (PRIMARY_METRIC, SECONDARY_METRIC)):
+        return
+    support = row.get("support_kind")
+    if support is None:
+        raise ValueError(
+            f"a scored main-matrix row carries {PRIMARY_METRIC!r}/{SECONDARY_METRIC!r} but "
+            "names no support_kind: the frozen primary score is PV-weighted error over the "
+            f"eight non-overlapping quadrants ({PRIMARY_SUPPORT_KIND!r}), and an unnamed "
+            "support cannot be told apart from a layer aggregate (plan §10.2)"
         )
-    raise ValueError(
-        f"a main-matrix cell carries ensemble_kind {kind!r}: the main evaluation compares "
-        "completed SMC posteriors, and an uncorrected prior or raw proposal ensemble is "
-        "additional evidence reported under its own method, not a main cell"
-    )
+    if str(support) != PRIMARY_SUPPORT_KIND:
+        raise ValueError(
+            f"a main-matrix row was scored on support {support!r}, not the frozen primary "
+            f"{PRIMARY_SUPPORT_KIND!r}: layer aggregates and T4 remote zones are separate "
+            "diagnostics and never re-enter the primary score (plan §10.2)"
+        )
+    estimator = row.get("estimator")
+    if str(estimator) != PRIMARY_ESTIMATOR:
+        raise ValueError(
+            f"a main-matrix row declares estimator {estimator!r}: the frozen primary "
+            f"estimator is {PRIMARY_ESTIMATOR!r} (plan §10.2)"
+        )
+
+
+def _row_status(row: Mapping[str, Any]) -> tuple[CellStatus, str]:
+    """One main cell's status, derived from the run's OWN beta and algorithm status.
+
+    The `ensemble_kind` label decides nothing here: it is cross-checked against the beta
+    and the status the row publishes by `cell_status_from_learned_smc_payload`, so a row
+    labelled `posterior` at beta<1 is refused on the ASSEMBLY path and can never become a
+    `RESULT` that enters `results_for` or a world average (§4.4).
+    """
+    kind = str(row.get("ensemble_kind", ""))
+    if kind not in (POSTERIOR_ENSEMBLE_KIND, DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND):
+        raise ValueError(
+            f"a main-matrix cell carries ensemble_kind {kind!r}: the main evaluation compares "
+            "completed SMC posteriors, and an uncorrected prior or raw proposal ensemble is "
+            "additional evidence reported under its own method, not a main cell"
+        )
+    if row.get("beta") is None or not str(row.get("algorithm_status") or ""):
+        raise ValueError(
+            f"a main-matrix row labelled {kind!r} publishes beta={row.get('beta')!r} and "
+            f"algorithm_status={row.get('algorithm_status')!r}: §4.4 derives the label FROM "
+            "those two, so a row that omits them states a label and withholds the evidence "
+            "for it — and the label is not the evidence"
+        )
+    _check_primary_score(row)
+    return cell_status_from_learned_smc_payload(row)
 
 
 def _check_one_scientific_target(outcomes: Sequence[CellOutcome]) -> dict[str, str]:
@@ -316,9 +380,11 @@ class ComparisonMatrix:
                 "secondary_metric": SECONDARY_METRIC,
                 "month": PRIMARY_MONTH,
                 "support": PRIMARY_SUPPORT,
+                "support_kind": PRIMARY_SUPPORT_KIND,
                 "estimator": PRIMARY_ESTIMATOR,
                 "diagnostic_months": list(DIAGNOSTIC_MONTHS),
                 "diagnostic_only_supports": list(DIAGNOSTIC_ONLY_SUPPORTS),
+                "diagnostic_only_support_kinds": list(DIAGNOSTIC_ONLY_SUPPORT_KINDS),
             },
             "completeness": self.completeness,
             "complete": self.complete,
@@ -402,6 +468,10 @@ def assemble_comparison_matrix(
 def cell_status_from_learned_smc_payload(payload: Mapping[str, Any]) -> tuple[CellStatus, str]:
     """Derive one run's cell status from what `learned_smc.json` actually publishes.
 
+    This is also the ONLY status path of the matrix: `_row_status` calls it, because a
+    `comparison_row` publishes `beta`, `algorithm_status` and `ensemble_kind` under the
+    same names and types as the run payload does, so one reader serves both.
+
     Reads `beta`, `algorithm_status` and `ensemble_kind` — the keys the producer writes
     with the types it writes them in — and NEVER `posterior_claim`, which
     `inference.learned_loop` publishes as prose while `ml.contracts` types it `bool`: both
@@ -439,7 +509,8 @@ class WorldAverage:
 
     method_id: str
     metric: str
-    n_particles: int | None
+    #: The ONE particle count the average covers: never a mixture of N32 and N64 (§11).
+    n_particles: int
     value: float
     world_values: Mapping[str, float]
     n_worlds: int
@@ -466,19 +537,38 @@ def world_average(
     metric: str = SECONDARY_METRIC,
     n_particles: int | None = FROZEN_MAIN_PARTICLE_COUNT,
 ) -> WorldAverage:
-    """Average ONE method's completed results: seeds within a world, then equal worlds.
+    """Average ONE method's completed results at ONE particle count: seeds within a world,
+    then equal worlds.
 
     The number itself is `learned_comparison.average_over_worlds`, so its refusal to pool
     methods stands behind this call too. Cells without a result are not quietly dropped:
     they are named in `missing_cells`, and `evidence` becomes `PARTIAL` — «partial
     execution остаётся partial evidence» (§10.1), and §10.4 forbids removing incomplete or
     failed cases before averaging and calling the remainder a win.
+
+    `n_particles=None` means «the count this matrix plans for this method» and is refused
+    when that is more than one: §11's frozen main comparison is the N64 slice, and folding
+    N32 into the same seed mean would build an accuracy number on a convergence
+    diagnostic — the very mixture `relative_improvement` refuses. The returned
+    `n_particles` is therefore always the single count the average actually covers.
     """
     if not isinstance(method_id, str):
         raise ValueError(
             f"world_average takes exactly one method, got {method_id!r}: averaging across "
             "methods pools them, which plan §5.5 forbids"
         )
+    if n_particles is None:
+        planned_counts = sorted({cell.n_particles for cell in matrix.cells_for(method_id)})
+        if len(planned_counts) > 1:
+            raise ValueError(
+                f"method {method_id!r} is planned at particle counts {planned_counts}: an "
+                "average is over one particle count, because the frozen main comparison is "
+                f"N={FROZEN_MAIN_PARTICLE_COUNT} and pooling N32 with N64 into one seed mean "
+                "turns a convergence diagnostic into part of the accuracy number (plan §11) "
+                f"— call world_average with n_particles={FROZEN_MAIN_PARTICLE_COUNT}"
+            )
+        if planned_counts:
+            n_particles = planned_counts[0]
     rows = matrix.results_for(method_id, n_particles=n_particles)
     if not rows:
         raise ValueError(
@@ -508,7 +598,9 @@ def world_average(
     return WorldAverage(
         method_id=method_id,
         metric=metric,
-        n_particles=n_particles,
+        # Every row in the slice carries one count (they fill cells of one N), so the
+        # average can always state the count it covers.
+        n_particles=int(rows[0]["n_particles"]) if n_particles is None else int(n_particles),
         value=average_over_worlds(rows, metric),
         world_values=world_values,
         n_worlds=len(world_values),
@@ -870,6 +962,7 @@ __all__ = [
     "ComparisonMatrix",
     "DIAGNOSTIC_MONTHS",
     "DIAGNOSTIC_ONLY_SUPPORTS",
+    "DIAGNOSTIC_ONLY_SUPPORT_KINDS",
     "E03_COMPARISON_REPORT_SCHEMA",
     "FROZEN_MAIN_PARTICLE_COUNT",
     "MAIN_METHOD_IDS",

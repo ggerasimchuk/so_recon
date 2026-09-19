@@ -8,22 +8,35 @@ What this suite pins is not new metric mathematics (that lives in `ensemble_stat
 * every planned cell leaves a mark: a result, an explicit incomplete, an explicit failure
   or an explicit NOT_RUN — a cell cannot vanish, and a partial matrix cannot call itself
   complete (§10.1 «partial execution остаётся partial evidence»);
-* a beta<1 run is a diagnostic and never enters the accuracy curve (§10.4);
-* averaging is seeds-within-world then equal worlds, and an average built on a matrix with
-  holes reports PARTIAL evidence instead of a clean number (§5.5, §10.4);
+* a beta<1 run is a diagnostic and never enters the accuracy curve (§10.4), and the LABEL
+  never decides that: a row whose `ensemble_kind` disagrees with its own beta is refused
+  on the assembly path, not only in the payload helper (§4.4);
+* a main cell's score is the frozen primary one: the eight non-overlapping quadrants with
+  the posterior mean. A layer-aggregate MAE written under the key `mae` is refused (§10.2);
+* averaging is seeds-within-world then equal worlds at ONE particle count, and an average
+  built on a matrix with holes reports PARTIAL evidence instead of a clean number
+  (§5.5, §10.4, §11);
 * B1 and M are compared only when their scientific target identity is EQUAL (§4.3);
 * the cold-start cost is the headline, a shared cache never makes the second method free,
   and the break-even exists only with positive online saving (§10.4);
 * a T5 fine child is a paired view, not a ninth world, and an unrun fine child is
   NOT_RUN/resource-limited, never a PASS (§3.3).
+
+The rows are built by `learned_comparison.comparison_row` — the PRODUCER — and their
+metrics by the real `ensemble_states` scorer on a hand-computable one-zone support, so a
+test can never pass against a row shape the producer does not publish. Rows that are
+mislabelled on purpose are derived from a producer row by editing the published payload,
+which is the only way such a row can reach the assembler in the first place.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from so_recon.ml.contracts import ComparisonMethod, ComparisonParent, ComparisonProtocol
@@ -48,10 +61,34 @@ from so_recon.validation.e03_report import (
     verify_comparison_config,
     world_average,
 )
+from so_recon.validation.ensemble_states import (
+    DIAGNOSTIC_LAYER_KIND,
+    PRIMARY_SUPPORT_KIND,
+    EnsembleStateProducts,
+    EnsembleStateScores,
+    ZoneSupport,
+    aggregate_particle_zones,
+    ensemble_state_products,
+    score_ensemble_states,
+)
+from so_recon.validation.learned_comparison import comparison_row
 
 REPO = Path(__file__).resolve().parents[2]
 HASH = "a" * 64
 IDENTITY = "b" * 64
+
+#: A one-zone stand-in for the frozen primary support: with a single zone the PV-weighted
+#: MAE and RMSE are both exactly |posterior mean - truth|, so every metric in this suite
+#: is hand-computable while still coming out of the real scorer.
+PRIMARY_ONE_ZONE = ZoneSupport(
+    names=("q0",), matrix=np.array([[1.0, 1.0]]), kind=PRIMARY_SUPPORT_KIND
+)
+#: The same geometry declared as a layer aggregate — a §10.2 diagnostic-only support.
+LAYER_ONE_ZONE = ZoneSupport(
+    names=("layer-0",), matrix=np.array([[1.0, 1.0]]), kind=DIAGNOSTIC_LAYER_KIND
+)
+
+DEFAULT_ERROR = 0.2
 
 
 def _ref() -> dict[str, Any]:
@@ -101,25 +138,57 @@ def _protocol(parent_ids: tuple[str, ...]) -> ComparisonProtocol:
     )
 
 
+def _evidence(
+    n_particles: int, error: float, support: ZoneSupport
+) -> tuple[EnsembleStateProducts, EnsembleStateScores]:
+    """Real products and real scores whose MAE/RMSE are exactly `error`.
+
+    Every particle carries So = 0.5 + error on both cells and the truth carries 0.5, so
+    on one zone the PV-weighted MAE and RMSE are both |error|.
+    """
+    so = np.full((n_particles, 2), 0.5 + error)
+    ones = np.ones((n_particles, 2))
+    zones = aggregate_particle_zones(so=so, pv=ones, bo=ones, support=support)
+    weights = np.full(n_particles, 1.0 / n_particles)
+    products = ensemble_state_products(zones, weights, support=support)
+    scores = score_ensemble_states(
+        zones,
+        weights,
+        truth_so=np.full(2, 0.5),
+        truth_pv=np.ones(2),
+        support=PRIMARY_ONE_ZONE,
+    )
+    return products, scores
+
+
 def _row(
     parent_id: str,
     method_id: str,
     n_particles: int,
     inference_seed: int,
-    **overrides: Any,
+    *,
+    error: float = DEFAULT_ERROR,
+    ensemble_kind: str = POSTERIOR_ENSEMBLE_KIND,
+    beta: float | None = 1.0,
+    algorithm_status: str | None = "COMPLETE",
+    identity: str | None = IDENTITY,
+    support: ZoneSupport = PRIMARY_ONE_ZONE,
 ) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        "parent_id": parent_id,
-        "method_id": method_id,
-        "n_particles": n_particles,
-        "inference_seed": inference_seed,
-        "ensemble_kind": POSTERIOR_ENSEMBLE_KIND,
-        "scientific_target_identity": IDENTITY,
-        "mae": 0.1,
-        "rmse": 0.2,
-    }
-    row.update(overrides)
-    return row
+    """One matrix row, built by the PRODUCER `comparison_row`, never by hand."""
+    products, scores = _evidence(n_particles, error, support)
+    return comparison_row(
+        parent_id=parent_id,
+        method_id=method_id,
+        inference_seed=inference_seed,
+        ensemble_kind=ensemble_kind,
+        posterior_claim=ensemble_kind == POSTERIOR_ENSEMBLE_KIND,
+        beta=beta,
+        algorithm_status=algorithm_status,
+        n_particles=n_particles,
+        scientific_target_identity=identity,
+        products=products,
+        scores=scores,
+    )
 
 
 def _full_rows(parent_ids: tuple[str, ...], **overrides: Any) -> list[dict[str, Any]]:
@@ -130,6 +199,14 @@ def _full_rows(parent_ids: tuple[str, ...], **overrides: Any) -> list[dict[str, 
         for n_particles in (32, 64)
         for seed in (11, 12)
     ]
+
+
+def _is_cell(row: Mapping[str, Any], method_id: str, n_particles: int, seed: int) -> bool:
+    return bool(
+        row["method_id"] == method_id
+        and row["n_particles"] == n_particles
+        and row["inference_seed"] == seed
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -234,39 +311,134 @@ def test_a_row_outside_the_planned_matrix_is_reported_not_silently_accepted() ->
 def test_a_main_cell_filled_with_a_prior_ensemble_is_refused() -> None:
     parents = ("w0",)
     rows = _full_rows(parents)
-    rows[0]["ensemble_kind"] = PRIOR_ENSEMBLE_KIND
+    rows[0] = _row(
+        rows[0]["parent_id"],
+        rows[0]["method_id"],
+        rows[0]["n_particles"],
+        rows[0]["inference_seed"],
+        ensemble_kind=PRIOR_ENSEMBLE_KIND,
+        beta=None,
+        algorithm_status=None,
+    )
     with pytest.raises(ValueError, match="prior_ensemble"):
         assemble_comparison_matrix(_protocol(parents), rows)
 
 
 # --------------------------------------------------------------------------------------
-# beta<1 and the accuracy curve
+# beta<1, the label, and the accuracy curve (§4.4, §10.4)
 # --------------------------------------------------------------------------------------
 
 
 def test_a_beta_below_one_run_is_incomplete_and_never_enters_the_accuracy_curve() -> None:
     parents = ("w0",)
-    rows = _full_rows(parents)
-    for row in rows:
-        if row["method_id"] == "M" and row["n_particles"] == 64 and row["inference_seed"] == 12:
-            row.update(
-                {
-                    "ensemble_kind": DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
-                    "beta": 0.72,
-                    "algorithm_status": "INCOMPLETE_BUDGET",
-                    "rmse": 0.0,
-                }
+    rows = [
+        (
+            _row(
+                row["parent_id"],
+                "M",
+                64,
+                12,
+                error=0.0,
+                ensemble_kind=DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
+                beta=0.72,
+                algorithm_status="INCOMPLETE_BUDGET",
             )
+            if _is_cell(row, "M", 64, 12)
+            else row
+        )
+        for row in _full_rows(parents)
+    ]
     matrix = assemble_comparison_matrix(_protocol(parents), rows)
     incomplete = [outcome for outcome in matrix.outcomes if outcome.status == "INCOMPLETE"]
     assert len(incomplete) == 1
+    # The reason names the producer's OWN beta and status, not None: the assembler reads
+    # the keys `comparison_row` actually writes.
     assert "0.72" in incomplete[0].reason
+    assert "INCOMPLETE_BUDGET" in incomplete[0].reason
     assert matrix.complete is False
     kept = matrix.results_for("M", n_particles=64)
     assert [row["inference_seed"] for row in kept] == [11]
     average = world_average(matrix, method_id="M", metric="rmse", n_particles=64)
-    assert average.value == pytest.approx(0.2)
+    assert average.value == pytest.approx(DEFAULT_ERROR)
     assert average.evidence == "PARTIAL"
+
+
+def test_a_row_labelled_posterior_against_its_own_beta_is_refused_by_the_assembler() -> None:
+    """§4.4: the label is not the evidence — on the ASSEMBLY path, not only in a helper.
+
+    A producer row cannot be built this way (`comparison_row` refuses it), so the lie can
+    only reach the matrix as an edited payload — which is exactly the case the assembler
+    has to catch, because a row trusted on its `ensemble_kind` alone would become a RESULT
+    and enter `results_for` and the world average.
+    """
+    parents = ("w0",)
+    honest = _row(
+        "w0",
+        "M",
+        64,
+        12,
+        ensemble_kind=DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
+        beta=0.5,
+        algorithm_status="INCOMPLETE_BUDGET",
+    )
+    mislabelled = {**honest, "ensemble_kind": POSTERIOR_ENSEMBLE_KIND}
+    rows = [row for row in _full_rows(parents) if not _is_cell(row, "M", 64, 12)]
+    with pytest.raises(ValueError, match="the label is not the evidence"):
+        assemble_comparison_matrix(_protocol(parents), [*rows, mislabelled])
+
+
+def test_a_main_matrix_row_that_publishes_no_beta_is_refused() -> None:
+    parents = ("w0",)
+    rows = _full_rows(parents)
+    stripped = {key: value for key, value in rows[0].items() if key != "beta"}
+    with pytest.raises(ValueError, match="beta"):
+        assemble_comparison_matrix(_protocol(parents), [stripped, *rows[1:]])
+
+
+# --------------------------------------------------------------------------------------
+# the frozen primary score (§10.2)
+# --------------------------------------------------------------------------------------
+
+
+def test_a_layer_aggregate_score_cannot_fill_a_main_cell() -> None:
+    """§10.2: layer aggregates and T4 remote zones never re-enter the primary score."""
+    parents = ("w0",)
+    rows = _full_rows(parents)
+    rows[0] = _row(
+        rows[0]["parent_id"],
+        rows[0]["method_id"],
+        rows[0]["n_particles"],
+        rows[0]["inference_seed"],
+        support=LAYER_ONE_ZONE,
+    )
+    assert rows[0]["support_kind"] == DIAGNOSTIC_LAYER_KIND
+    with pytest.raises(ValueError, match=DIAGNOSTIC_LAYER_KIND):
+        assemble_comparison_matrix(_protocol(parents), rows)
+
+
+def test_a_scored_row_that_names_no_support_is_refused() -> None:
+    parents = ("w0",)
+    rows = _full_rows(parents)
+    stripped = {key: value for key, value in rows[0].items() if key != "support_kind"}
+    with pytest.raises(ValueError, match="support"):
+        assemble_comparison_matrix(_protocol(parents), [stripped, *rows[1:]])
+
+
+def test_a_scored_row_on_another_estimator_is_refused() -> None:
+    parents = ("w0",)
+    rows = _full_rows(parents)
+    swapped = {**rows[0], "estimator": "posterior_median"}
+    with pytest.raises(ValueError, match="posterior_mean"):
+        assemble_comparison_matrix(_protocol(parents), [swapped, *rows[1:]])
+
+
+def test_the_published_matrix_names_the_support_kind_its_rows_must_carry() -> None:
+    parents = ("w0",)
+    matrix = assemble_comparison_matrix(_protocol(parents), _full_rows(parents))
+    primary = matrix.as_payload()["primary"]
+    assert primary["support_kind"] == PRIMARY_SUPPORT_KIND
+    assert primary["estimator"] == "posterior_mean"
+    assert DIAGNOSTIC_LAYER_KIND in primary["diagnostic_only_support_kinds"]
 
 
 # --------------------------------------------------------------------------------------
@@ -276,11 +448,21 @@ def test_a_beta_below_one_run_is_incomplete_and_never_enters_the_accuracy_curve(
 
 def test_the_frozen_main_average_is_seeds_within_a_world_then_equal_worlds() -> None:
     parents = ("w0", "w1")
-    rows = _full_rows(parents)
     by_seed = {("w0", 11): 0.2, ("w0", 12): 0.4, ("w1", 11): 0.5, ("w1", 12): 0.5}
-    for row in rows:
-        if row["method_id"] == "M" and row["n_particles"] == 64:
-            row["rmse"] = by_seed[(row["parent_id"], row["inference_seed"])]
+    rows = [
+        (
+            _row(
+                row["parent_id"],
+                "M",
+                64,
+                row["inference_seed"],
+                error=by_seed[(row["parent_id"], row["inference_seed"])],
+            )
+            if row["method_id"] == "M" and row["n_particles"] == 64
+            else row
+        )
+        for row in _full_rows(parents)
+    ]
     matrix = assemble_comparison_matrix(_protocol(parents), rows)
     average = world_average(matrix, method_id="M", metric="rmse", n_particles=64)
     # seed means 0.3 and 0.5, equal world weight -> 0.4; the pooled row mean is also 0.4
@@ -288,15 +470,52 @@ def test_the_frozen_main_average_is_seeds_within_a_world_then_equal_worlds() -> 
     assert average.world_values == {"w0": pytest.approx(0.3), "w1": pytest.approx(0.5)}
     assert average.value == pytest.approx(0.4)
     assert average.n_worlds == 2
+    assert average.n_particles == 64
     assert average.evidence == "COMPLETE"
+
+
+def test_an_average_across_two_particle_counts_is_refused_not_pooled() -> None:
+    """N32 is a convergence/cost diagnostic; pooling it into the accuracy number is the
+    very mixture `relative_improvement` refuses (§11)."""
+    parents = ("w0",)
+    matrix = assemble_comparison_matrix(_protocol(parents), _full_rows(parents))
+    with pytest.raises(ValueError, match="one particle count"):
+        world_average(matrix, method_id="M", metric="rmse", n_particles=None)
+
+
+def test_an_average_over_a_single_planned_count_states_that_count() -> None:
+    parents = ("w0",)
+    protocol = ComparisonProtocol.preregister(
+        protocol_id="e03-comparison-1",
+        parents=_protocol(parents).parents,
+        methods=_protocol(parents).methods,
+        particle_counts=(64,),
+        inference_seeds=(11, 12),
+        primary_month=36,
+        gates={"rmse_relative_improvement_min": 0.10},
+    )
+    rows = [
+        _row(parent_id, method_id, 64, seed)
+        for parent_id in parents
+        for method_id in ("B1", "M")
+        for seed in (11, 12)
+    ]
+    matrix = assemble_comparison_matrix(protocol, rows)
+    average = world_average(matrix, method_id="M", metric="rmse", n_particles=None)
+    assert average.n_particles == 64
+    assert average.value == pytest.approx(DEFAULT_ERROR)
 
 
 def test_the_relative_gain_refuses_two_averages_over_different_worlds() -> None:
     parents = ("w0", "w1")
-    rows = _full_rows(parents)
-    for row in rows:
-        if row["method_id"] == "M":
-            row["rmse"] = 0.18
+    rows = [
+        (
+            _row(row["parent_id"], "M", row["n_particles"], row["inference_seed"], error=0.18)
+            if row["method_id"] == "M"
+            else row
+        )
+        for row in _full_rows(parents)
+    ]
     matrix = assemble_comparison_matrix(_protocol(parents), rows)
     method = world_average(matrix, method_id="M", metric="rmse", n_particles=64)
     baseline = world_average(matrix, method_id="B1", metric="rmse", n_particles=64)
@@ -325,10 +544,20 @@ def test_averaging_refuses_to_pool_two_methods() -> None:
 
 def test_unequal_scientific_target_identity_is_refused_before_any_comparison() -> None:
     parents = ("w0",)
-    rows = _full_rows(parents)
-    for row in rows:
-        if row["method_id"] == "M":
-            row["scientific_target_identity"] = "c" * 64
+    rows = [
+        (
+            _row(
+                row["parent_id"],
+                "M",
+                row["n_particles"],
+                row["inference_seed"],
+                identity="c" * 64,
+            )
+            if row["method_id"] == "M"
+            else row
+        )
+        for row in _full_rows(parents)
+    ]
     with pytest.raises(ValueError, match="2 scientific target identities"):
         assemble_comparison_matrix(_protocol(parents), rows)
 
@@ -336,7 +565,14 @@ def test_unequal_scientific_target_identity_is_refused_before_any_comparison() -
 def test_a_result_row_without_a_scientific_target_identity_is_refused() -> None:
     parents = ("w0",)
     rows = _full_rows(parents)
-    del rows[0]["scientific_target_identity"]
+    rows[0] = _row(
+        rows[0]["parent_id"],
+        rows[0]["method_id"],
+        rows[0]["n_particles"],
+        rows[0]["inference_seed"],
+        identity=None,
+    )
+    assert "scientific_target_identity" not in rows[0]
     with pytest.raises(ValueError, match="scientific target identity"):
         assemble_comparison_matrix(_protocol(parents), rows)
 

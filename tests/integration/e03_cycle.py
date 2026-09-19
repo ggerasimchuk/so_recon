@@ -397,6 +397,8 @@ def evaluate_method(
     from so_recon.validation.ensemble_states import score_ensemble_states
 
     run: RunDiagnostics | None = None
+    beta: float | None = None
+    algorithm_status: str | None = None
     if smc_payload is not None and checkpoint_manifest is not None:
         run = run_diagnostics_from_payloads(smc_payload, checkpoint_manifest)
         ensemble = bundle_ensemble(
@@ -416,6 +418,11 @@ def evaluate_method(
         )
         kind = POSTERIOR_ENSEMBLE_KIND
         claim = True
+        # `bundle_ensemble` has already refused anything but a COMPLETE beta=1 bundle, so
+        # the row publishes the bundle's OWN beta and status beside the label they imply.
+        bundle = dict(posterior_bundle or {})
+        beta = float(bundle["beta"])
+        algorithm_status = str(bundle["algorithm_status"])
     else:
         if evaluations is None:
             raise ValueError(f"method {method_id} carries neither a bundle nor evaluations")
@@ -442,6 +449,8 @@ def evaluate_method(
         inference_seed=inference_seed,
         ensemble_kind=kind,
         posterior_claim=claim,
+        beta=beta,
+        algorithm_status=algorithm_status,
         products=products,
         scores=scores,
         run=run,

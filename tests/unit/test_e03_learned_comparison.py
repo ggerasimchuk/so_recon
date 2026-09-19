@@ -29,6 +29,7 @@ import pytest
 
 from so_recon.paths import ProjectPaths
 from so_recon.validation.e03_protocol import (
+    DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
     POSTERIOR_ENSEMBLE_KIND,
     PRIOR_ENSEMBLE_KIND,
     RAW_PROPOSAL_ENSEMBLE_KIND,
@@ -244,6 +245,8 @@ def test_comparison_row_carries_the_primary_metrics_and_products() -> None:
         inference_seed=11,
         ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
         posterior_claim=True,
+        beta=1.0,
+        algorithm_status="COMPLETE",
         products=products,
         scores=scores,
         run=run,
@@ -260,6 +263,85 @@ def test_comparison_row_carries_the_primary_metrics_and_products() -> None:
     assert row["pre_resampling_ess"] == [25.6, 17.5]
     assert row["acceptance_by_kernel"] == {"global": 0.5, "family": 1.0}
     assert json.dumps(row, allow_nan=False)
+
+
+def test_a_row_carries_the_support_and_estimator_its_products_declare() -> None:
+    """§10.2: the score's support and estimator travel WITH the score, or a layer
+    aggregate can be read as the primary quadrant number."""
+    products, scores = _products_fixture()
+    row = comparison_row(
+        parent_id="e02-t1-v1-0008",
+        method_id="M",
+        inference_seed=11,
+        ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+        posterior_claim=True,
+        beta=1.0,
+        algorithm_status="COMPLETE",
+        products=products,
+        scores=scores,
+    )
+    assert row["support_kind"] == products.support_kind == "primary_quadrants"
+    assert row["estimator"] == products.estimator == "posterior_mean"
+    with pytest.raises(ValueError, match="support_kind"):
+        comparison_row(
+            parent_id="e02-t1-v1-0008",
+            method_id="M",
+            inference_seed=11,
+            ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+            posterior_claim=True,
+            beta=1.0,
+            algorithm_status="COMPLETE",
+            support_kind="diagnostic_layer_aggregate",
+            products=products,
+            scores=scores,
+        )
+
+
+def test_a_row_publishes_the_beta_and_status_its_label_summarises() -> None:
+    """§4.4: `ensemble_kind` is DERIVED from beta and the algorithm status, so a row that
+    publishes the label without them cannot be cross-checked by any reader."""
+    with pytest.raises(ValueError, match="beta"):
+        comparison_row(
+            parent_id="w0",
+            method_id="M",
+            inference_seed=11,
+            ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+            posterior_claim=True,
+        )
+    with pytest.raises(ValueError, match="the label is not the evidence"):
+        comparison_row(
+            parent_id="w0",
+            method_id="M",
+            inference_seed=11,
+            ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
+            posterior_claim=True,
+            beta=0.5,
+            algorithm_status="INCOMPLETE_BUDGET",
+        )
+    partial = comparison_row(
+        parent_id="w0",
+        method_id="M",
+        inference_seed=11,
+        ensemble_kind=DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND,
+        posterior_claim=False,
+        beta=0.5,
+        algorithm_status="INCOMPLETE_BUDGET",
+    )
+    assert partial["beta"] == pytest.approx(0.5)
+    assert partial["algorithm_status"] == "INCOMPLETE_BUDGET"
+
+
+def test_a_draw_set_row_has_no_tempering_beta_to_publish() -> None:
+    with pytest.raises(ValueError, match="tempering"):
+        comparison_row(
+            parent_id="w0",
+            method_id="Q",
+            inference_seed=11,
+            ensemble_kind=RAW_PROPOSAL_ENSEMBLE_KIND,
+            posterior_claim=False,
+            beta=1.0,
+            algorithm_status="COMPLETE",
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -384,6 +466,8 @@ def test_run_diagnostics_carry_the_residual_movement_the_run_published() -> None
         inference_seed=11,
         ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
         posterior_claim=True,
+        beta=1.0,
+        algorithm_status="COMPLETE",
         run=run,
     )
     assert row["residual_movement"]["median_log_l_drop"] == 0.4
@@ -396,6 +480,8 @@ def test_a_row_names_its_particle_count_and_scientific_target() -> None:
         inference_seed=12,
         ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
         posterior_claim=True,
+        beta=1.0,
+        algorithm_status="COMPLETE",
         n_particles=64,
         scientific_target_identity="e" * 64,
     )
@@ -421,6 +507,8 @@ def test_a_row_refuses_a_particle_count_its_products_contradict() -> None:
             inference_seed=11,
             ensemble_kind=POSTERIOR_ENSEMBLE_KIND,
             posterior_claim=True,
+            beta=1.0,
+            algorithm_status="COMPLETE",
             n_particles=64,
             products=products,
         )

@@ -11,6 +11,11 @@ a filled matrix honest:
   consults the learned proposal, so changing q cannot change the selected B0.
 * **A raw q ensemble is never a posterior** (plan §4.4): its rows carry
   `ensemble_kind=raw_proposal` and any posterior claim is refused at construction.
+* **A label travels with its evidence.** An SMC row publishes the `beta` and the
+  `algorithm_status` its `ensemble_kind` is derived from, and the metrics travel with the
+  `support_kind` and `estimator` of the products that produced them — so a reader
+  (`validation.e03_report`) derives a cell's status and checks the frozen §10.2 support
+  from the run itself, never from the label alone.
 
 Per-run rows flatten the evaluator's products and scores plus the run diagnostics
 the artifacts already carry (beta path, pre-resampling ESS, per-kernel acceptance,
@@ -55,6 +60,9 @@ from so_recon.validation.e03_protocol import (
     POSTERIOR_ENSEMBLE_KIND,
     PRIOR_ENSEMBLE_KIND,
     RAW_PROPOSAL_ENSEMBLE_KIND,
+)
+from so_recon.validation.e03_protocol import (
+    ensemble_kind as kind_for_beta,  # `comparison_row` binds the name to its own argument
 )
 from so_recon.validation.ensemble_states import (
     DEFAULT_QUANTILE_PROBABILITIES,
@@ -273,8 +281,12 @@ def comparison_row(
     inference_seed: int,
     ensemble_kind: str,
     posterior_claim: bool,
+    beta: float | None = None,
+    algorithm_status: str | None = None,
     n_particles: int | None = None,
     scientific_target_identity: str | None = None,
+    support_kind: str | None = None,
+    estimator: str | None = None,
     products: EnsembleStateProducts | None = None,
     scores: Any | None = None,
     run: RunDiagnostics | None = None,
@@ -285,6 +297,18 @@ def comparison_row(
     N is part of the §10.1 cell identity, and §4.3 requires B1 and M to be shown to infer
     the same posterior before they are compared. `validation.e03_report` refuses a matrix
     whose result rows omit either.
+
+    `beta` and `algorithm_status` are the EVIDENCE the `ensemble_kind` label summarises
+    (§4.4): an SMC row publishes them as a float and a string under those names, they are
+    cross-checked against the label here, and `validation.e03_report` derives a cell's
+    status from them rather than from the label. A draw set (B0's prior draws, q's raw
+    proposal) has no tempering path, so it carries neither.
+
+    `support_kind` and `estimator` travel WITH the metrics, copied from the products that
+    produced them (`ensemble_states.EnsembleStateProducts`): §10.2 freezes the primary
+    score on the eight non-overlapping quadrants with the posterior mean, and a MAE whose
+    support is not named cannot be told apart from a layer-aggregate diagnostic. An
+    explicit value contradicting the products is refused rather than silently overridden.
 
     A raw-q row exists (its state products and even its truth-conditional scores are
     legitimate diagnostics) but never with a posterior claim. The same holds for B0's
@@ -306,13 +330,36 @@ def comparison_row(
             f"ensemble_kind {ensemble_kind!r} never carries a posterior claim (plan §4.4): "
             "only a completed beta=1 posterior ensemble does"
         )
+    tempered = ensemble_kind in {POSTERIOR_ENSEMBLE_KIND, DIAGNOSTIC_PARTIAL_ENSEMBLE_KIND}
+    evidence: dict[str, Any] = {}
+    if tempered:
+        if beta is None or algorithm_status is None:
+            raise ValueError(
+                f"ensemble_kind {ensemble_kind!r} is DERIVED from beta and algorithm_status "
+                "(plan §4.4): a row that publishes the label without the beta and the status "
+                "it summarises cannot be cross-checked by any reader"
+            )
+        expected = kind_for_beta(float(beta), str(algorithm_status))
+        if expected != ensemble_kind:
+            raise ValueError(
+                f"the row declares ensemble_kind {ensemble_kind!r} for beta={beta!r} and "
+                f"algorithm_status={algorithm_status!r}, where §4.4 gives {expected!r}: the "
+                "label and the run disagree, and the label is not the evidence"
+            )
+        evidence = {"beta": float(beta), "algorithm_status": str(algorithm_status)}
+    elif beta is not None or algorithm_status is not None:
+        raise ValueError(
+            f"ensemble_kind {ensemble_kind!r} is a draw set with no tempering path, so it "
+            f"has no beta/algorithm_status to publish (got beta={beta!r}, "
+            f"algorithm_status={algorithm_status!r})"
+        )
     row: dict[str, Any] = {
         "parent_id": parent_id,
         "method_id": method_id,
         "inference_seed": inference_seed,
         "ensemble_kind": ensemble_kind,
         "posterior_claim": posterior_claim,
-        "estimator": "posterior_mean",
+        **evidence,
     }
     if n_particles is not None:
         row["n_particles"] = int(n_particles)
@@ -324,6 +371,24 @@ def comparison_row(
                 f"the row declares n_particles={n_particles} but its products carry "
                 f"{products.n_particles}: the cell's N and the ensemble it scores disagree"
             )
+        if support_kind is not None and str(support_kind) != products.support_kind:
+            raise ValueError(
+                f"the row declares support_kind {support_kind!r} but its products were "
+                f"aggregated on {products.support_kind!r}: the support the metrics were "
+                "computed on is a property of the products, not of the caller (plan §10.2)"
+            )
+        if estimator is not None and str(estimator) != products.estimator:
+            raise ValueError(
+                f"the row declares estimator {estimator!r} but its products carry "
+                f"{products.estimator!r}"
+            )
+        support_kind = products.support_kind
+        estimator = products.estimator
+    if support_kind is not None:
+        row["support_kind"] = str(support_kind)
+    if estimator is not None:
+        row["estimator"] = str(estimator)
+    if products is not None:
         row.update(
             {
                 "zone_names": list(products.zone_names),

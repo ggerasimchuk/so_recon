@@ -124,6 +124,10 @@ def _checks_inputs() -> dict[str, Any]:
             inference_seed=1301,
             ensemble_kind=RAW_PROPOSAL_ENSEMBLE_KIND if method_id == "Q" else "posterior",
             posterior_claim=method_id in {"B1", "M"},
+            # A `posterior` label travels with the beta and status it is derived from
+            # (§4.4); q's raw draw set has no tempering path and carries neither.
+            beta=None if method_id == "Q" else 1.0,
+            algorithm_status=None if method_id == "Q" else "COMPLETE",
         )
         for method_id in METHOD_IDS
     ]
